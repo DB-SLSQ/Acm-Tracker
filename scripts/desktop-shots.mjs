@@ -77,10 +77,19 @@ app.whenReady().then(async () => {
   await shot(win, '07-亮色主题-日程', { scrollTo: 'panel-schedule' });
   await shot(win, '08-亮色主题-顶部', { scrollTo: null, height: 1000 });
 
-  // 页脚的交流群二维码
+  // 收起几块面板，看看紧凑视图
+  await win.webContents.executeJavaScript(`
+    ['panel-target', 'panel-calendar', 'panel-virtual', 'panel-tags'].forEach((id) => {
+      document.querySelector('.panel-toggle[data-panel="' + id + '"]')?.click();
+    });
+  `);
+  await wait(700);
+  await shot(win, '09-收起面板后');
+
+  // 顶部的交流群二维码
   await win.webContents.executeJavaScript(`document.getElementById('qq-toggle').click();`);
   await wait(600);
-  await shot(win, '09-交流群二维码');
+  await shot(win, '10-交流群二维码');
 
   console.log('输出目录:', SHOTS);
   app.exit(0);

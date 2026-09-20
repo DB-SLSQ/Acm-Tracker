@@ -17,6 +17,9 @@
           </div>
         </div>
         <div class="toolbar">
+          <button type="button" class="qq-pill" id="qq-toggle" title="点击显示群二维码">
+            <span class="qq-badge">群</span>交流群 1124017564
+          </button>
           <div class="theme-switch" id="theme-switch">
             <button type="button" class="theme-btn" data-theme-value="dark">暗色</button>
             <button type="button" class="theme-btn" data-theme-value="light">亮色</button>
@@ -35,6 +38,9 @@
           <a href="#panel-virtual">虚拟参赛</a>
           <a href="#panel-heatmap">活动记录</a>
           <a href="#panel-tags">能力画像</a>
+          <span class="subnav-spacer"></span>
+          <button type="button" class="subnav-btn" id="expand-all">展开全部</button>
+          <button type="button" class="subnav-btn" id="collapse-all">收起全部</button>
         </div>
       </nav>
     </header>
@@ -194,7 +200,6 @@
     <footer class="footer">
       <span>数据来源：Codeforces 官方公开 API</span>
       <span>所有数据都保存在你自己的电脑上 · <span id="app-version">读取中…</span></span>
-      <button type="button" class="footer-link" id="qq-toggle">交流群：1124017564</button>
     </footer>
 
     <div class="qr-pop hidden" id="qq-pop">

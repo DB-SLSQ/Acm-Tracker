@@ -181,6 +181,8 @@ function readSettings() {
     restDays: parseJson(raw.rest_days, []),
     // 特定日期无法做题：{ 'YYYY-MM-DD': '聚餐' }
     dayOff: parseJson(raw.day_off, {}),
+    // 被收起的面板：{ 'panel-plan': true }
+    collapsed: parseJson(raw.collapsed, {}),
     updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
   };
 }
@@ -440,6 +442,16 @@ async function route(req, res, url) {
           clean[date] = String(note ?? '').slice(0, 60);
         }
         patch.day_off = JSON.stringify(clean);
+      }
+      if (body.collapsed !== undefined) {
+        if (typeof body.collapsed !== 'object' || body.collapsed === null) {
+          return sendError(res, 400, 'collapsed 需要是对象');
+        }
+        const clean = {};
+        for (const [panel, value] of Object.entries(body.collapsed)) {
+          if (/^panel-[a-z-]+$/.test(panel) && value) clean[panel] = true;
+        }
+        patch.collapsed = JSON.stringify(clean);
       }
       db.saveSettings(patch);
       return sendJson(res, 200, { settings: readSettings() });

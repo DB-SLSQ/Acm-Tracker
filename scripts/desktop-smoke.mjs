@@ -57,7 +57,9 @@ const readPage = (win) =>
     calendarCells: document.querySelectorAll('#cal-grid .cal-cell').length,
     restChips: document.querySelectorAll('#rest-picker .rest-chip').length,
     scheduleSummary: document.getElementById('schedule-summary')?.textContent?.slice(0, 90) ?? null,
-    qqLink: document.getElementById('qq-toggle')?.textContent?.trim() ?? null
+    qqLink: document.getElementById('qq-toggle')?.textContent?.trim() ?? null,
+    qqInTopbar: !!document.querySelector('.topbar #qq-toggle'),
+    panelToggles: document.querySelectorAll('.panel-toggle').length
   })`);
 
 const postSettings = (url, body) =>
@@ -116,6 +118,19 @@ app.whenReady().then(async () => {
     })();
   `);
 
+  // 面板折叠：点一下收起，再点一下展开
+  const collapseTest = await win.webContents.executeJavaScript(`
+    (() => {
+      const button = document.querySelector('.panel-toggle[data-panel="panel-heatmap"]');
+      if (!button) return { collapsed: false, expanded: false };
+      button.click();
+      const collapsed = document.getElementById('panel-heatmap').classList.contains('collapsed');
+      button.click();
+      const expanded = !document.getElementById('panel-heatmap').classList.contains('collapsed');
+      return { collapsed, expanded };
+    })();
+  `);
+
   const checks = [
     ['页面标题正确', restored.title === 'ACM 训练台'],
     ['9 个界面区块都在', restored.panels === 9],
@@ -126,9 +141,12 @@ app.whenReady().then(async () => {
     ['主题按钮有 4 个', cold.themeButtons === 4],
     ['默认是暗色主题', cold.theme === 'dark'],
     ['点击可切换主题', themeAfterClick === 'light'],
-    ['页脚有交流群入口', /1124017564/.test(cold.qqLink ?? '')],
+    ['顶部有交流群入口', /1124017564/.test(cold.qqLink ?? '') && cold.qqInTopbar],
     ['点击弹出二维码', qrPopup.shown === true],
     ['二维码图片能加载', qrPopup.loaded === true],
+    ['面板有折叠按钮', restored.panelToggles === 8],
+    ['点击可收起面板', collapseTest.collapsed === true],
+    ['再点可展开面板', collapseTest.expanded === true],
     ['重启后自动填好用户名', restored.handle === TEST_HANDLE],
     ['重启后自动填好目标分数', restored.target === '1900'],
     ['重启后自动填好每周题量', restored.weekly === '12'],

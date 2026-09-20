@@ -23,6 +23,8 @@ const state = {
   activity: null,
   heatmapYear: new Date().getFullYear(),
   heatmapMetric: 'solved',
+  // 被收起的面板
+  collapsed: {},
 };
 
 const THEME_LABELS = { dark: '暗色', light: '亮色', gray: '灰色', eye: '护眼' };
@@ -1220,6 +1222,76 @@ document.addEventListener('click', (event) => {
   pop.classList.add('hidden');
 });
 
+// ---------- 面板展开 / 收起 ----------
+
+// 第一个面板是输账号的入口，始终保持展开
+const COLLAPSIBLE_PANELS = [
+  'panel-overview',
+  'panel-target',
+  'panel-plan',
+  'panel-schedule',
+  'panel-calendar',
+  'panel-virtual',
+  'panel-heatmap',
+  'panel-tags',
+];
+
+function setupPanelToggles() {
+  for (const id of COLLAPSIBLE_PANELS) {
+    const panel = $(id);
+    if (!panel || panel.querySelector('.panel-toggle')) continue;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'panel-toggle';
+    button.dataset.panel = id;
+    button.title = '收起或展开这一块';
+    button.textContent = '▾';
+    panel.appendChild(button);
+  }
+}
+
+function applyCollapsed() {
+  for (const id of COLLAPSIBLE_PANELS) {
+    const panel = $(id);
+    if (panel) panel.classList.toggle('collapsed', Boolean(state.collapsed[id]));
+  }
+}
+
+function setCollapsed(id, collapsed, { save = true } = {}) {
+  if (collapsed) state.collapsed[id] = true;
+  else delete state.collapsed[id];
+  const panel = $(id);
+  if (panel) panel.classList.toggle('collapsed', collapsed);
+  if (save) saveSettings({ collapsed: state.collapsed });
+}
+
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('.panel-toggle');
+  if (!button) return;
+  const id = button.dataset.panel;
+  setCollapsed(id, !state.collapsed[id]);
+});
+
+// 从导航点进去时，如果那块是收起的就先展开，否则跳过去什么都看不到
+$('subnav').addEventListener('click', (event) => {
+  const link = event.target.closest('a[href^="#panel-"]');
+  if (!link) return;
+  const id = link.getAttribute('href').slice(1);
+  if (state.collapsed[id]) setCollapsed(id, false);
+});
+
+$('expand-all').addEventListener('click', () => {
+  state.collapsed = {};
+  applyCollapsed();
+  saveSettings({ collapsed: {} });
+});
+
+$('collapse-all').addEventListener('click', () => {
+  state.collapsed = Object.fromEntries(COLLAPSIBLE_PANELS.map((id) => [id, true]));
+  applyCollapsed();
+  saveSettings({ collapsed: state.collapsed });
+});
+
 /** 启动时自动恢复上次的账号、目标分数和训练计划，不用重新输一遍。 */
 async function restoreSession() {
   let settings = null;
@@ -1234,8 +1306,11 @@ async function restoreSession() {
     state.palette = settings.heatmapPalette ?? 'green';
     state.restDays = Array.isArray(settings.restDays) ? settings.restDays : [];
     state.dayOff = settings.dayOff ?? {};
+    state.collapsed = settings.collapsed ?? {};
   }
   applyAppearance();
+  setupPanelToggles();
+  applyCollapsed();
 
   if (!settings?.handle) {
     setStatus('未连接');

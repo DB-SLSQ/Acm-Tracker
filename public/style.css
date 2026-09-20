@@ -1242,26 +1242,46 @@ input[type="number"]:focus {
 
 /* ============ 交流群入口 ============ */
 
-.footer-link {
-  background: none;
-  border: none;
-  padding: 0;
-  font-family: inherit;
-  font-size: 12px;
+.qq-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
   color: var(--accent-text);
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 5px 11px 5px 6px;
+  border-radius: 999px;
   cursor: pointer;
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
+  white-space: nowrap;
 }
 
-.footer-link:hover {
-  color: var(--accent);
+.qq-pill:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.qq-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+}
+
+.qq-pill:hover .qq-badge {
+  background: rgba(255, 255, 255, 0.28);
 }
 
 .qr-pop {
   position: fixed;
   right: 24px;
-  bottom: 64px;
+  top: 118px;
   z-index: 30;
   display: flex;
   align-items: center;
@@ -1289,4 +1309,75 @@ input[type="number"]:focus {
 
 .qr-pop .subtle {
   margin: 2px 0;
+}
+
+/* ============ 面板折叠 ============ */
+
+.panel {
+  position: relative;
+}
+
+.panel-toggle {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.18s ease;
+}
+
+.panel-toggle:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.panel.collapsed .panel-toggle {
+  transform: rotate(-90deg);
+}
+
+/* 收起时只留标题，说明文字也一起藏起来 */
+.panel.collapsed .panel-head p,
+.panel.collapsed > *:not(.panel-head) {
+  display: none;
+}
+
+.panel.collapsed .panel-head {
+  margin-bottom: 0;
+}
+
+.panel.collapsed .panel-head h2 {
+  margin: 0;
+  padding-right: 40px;
+}
+
+.subnav-spacer {
+  flex: 1 1 auto;
+  min-width: 12px;
+}
+
+.subnav-btn {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.subnav-btn:hover {
+  color: var(--text);
+  background: var(--bg-raise);
 }
