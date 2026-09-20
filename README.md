@@ -16,6 +16,23 @@ npm start
 
 不需要 `npm install`——整个项目零依赖，用的是 Node 自带的 SQLite。
 
+### 如果 `npm start` 报「因为在此系统上禁止运行脚本」
+
+这是 Windows PowerShell 的默认执行策略拦住了 npm 的包装脚本（`npm.ps1`），和本项目无关。任选一种即可：
+
+- 直接双击 `start.cmd`；
+- 在当前窗口执行 `.\start.cmd`（批处理文件不受执行策略限制）；
+- 跳过 npm，直接运行 `node --no-warnings server.js`；
+- 或者换用 CMD 或 PowerShell 7（`pwsh`），它们的默认策略允许运行。
+
+想彻底解决，可以在 Windows PowerShell 里执行一次：
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+这只对当前用户生效，不需要管理员权限，想撤销就把它设回 `Undefined`。
+
 ## 功能
 
 ### 训练计划
