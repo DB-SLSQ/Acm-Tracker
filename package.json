@@ -1,0 +1,14 @@
+{
+  "name": "acm-trainer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "单人本地使用的 ACM 训练网站：抓取 Codeforces 过题与 rating，给出目标 rating 训练计划与推荐题目",
+  "scripts": {
+    "start": "node --no-warnings server.js",
+    "sync": "node --no-warnings scripts/sync-problems.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}

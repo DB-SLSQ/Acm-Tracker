@@ -1,0 +1,3 @@
+# 统一起见，源码统一用 LF；Windows 批处理文件保留 CRLF
+* text=auto eol=lf
+*.cmd text eol=crlf

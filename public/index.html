@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ACM 训练台</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="brand-mark">▲</span>
+          <div>
+            <h1>ACM 训练台</h1>
+            <p class="brand-sub">给一个人的 Codeforces 训练计划</p>
+          </div>
+        </div>
+        <div class="topbar-status" id="status">未连接</div>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel" id="panel-handle">
+        <div class="panel-head">
+          <h2>第一步：输入你的 Codeforces 用户名</h2>
+          <p>只会读取公开数据（rating、提交记录），不需要密码，也不需要登录。</p>
+        </div>
+        <div class="row">
+          <input
+            id="handle-input"
+            type="text"
+            placeholder="例如 tourist"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button class="btn primary" id="load-btn">加载我的数据</button>
+        </div>
+        <p class="hint" id="handle-hint">
+          第一次加载需要下载全站题库（约 1 万道题），可能要等十几秒，之后就很快了。
+        </p>
+      </section>
+
+      <section class="panel hidden" id="panel-overview">
+        <div class="panel-head">
+          <h2>当前水平</h2>
+          <p id="overview-handle"></p>
+        </div>
+        <div class="stats" id="stats"></div>
+        <div class="chart" id="rating-chart"></div>
+      </section>
+
+      <section class="panel hidden" id="panel-target">
+        <div class="panel-head">
+          <h2>第二步：设定目标</h2>
+          <p>目标是给算法定方向的，随时可以改。</p>
+        </div>
+        <div class="target-row">
+          <div class="target-input">
+            <label for="target-input">目标 rating</label>
+            <input id="target-input" type="number" min="800" max="4000" step="50" value="1800" />
+          </div>
+          <div class="target-input">
+            <label for="weekly-input">每周能投入的题量</label>
+            <input id="weekly-input" type="number" min="1" max="200" step="1" value="10" />
+          </div>
+          <button class="btn primary" id="plan-btn">生成训练计划</button>
+        </div>
+        <input id="target-range" class="slider" type="range" min="800" max="3500" step="50" value="1800" />
+        <div class="quick-picks" id="quick-picks"></div>
+      </section>
+
+      <section class="panel hidden" id="panel-plan">
+        <div class="panel-head">
+          <h2>训练计划</h2>
+          <p id="plan-summary"></p>
+        </div>
+        <div class="plan-stages" id="plan-stages"></div>
+        <ul class="notes" id="plan-notes"></ul>
+      </section>
+
+      <section class="panel hidden" id="panel-tags">
+        <div class="panel-head">
+          <h2>能力画像</h2>
+          <p>按 8 个知识方向看你的水平。柱长是你在该方向做到过的难度（取 75 分位——比「最高难度」稳健，偶尔蹭过一道难题不会让弱项冒充强项）。</p>
+        </div>
+        <div class="axis-list" id="axis-list"></div>
+        <div class="panel-head sub">
+          <h2>最该补的专题</h2>
+          <p>相对你的目标区间，最拖后腿的专题排在最前。标「未接触」的是你没做过的盲区。</p>
+        </div>
+        <div class="tag-list" id="tag-list"></div>
+      </section>
+
+      <section class="panel hidden" id="panel-calendar">
+        <div class="panel-head">
+          <h2>比赛日历</h2>
+          <p id="calendar-summary"></p>
+        </div>
+        <div class="contest-list" id="calendar-list"></div>
+      </section>
+
+      <section class="panel hidden" id="panel-virtual">
+        <div class="panel-head">
+          <h2>虚拟参赛</h2>
+          <p id="virtual-summary"></p>
+        </div>
+        <div id="virtual-running"></div>
+        <div id="virtual-recommend"></div>
+        <div id="virtual-review"></div>
+        <div id="virtual-history"></div>
+      </section>
+    </main>
+
+    <div class="timer-bar hidden" id="timer-bar">
+      <div class="timer-info">
+        <span class="timer-label">虚拟赛进行中</span>
+        <span class="timer-name" id="timer-name"></span>
+        <span class="timer-clock" id="timer-clock">--:--</span>
+      </div>
+      <div class="timer-actions">
+        <a class="btn" id="timer-link" target="_blank" rel="noreferrer">去 Codeforces 提交</a>
+        <button class="btn primary" id="timer-finish">结束并复盘</button>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <span>数据来源：Codeforces 官方公开 API</span>
+      <span>所有数据都保存在你自己的电脑上（data/trainer.db）</span>
+    </footer>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
