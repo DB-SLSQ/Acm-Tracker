@@ -60,6 +60,11 @@ const readPage = (win) =>
     qqLink: document.getElementById('qq-toggle')?.textContent?.trim() ?? null,
     qqInTopbar: !!document.querySelector('.topbar #qq-toggle'),
     panelToggles: document.querySelectorAll('.panel-toggle').length
+    ,
+    hasSettingsPanel: !!document.getElementById('panel-settings'),
+    moduleToggles: document.querySelectorAll('#module-list [data-module]').length,
+    hasNowcoderInput: !!document.getElementById('nowcoder-input'),
+    navLinks: document.querySelectorAll('.subnav a').length
   })`);
 
 const postSettings = (url, body) =>
@@ -157,10 +162,25 @@ app.whenReady().then(async () => {
     })();
   `);
 
+  // 设置里关掉一个模块，它应该整个消失（连导航里的入口一起）
+  const moduleTest = await win.webContents.executeJavaScript(`
+    (() => {
+      const box = document.querySelector('#module-list [data-module="panel-calendar"]');
+      if (!box) return {};
+      box.click();
+      const panelHidden = document.getElementById('panel-calendar').classList.contains('module-hidden');
+      const navHidden = document.querySelector('.subnav a[href="#panel-calendar"]')
+        ?.classList.contains('module-hidden') ?? false;
+      box.click();
+      const backAgain = !document.getElementById('panel-calendar').classList.contains('module-hidden');
+      return { panelHidden, navHidden, backAgain };
+    })();
+  `);
+
   const checks = [
     ['页面标题正确', restored.title === 'ACM 训练台'],
-    ['9 个界面区块都在', restored.panels === 9],
-    ['冷启动只显示输入框和日历', cold.visiblePanels.join(',') === 'panel-handle,panel-calendar'],
+    ['10 个界面区块都在', restored.panels === 10],
+    ['冷启动只显示输入框、日历和设置', cold.visiblePanels.join(',') === 'panel-handle,panel-calendar,panel-settings'],
     ['冷启动时输入框为空', !cold.handle],
     ['比赛日历加载成功', cold.calendarRows > 0],
     ['底部显示版本号', /^v\d+\.\d+\.\d+$/.test(cold.version ?? '')],
@@ -179,6 +199,12 @@ app.whenReady().then(async () => {
     ['收起全部能收干净', bulkTest.allCollapsed >= 8],
     ['收起后标题仍可见', bulkTest.titlesVisible === true],
     ['展开全部能恢复', bulkTest.afterExpand === 0],
+    ['有独立的设置面板', cold.hasSettingsPanel === true],
+    ['模块开关有 8 个', cold.moduleToggles === 8],
+    ['有牛客 ID 输入框', cold.hasNowcoderInput === true],
+    ['关掉模块后面板消失', moduleTest.panelHidden === true],
+    ['导航入口也一起消失', moduleTest.navHidden === true],
+    ['重新打开能恢复', moduleTest.backAgain === true],
     ['重启后自动填好用户名', restored.handle === TEST_HANDLE],
     ['重启后自动填好目标分数', restored.target === '1900'],
     ['重启后自动填好每周题量', restored.weekly === '12'],

@@ -1407,3 +1407,109 @@ input[type="number"]:focus {
   color: var(--text);
   background: var(--bg-raise);
 }
+
+/* ============ 设置面板 ============ */
+
+.settings-title {
+  margin: 26px 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settings-title:first-of-type {
+  margin-top: 6px;
+}
+
+.module-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.module-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 13px;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 13.5px;
+}
+
+.module-item:hover {
+  border-color: var(--border-strong);
+}
+
+.module-item input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.module-item.off {
+  opacity: 0.5;
+}
+
+.platform-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.platform-row input {
+  width: 200px;
+}
+
+.platform-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.platform-card {
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 14px 16px;
+}
+
+.platform-card h4 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.platform-card .who {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+
+.platform-stats {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.platform-stat {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.platform-stat b {
+  display: block;
+  font-size: 19px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+/* 整个模块被关掉时连标题都不显示 */
+.module-hidden {
+  display: none !important;
+}

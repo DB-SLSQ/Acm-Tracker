@@ -25,6 +25,11 @@ const state = {
   heatmapMetric: 'solved',
   // 被收起的面板
   collapsed: {},
+  // 被整个隐藏的模块
+  hiddenModules: [],
+  // 其他平台
+  nowcoderUid: null,
+  platforms: [],
 };
 
 const THEME_LABELS = { dark: '暗色', light: '亮色', gray: '灰色', eye: '护眼' };
@@ -1297,6 +1302,124 @@ $('collapse-all').addEventListener('click', () => {
   saveSettings({ collapsed: state.collapsed });
 });
 
+// ---------- 设置：模块显示 ----------
+
+const MODULE_META = [
+  { id: 'panel-overview', label: '当前水平' },
+  { id: 'panel-target', label: '目标设置' },
+  { id: 'panel-plan', label: '训练计划' },
+  { id: 'panel-schedule', label: '训练日程' },
+  { id: 'panel-calendar', label: '比赛日历' },
+  { id: 'panel-virtual', label: '虚拟参赛' },
+  { id: 'panel-heatmap', label: '活动记录' },
+  { id: 'panel-tags', label: '能力画像' },
+];
+
+function renderModuleList() {
+  $('module-list').innerHTML = MODULE_META.map(({ id, label }) => {
+    const on = !state.hiddenModules.includes(id);
+    return `<label class="module-item ${on ? '' : 'off'}">
+      <input type="checkbox" data-module="${id}" ${on ? 'checked' : ''} />
+      <span>${label}</span>
+    </label>`;
+  }).join('');
+}
+
+function applyModuleVisibility() {
+  for (const { id } of MODULE_META) {
+    const hidden = state.hiddenModules.includes(id);
+    $(id)?.classList.toggle('module-hidden', hidden);
+    const link = document.querySelector(`.subnav a[href="#${id}"]`);
+    if (link) link.classList.toggle('module-hidden', hidden);
+    // 模块整个藏起来了，它的收起状态就没意义了
+    if (hidden) delete state.collapsed[id];
+  }
+  applyCollapsed();
+}
+
+$('module-list').addEventListener('change', (event) => {
+  const input = event.target.closest('[data-module]');
+  if (!input) return;
+  const id = input.dataset.module;
+  state.hiddenModules = input.checked
+    ? state.hiddenModules.filter((value) => value !== id)
+    : [...new Set([...state.hiddenModules, id])];
+  // 只更新这一项的外观，不重建整个列表——重建会把 DOM 换掉，
+  // 连续操作时手里的元素就失效了
+  input.closest('.module-item')?.classList.toggle('off', !input.checked);
+  applyModuleVisibility();
+  saveSettings({ hiddenModules: state.hiddenModules });
+});
+
+// ---------- 设置：其他平台 ----------
+
+async function loadPlatforms() {
+  try {
+    const { platforms } = await getJson('/api/platforms');
+    state.platforms = platforms;
+    renderPlatformCards();
+  } catch {
+    /* 读不到就先不显示 */
+  }
+}
+
+const PLATFORM_LABELS = { nowcoder: '牛客' };
+const STAT_ORDER = ['题已通过', '题已挑战', '次提交', 'Rating', 'Rating排名'];
+
+function renderPlatformCards() {
+  if (!state.platforms.length) {
+    $('platform-cards').innerHTML = '';
+    return;
+  }
+  $('platform-cards').innerHTML = state.platforms
+    .map((entry) => {
+      const keys = [
+        ...STAT_ORDER.filter((key) => key in entry.stats),
+        ...Object.keys(entry.stats).filter((key) => !STAT_ORDER.includes(key)),
+      ];
+      const stats = keys
+        .map((key) => `<div class="platform-stat"><b>${entry.stats[key]}</b>${key}</div>`)
+        .join('');
+      const who = `${escapeHtml(entry.nickname ?? '')} ID ${entry.account} · 同步于 ${new Date(entry.fetchedAt).toLocaleString('zh-CN')}`;
+      return `<div class="platform-card">
+        <h4>${PLATFORM_LABELS[entry.platform] ?? entry.platform}</h4>
+        <div class="who">${who}</div>
+        <div class="platform-stats">${stats}</div>
+      </div>`;
+    })
+    .join('');
+}
+
+$('nowcoder-sync').addEventListener('click', async () => {
+  const account = $('nowcoder-input').value.trim();
+  const hint = $('nowcoder-hint');
+  if (!account) {
+    hint.textContent = '先填牛客用户 ID 再同步。';
+    hint.classList.add('error');
+    return;
+  }
+
+  const button = $('nowcoder-sync');
+  button.disabled = true;
+  button.textContent = '同步中…';
+  hint.classList.remove('error');
+  hint.textContent = '正在抓取，只请求一次…';
+
+  try {
+    const data = await postJson('/api/platforms/sync', { platform: 'nowcoder', account });
+    state.platforms = data.platforms;
+    renderPlatformCards();
+    saveSettings({ nowcoderUid: account });
+    hint.textContent = `同步成功：已通过 ${data.result.solved ?? '?'} 题。`;
+  } catch (error) {
+    hint.textContent = error.message;
+    hint.classList.add('error');
+  } finally {
+    button.disabled = false;
+    button.textContent = '同步牛客数据';
+  }
+});
+
 /** 启动时自动恢复上次的账号、目标分数和训练计划，不用重新输一遍。 */
 async function restoreSession() {
   let settings = null;
@@ -1312,10 +1435,18 @@ async function restoreSession() {
     state.restDays = Array.isArray(settings.restDays) ? settings.restDays : [];
     state.dayOff = settings.dayOff ?? {};
     state.collapsed = settings.collapsed ?? {};
+    state.hiddenModules = Array.isArray(settings.hiddenModules) ? settings.hiddenModules : [];
+    if (settings.nowcoderUid) {
+      state.nowcoderUid = settings.nowcoderUid;
+      $('nowcoder-input').value = settings.nowcoderUid;
+    }
   }
   applyAppearance();
   setupPanelToggles();
   applyCollapsed();
+  renderModuleList();
+  applyModuleVisibility();
+  loadPlatforms();
 
   if (!settings?.handle) {
     setStatus('未连接');

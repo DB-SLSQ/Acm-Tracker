@@ -29,7 +29,7 @@
           <div class="topbar-status" id="status">未连接</div>
         </div>
       </div>
-      <nav class="subnav hidden" id="subnav">
+      <nav class="subnav" id="subnav">
         <div class="subnav-inner">
           <a href="#panel-overview">当前水平</a>
           <a href="#panel-plan">训练计划</a>
@@ -38,6 +38,7 @@
           <a href="#panel-virtual">虚拟参赛</a>
           <a href="#panel-heatmap">活动记录</a>
           <a href="#panel-tags">能力画像</a>
+          <a href="#panel-settings">设置</a>
           <span class="subnav-spacer"></span>
           <button type="button" class="subnav-btn" id="expand-all">展开全部</button>
           <button type="button" class="subnav-btn" id="collapse-all">收起全部</button>
@@ -182,6 +183,41 @@
           <p>相对你的目标区间，最拖后腿的专题排在最前。标「未接触」的是你没做过的盲区。</p>
         </div>
         <div class="tag-list" id="tag-list"></div>
+      </section>
+
+      <section class="panel" id="panel-settings">
+        <div class="panel-head">
+          <h2>设置</h2>
+          <p>改动会自动保存，下次打开保持原样。</p>
+        </div>
+
+        <h3 class="settings-title">界面模块</h3>
+        <p class="subtle">不需要的模块可以直接关掉，连标题都不显示。</p>
+        <div class="module-list" id="module-list"></div>
+
+        <h3 class="settings-title">其他平台数据</h3>
+        <p class="subtle">
+          只抓汇总数字（过题数、提交数），不抓逐题记录——逐题要翻很多页，那才是把 IP 抓封的原因。
+          这里不会自动抓取，只有你点同步才请求一次。
+        </p>
+
+        <div class="platform-row">
+          <div class="sched-field">
+            <label for="nowcoder-input">牛客用户 ID</label>
+            <input id="nowcoder-input" type="text" placeholder="例如 886965097" autocomplete="off" />
+          </div>
+          <button class="btn primary" id="nowcoder-sync">同步牛客数据</button>
+        </div>
+        <p class="hint" id="nowcoder-hint">
+          牛客 ID 在个人主页地址栏里：ac.nowcoder.com/acm/contest/profile/<b>数字</b>
+        </p>
+        <div class="platform-cards" id="platform-cards"></div>
+
+        <h3 class="settings-title">洛谷</h3>
+        <p class="subtle">
+          暂时不支持。洛谷对未登录访客不返回过题数（实测多个真实账号，该字段一律为空），
+          第三方工具的做法是让你提供登录 Cookie，等于把登录凭证交给程序保存——这个取舍留给你决定。
+        </p>
       </section>
     </main>
 

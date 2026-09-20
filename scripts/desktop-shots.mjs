@@ -101,6 +101,19 @@ app.whenReady().then(async () => {
   await wait(600);
   await shot(win, '11-交流群二维码');
 
+  // 设置面板：顺便同步一次牛客数据，展示平台卡片的样子
+  await win.webContents.executeJavaScript(`
+    document.getElementById('qq-toggle').click();
+    document.getElementById('nowcoder-input').value = '886965097';
+  `);
+  await wait(300);
+  await win.webContents.executeJavaScript(`
+    document.getElementById('nowcoder-sync').click();
+    document.getElementById('panel-settings').scrollIntoView({ block: 'start' });
+  `);
+  await wait(5000);
+  await shot(win, '12-设置面板');
+
   console.log('输出目录:', SHOTS);
   app.exit(0);
 });

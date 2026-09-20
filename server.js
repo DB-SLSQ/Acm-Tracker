@@ -15,6 +15,11 @@ import {
   parseContestInfo,
   recommendVirtualContests,
 } from './lib/contests.js';
+import { fetchNowcoder, PlatformError } from './lib/platforms.js';
+
+// 同一个账号多久之内不重复抓取（毫秒）。手动同步也走这个限制，防止连点。
+const SYNC_COOLDOWN_MS = 20_000;
+const recentSyncs = new Map();
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(HERE, 'public');
@@ -183,6 +188,11 @@ function readSettings() {
     dayOff: parseJson(raw.day_off, {}),
     // 被收起的面板：{ 'panel-plan': true }
     collapsed: parseJson(raw.collapsed, {}),
+    // 被整个隐藏的模块：['panel-virtual', ...]
+    hiddenModules: parseJson(raw.hidden_modules, []),
+    // 其他平台的账号
+    nowcoderUid: raw.nowcoder_uid ?? null,
+    luoguUid: raw.luogu_uid ?? null,
     updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
   };
 }
@@ -453,6 +463,16 @@ async function route(req, res, url) {
         }
         patch.collapsed = JSON.stringify(clean);
       }
+      if (body.hiddenModules !== undefined) {
+        if (!Array.isArray(body.hiddenModules)) {
+          return sendError(res, 400, 'hiddenModules 需要是数组');
+        }
+        patch.hidden_modules = JSON.stringify([
+          ...new Set(body.hiddenModules.filter((id) => /^panel-[a-z-]+$/.test(id))),
+        ]);
+      }
+      if (body.nowcoderUid !== undefined) patch.nowcoder_uid = String(body.nowcoderUid).trim();
+      if (body.luoguUid !== undefined) patch.luogu_uid = String(body.luoguUid).trim();
       db.saveSettings(patch);
       return sendJson(res, 200, { settings: readSettings() });
     } catch (error) {
@@ -471,6 +491,35 @@ async function route(req, res, url) {
       Number.isFinite(offsetSeconds) ? Math.round(offsetSeconds) : 0,
     );
     return sendJson(res, 200, { activity });
+  }
+
+  if (pathname === '/api/platforms' && req.method === 'GET') {
+    return sendJson(res, 200, { platforms: db.listPlatformStats() });
+  }
+
+  if (pathname === '/api/platforms/sync' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const platform = String(body.platform ?? '');
+      const account = String(body.account ?? '').trim();
+      if (platform !== 'nowcoder') {
+        return sendError(res, 400, '目前只支持牛客，洛谷的说明见设置页');
+      }
+      if (!account) return sendError(res, 400, '请先填写牛客用户 ID');
+
+      const key = `${platform}:${account}`;
+      if (Date.now() - (recentSyncs.get(key) ?? 0) < SYNC_COOLDOWN_MS) {
+        return sendError(res, 429, '刚刚同步过，等 20 秒再试');
+      }
+      recentSyncs.set(key, Date.now());
+
+      const result = await fetchNowcoder(account);
+      db.savePlatformStats(result);
+      return sendJson(res, 200, { result, platforms: db.listPlatformStats() });
+    } catch (error) {
+      const message = error instanceof PlatformError ? error.message : `同步失败：${error.message}`;
+      return sendError(res, 502, message);
+    }
   }
 
   if (pathname === '/api/calendar') {
