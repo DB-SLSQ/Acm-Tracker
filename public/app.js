@@ -6,6 +6,7 @@ const state = {
   done: new Set(),
   virtual: null,
   reviewId: 0,
+  hasSavedTarget: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -67,6 +68,17 @@ async function postJson(url, body) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `请求失败（HTTP ${response.status}）`);
   return payload;
+}
+
+/**
+ * 保存设置到本地数据库。
+ * 不能用浏览器的 localStorage：桌面版每次启动端口随机，存储按「地址+端口」
+ * 隔离，重启就丢。所以由服务端记住，网页版和桌面版行为一致。
+ */
+function saveSettings(patch) {
+  postJson('/api/settings', patch).catch(() => {
+    /* 静默失败：记不住设置不该影响正常使用 */
+  });
 }
 
 function formatClock(totalSeconds) {
@@ -190,7 +202,7 @@ async function loadUser(force = false) {
   }
 
   state.handle = handle;
-  localStorage.setItem('acm-trainer-handle', handle);
+  saveSettings({ handle });
 
   const button = $('load-btn');
   button.disabled = true;
@@ -206,27 +218,35 @@ async function loadUser(force = false) {
     renderRatingChart(user.ratingHistory);
     $('overview-handle').textContent = `${user.displayHandle} · 数据更新于 ${new Date(user.updatedAt).toLocaleString('zh-CN')}`;
 
-    // 目标默认值：比当前高 200 分
-    const suggested = Math.min(3500, Math.max(900, Math.round(((user.rating ?? 800) + 200) / 50) * 50));
-    $('target-input').value = suggested;
-    $('target-range').value = suggested;
-    state.target = suggested;
+    // 目标分数只在用户从没设过的时候才给建议值，
+    // 否则每次加载账号都会把用户自己定的目标覆盖掉。
+    if (!state.hasSavedTarget) {
+      const suggested = Math.min(
+        3500,
+        Math.max(900, Math.round(((user.rating ?? 800) + 200) / 50) * 50),
+      );
+      $('target-input').value = suggested;
+      $('target-range').value = suggested;
+      state.target = suggested;
+    }
 
     $('panel-overview').classList.remove('hidden');
     $('panel-target').classList.remove('hidden');
     setStatus(`已同步 ${user.displayHandle} 的数据`);
     showHint('数据抓好了，接着设定目标 rating 就行。');
     loadCalendar();
+    return true;
   } catch (error) {
     setStatus('抓取失败');
     showHint(error.message, true);
+    return false;
   } finally {
     button.disabled = false;
     button.textContent = '重新加载';
   }
 }
 
-async function generatePlan(force = false) {
+async function generatePlan(force = false, { scroll = true } = {}) {
   if (!state.handle) return;
 
   const target = Number($('target-input').value);
@@ -238,6 +258,8 @@ async function generatePlan(force = false) {
 
   state.target = Math.round(target);
   state.weekly = Math.max(1, Math.round(weekly) || 10);
+  state.hasSavedTarget = true;
+  saveSettings({ handle: state.handle, target: state.target, weekly: state.weekly });
 
   const button = $('plan-btn');
   button.disabled = true;
@@ -256,7 +278,7 @@ async function generatePlan(force = false) {
     $('panel-plan').classList.remove('hidden');
     $('panel-tags').classList.remove('hidden');
     setStatus('计划已生成');
-    $('panel-plan').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (scroll) $('panel-plan').scrollIntoView({ behavior: 'smooth', block: 'start' });
     loadVirtual();
   } catch (error) {
     setStatus('生成失败');
@@ -778,10 +800,38 @@ $('timer-finish').addEventListener('click', finishVirtual);
 
 loadCalendar();
 
-const savedHandle = localStorage.getItem('acm-trainer-handle');
-if (savedHandle) {
-  $('handle-input').value = savedHandle;
-  setStatus('已记住上次的用户名，点「加载我的数据」继续');
-} else {
-  setStatus('未连接');
+/** 启动时自动恢复上次的账号、目标分数和训练计划，不用重新输一遍。 */
+async function restoreSession() {
+  let settings;
+  try {
+    ({ settings } = await getJson('/api/settings'));
+  } catch {
+    setStatus('未连接');
+    return;
+  }
+
+  if (!settings?.handle) {
+    setStatus('未连接');
+    return;
+  }
+
+  $('handle-input').value = settings.handle;
+  if (settings.target) {
+    $('target-input').value = settings.target;
+    $('target-range').value = settings.target;
+    state.target = settings.target;
+    state.hasSavedTarget = true;
+  }
+  if (settings.weekly) {
+    $('weekly-input').value = settings.weekly;
+    state.weekly = settings.weekly;
+  }
+
+  // 用户名加载失败时不要再往下生成计划——那样只会连着失败两次
+  const loaded = await loadUser(false);
+  if (loaded && settings.target) {
+    await generatePlan(false, { scroll: false });
+  }
 }
+
+restoreSession();

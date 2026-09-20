@@ -146,6 +146,17 @@ function buildUserSummary(handleKey) {
   };
 }
 
+/** 用户设置：把数值型字段转回来。 */
+function readSettings() {
+  const raw = db.getSettings();
+  return {
+    handle: raw.handle ?? null,
+    target: raw.target ? Number(raw.target) : null,
+    weekly: raw.weekly ? Number(raw.weekly) : null,
+    updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
+  };
+}
+
 async function handlePlan(url) {
   const rawHandle = url.searchParams.get('handle');
   const target = Number(url.searchParams.get('target'));
@@ -360,6 +371,28 @@ async function route(req, res, url) {
 
   if (pathname === '/api/health') {
     return sendJson(res, 200, { ok: true, problems: db.countProblems() });
+  }
+
+  if (pathname === '/api/settings' && req.method === 'GET') {
+    return sendJson(res, 200, { settings: readSettings() });
+  }
+
+  if (pathname === '/api/settings' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const patch = { updated_at: Date.now() };
+      if (body.handle !== undefined) patch.handle = String(body.handle).trim();
+      if (body.target !== undefined && Number.isFinite(Number(body.target))) {
+        patch.target = Math.round(Number(body.target));
+      }
+      if (body.weekly !== undefined && Number.isFinite(Number(body.weekly))) {
+        patch.weekly = Math.round(Number(body.weekly));
+      }
+      db.saveSettings(patch);
+      return sendJson(res, 200, { settings: readSettings() });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
   }
 
   if (pathname === '/api/calendar') {
