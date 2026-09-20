@@ -118,16 +118,42 @@ app.whenReady().then(async () => {
     })();
   `);
 
-  // 面板折叠：点一下收起，再点一下展开
+  // 面板折叠：收起后按钮必须还在，而且点标题也要能展开（防止误触后找不回来）
   const collapseTest = await win.webContents.executeJavaScript(`
     (() => {
-      const button = document.querySelector('.panel-toggle[data-panel="panel-heatmap"]');
-      if (!button) return { collapsed: false, expanded: false };
+      // 用比赛日历：它不依赖训练计划，冷启动时也是显示的
+      const panel = document.getElementById('panel-calendar');
+      const button = document.querySelector('.panel-toggle[data-panel="panel-calendar"]');
+      if (!button) return {};
+      const labelExpanded = getComputedStyle(button, '::after').content || '';
       button.click();
-      const collapsed = document.getElementById('panel-heatmap').classList.contains('collapsed');
+      const collapsed = panel.classList.contains('collapsed');
+      const buttonVisible = button.offsetParent !== null;
+      const labelCollapsed = getComputedStyle(button, '::after').content || '';
+      panel.querySelector('.panel-head h2').click();
+      const expandedByHeader = !panel.classList.contains('collapsed');
       button.click();
-      const expanded = !document.getElementById('panel-heatmap').classList.contains('collapsed');
-      return { collapsed, expanded };
+      const collapsedAgain = panel.classList.contains('collapsed');
+      button.click();
+      const expandedAgain = !panel.classList.contains('collapsed');
+      return {
+        collapsed, buttonVisible, expandedByHeader, collapsedAgain, expandedAgain,
+        labelExpanded, labelCollapsed,
+      };
+    })();
+  `);
+
+  // 收起全部之后，每块面板的标题都应该还在，点一下能恢复
+  const bulkTest = await win.webContents.executeJavaScript(`
+    (() => {
+      document.getElementById('collapse-all').click();
+      const allCollapsed = document.querySelectorAll('section.panel.collapsed').length;
+      const titlesVisible = [...document.querySelectorAll('section.panel')]
+        .filter((el) => !el.classList.contains('hidden'))
+        .every((el) => el.querySelector('.panel-head h2')?.offsetParent !== null);
+      document.getElementById('expand-all').click();
+      const afterExpand = document.querySelectorAll('section.panel.collapsed').length;
+      return { allCollapsed, titlesVisible, afterExpand };
     })();
   `);
 
@@ -146,7 +172,13 @@ app.whenReady().then(async () => {
     ['二维码图片能加载', qrPopup.loaded === true],
     ['面板有折叠按钮', restored.panelToggles === 8],
     ['点击可收起面板', collapseTest.collapsed === true],
-    ['再点可展开面板', collapseTest.expanded === true],
+    ['收起后按钮仍可见', collapseTest.buttonVisible === true],
+    ['按钮文字随状态变化', /收起/.test(collapseTest.labelExpanded) && /展开/.test(collapseTest.labelCollapsed)],
+    ['点标题也能展开', collapseTest.expandedByHeader === true],
+    ['按钮还能再次收起和展开', collapseTest.collapsedAgain === true && collapseTest.expandedAgain === true],
+    ['收起全部能收干净', bulkTest.allCollapsed >= 8],
+    ['收起后标题仍可见', bulkTest.titlesVisible === true],
+    ['展开全部能恢复', bulkTest.afterExpand === 0],
     ['重启后自动填好用户名', restored.handle === TEST_HANDLE],
     ['重启后自动填好目标分数', restored.target === '1900'],
     ['重启后自动填好每周题量', restored.weekly === '12'],

@@ -86,10 +86,20 @@ app.whenReady().then(async () => {
   await wait(700);
   await shot(win, '09-收起面板后');
 
+  // 全部收起：看展开按钮和提示是否清楚
+  await win.webContents.executeJavaScript(`
+    document.getElementById('collapse-all').click();
+    window.scrollTo(0, 0);
+  `);
+  await wait(700);
+  await shot(win, '10-全部收起');
+  await win.webContents.executeJavaScript(`document.getElementById('expand-all').click();`);
+  await wait(500);
+
   // 顶部的交流群二维码
   await win.webContents.executeJavaScript(`document.getElementById('qq-toggle').click();`);
   await wait(600);
-  await shot(win, '10-交流群二维码');
+  await shot(win, '11-交流群二维码');
 
   console.log('输出目录:', SHOTS);
   app.exit(0);

@@ -1321,8 +1321,8 @@ input[type="number"]:focus {
   position: absolute;
   top: 12px;
   right: 12px;
-  width: 30px;
-  height: 30px;
+  height: 28px;
+  padding: 0 11px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1330,10 +1330,10 @@ input[type="number"]:focus {
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text-dim);
-  font-size: 13px;
+  font-family: inherit;
+  font-size: 12.5px;
   line-height: 1;
   cursor: pointer;
-  transition: transform 0.18s ease;
 }
 
 .panel-toggle:hover {
@@ -1341,14 +1341,31 @@ input[type="number"]:focus {
   color: var(--text);
 }
 
-.panel.collapsed .panel-toggle {
-  transform: rotate(-90deg);
+/* 直接写字，比转来转去的小三角清楚得多 */
+.panel-toggle::after {
+  content: '▾ 收起';
 }
 
-/* 收起时只留标题，说明文字也一起藏起来 */
+.panel.collapsed .panel-toggle::after {
+  content: '▸ 展开';
+  color: var(--accent-text);
+}
+
+/* 收起时只留标题和展开按钮。注意按钮本身也是面板的子元素，
+   必须显式排除，否则一收起就连按钮一起藏了，等于收不回来。 */
 .panel.collapsed .panel-head p,
-.panel.collapsed > *:not(.panel-head) {
+.panel.collapsed > *:not(.panel-head):not(.panel-toggle) {
   display: none;
+}
+
+.panel.collapsed {
+  padding: 15px 24px;
+  /* 整块都可以点，误触之后随手一点就能恢复 */
+  cursor: pointer;
+}
+
+.panel.collapsed:hover {
+  border-color: var(--border-strong);
 }
 
 .panel.collapsed .panel-head {
@@ -1358,6 +1375,15 @@ input[type="number"]:focus {
 .panel.collapsed .panel-head h2 {
   margin: 0;
   padding-right: 40px;
+}
+
+/* 收起后给个明确的提示，让人知道点哪里能恢复 */
+.panel.collapsed .panel-head h2::after {
+  content: '点这里展开';
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--accent-text);
 }
 
 .subnav-spacer {

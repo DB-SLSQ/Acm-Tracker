@@ -1245,7 +1245,6 @@ function setupPanelToggles() {
     button.className = 'panel-toggle';
     button.dataset.panel = id;
     button.title = '收起或展开这一块';
-    button.textContent = '▾';
     panel.appendChild(button);
   }
 }
@@ -1267,9 +1266,15 @@ function setCollapsed(id, collapsed, { save = true } = {}) {
 
 document.addEventListener('click', (event) => {
   const button = event.target.closest('.panel-toggle');
-  if (!button) return;
-  const id = button.dataset.panel;
-  setCollapsed(id, !state.collapsed[id]);
+  if (button) {
+    setCollapsed(button.dataset.panel, !state.collapsed[button.dataset.panel]);
+    return;
+  }
+  // 已经收起的面板，点它任意位置都展开——误触之后不用去找按钮
+  const collapsed = event.target.closest('section.panel.collapsed');
+  if (collapsed && COLLAPSIBLE_PANELS.includes(collapsed.id)) {
+    setCollapsed(collapsed.id, false);
+  }
 });
 
 // 从导航点进去时，如果那块是收起的就先展开，否则跳过去什么都看不到
