@@ -4,17 +4,42 @@
 
 ## 怎么运行
 
+### 方式一：桌面程序（推荐）
+
+从 [Releases](https://github.com/DB-SLSQ/Acm-Tracker/releases) 下载 `ACM Trainer Setup x.y.z.exe`，双击安装。之后从开始菜单或桌面快捷方式打开，就是一个独立的窗口程序，不需要终端，也不需要浏览器。
+
+程序的数据（题库缓存、训练进度）保存在 `%APPDATA%\acm-trainer\data\`，卸载重装不会丢。
+
+### 方式二：网页版
+
 前提：电脑上装了 **Node.js 22.5 或更高版本**（[官网下载](https://nodejs.org)）。
 
-双击 `start.cmd`，或者在项目目录里执行：
+双击 `start.cmd`，或者在项目目录里执行 `npm start`，然后浏览器访问 <http://127.0.0.1:5173>。按 `Ctrl+C` 停止。
+
+网页版**不需要 `npm install`**——后端零依赖，用的是 Node 自带的 SQLite。
+
+### 自己打包桌面程序
 
 ```bash
-npm start
+npm install      # 只有打包桌面版才需要，会下载 Electron（约 200MB）
+npm run desktop  # 开发模式直接运行桌面窗口
+npm run build    # 生成安装程序，产物在 dist/
 ```
 
-浏览器会打开 <http://127.0.0.1:5173>。按 `Ctrl+C` 停止。
+如果下载 Electron 卡住（国内网络常见），先设置镜像：
 
-不需要 `npm install`——整个项目零依赖，用的是 Node 自带的 SQLite。
+```bash
+set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/
+```
+
+### 验证桌面程序是否正常
+
+```bash
+npx electron scripts/desktop-smoke.mjs
+```
+
+会以隐藏窗口启动，检查页面是否渲染成功、有没有 JavaScript 报错，然后退出。
 
 ### 如果 `npm start` 报「因为在此系统上禁止运行脚本」
 
@@ -79,6 +104,7 @@ Codeforces 没有开放「注册虚拟赛」的接口，那一步需要你的登
 
 ```
 server.js                 HTTP 服务和接口
+electron/main.js          桌面程序入口（启动内置服务 + 原生窗口）
 lib/cf.js                 Codeforces API 客户端（串行限速，遵守官方 2 秒间隔）
 lib/db.js                 SQLite 缓存
 lib/knowledge.js          知识点建模：tag → 知识方向、分位数、置信度
@@ -86,8 +112,11 @@ lib/plan.js               训练计划与推荐算法
 lib/contests.js           比赛日历、虚拟参赛推荐与复盘
 public/                   前端页面（原生 HTML/CSS/JS，无构建步骤）
 scripts/sync-problems.js  手动刷新题库
+scripts/desktop-smoke.mjs 桌面程序冒烟测试
 data/trainer.db           你的所有数据（可随时删除重建）
 ```
+
+桌面版和网页版共用同一套后端与界面代码：Electron 在随机空闲端口拉起内置服务，再用原生窗口打开它。题目链接、比赛链接一律交给系统浏览器打开，不在应用内跳转。
 
 数据表：`problems` 题库、`users` 用户、`submissions` 提交记录、`rating_history` 比赛记录、`progress` 做题进度、`contests` 比赛目录、`virtual_sessions` 虚拟赛记录。
 

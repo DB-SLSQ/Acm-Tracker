@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import * as cf from './lib/cf.js';
 import * as db from './lib/db.js';
@@ -17,8 +17,8 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(HERE, 'public');
-const PORT = Number(process.env.PORT || 5173);
-const HOST = process.env.HOST || '127.0.0.1';
+const DEFAULT_PORT = Number(process.env.PORT || 5173);
+const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
 
 const USER_CACHE_MS = 1000 * 60 * 60 * 6; // 用户数据 6 小时内不重复抓
 const PROBLEMS_CACHE_MS = 1000 * 60 * 60 * 24; // 题库每天更新一次
@@ -484,18 +484,43 @@ async function serveStatic(res, pathname) {
   }
 }
 
-const server = createServer((req, res) => {
+const requestHandler = (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
   route(req, res, url).catch((error) => {
     console.error('[server]', error);
     if (!res.headersSent) sendError(res, 500, error.message);
   });
-});
+};
 
-server.listen(PORT, HOST, () => {
-  console.log('');
-  console.log('  ACM 训练台已启动');
-  console.log(`  在浏览器里打开：http://${HOST}:${PORT}`);
-  console.log('  按 Ctrl+C 停止');
-  console.log('');
-});
+/**
+ * 启动服务。桌面程序传 port: 0 让系统分配空闲端口，避免和别的程序撞车。
+ * 返回 { server, port, url }。
+ */
+export function startServer({ port = DEFAULT_PORT, host = DEFAULT_HOST, quiet = false } = {}) {
+  const server = createServer(requestHandler);
+
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      const actualPort = server.address().port;
+      const url = `http://${host}:${actualPort}`;
+      if (!quiet) {
+        console.log('');
+        console.log('  ACM 训练台已启动');
+        console.log(`  在浏览器里打开：${url}`);
+        console.log('  按 Ctrl+C 停止');
+        console.log('');
+      }
+      resolve({ server, port: actualPort, url });
+    });
+  });
+}
+
+// 直接用 node server.js 运行时才自动启动；被桌面程序 import 时不启动。
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isDirectRun) {
+  startServer().catch((error) => {
+    console.error('启动失败：', error.message);
+    process.exit(1);
+  });
+}
