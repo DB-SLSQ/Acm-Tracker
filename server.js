@@ -156,13 +156,31 @@ function buildUserSummary(handleKey) {
   };
 }
 
-/** 用户设置：把数值型字段转回来。 */
+export const THEMES = ['dark', 'light', 'gray', 'eye'];
+export const PALETTES = ['green', 'blue', 'pink', 'orange', 'purple'];
+
+const parseJson = (value, fallback) => {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+};
+
+/** 用户设置：从数据库的字符串还原成有类型的对象。 */
 function readSettings() {
   const raw = db.getSettings();
   return {
     handle: raw.handle ?? null,
     target: raw.target ? Number(raw.target) : null,
     weekly: raw.weekly ? Number(raw.weekly) : null,
+    theme: THEMES.includes(raw.theme) ? raw.theme : 'dark',
+    heatmapPalette: PALETTES.includes(raw.heatmap_palette) ? raw.heatmap_palette : 'green',
+    // 每周固定休息的日子：0=周日 … 6=周六
+    restDays: parseJson(raw.rest_days, []),
+    // 特定日期无法做题：{ 'YYYY-MM-DD': '聚餐' }
+    dayOff: parseJson(raw.day_off, {}),
     updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
   };
 }
@@ -398,11 +416,49 @@ async function route(req, res, url) {
       if (body.weekly !== undefined && Number.isFinite(Number(body.weekly))) {
         patch.weekly = Math.round(Number(body.weekly));
       }
+      if (body.theme !== undefined) {
+        if (!THEMES.includes(body.theme)) return sendError(res, 400, '不支持的主题');
+        patch.theme = body.theme;
+      }
+      if (body.heatmapPalette !== undefined) {
+        if (!PALETTES.includes(body.heatmapPalette)) return sendError(res, 400, '不支持的配色');
+        patch.heatmap_palette = body.heatmapPalette;
+      }
+      if (body.restDays !== undefined) {
+        if (!Array.isArray(body.restDays)) return sendError(res, 400, 'restDays 需要是数组');
+        patch.rest_days = JSON.stringify(
+          [...new Set(body.restDays.map(Number).filter((n) => n >= 0 && n <= 6))].sort(),
+        );
+      }
+      if (body.dayOff !== undefined) {
+        if (typeof body.dayOff !== 'object' || body.dayOff === null) {
+          return sendError(res, 400, 'dayOff 需要是对象');
+        }
+        const clean = {};
+        for (const [date, note] of Object.entries(body.dayOff)) {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+          clean[date] = String(note ?? '').slice(0, 60);
+        }
+        patch.day_off = JSON.stringify(clean);
+      }
       db.saveSettings(patch);
       return sendJson(res, 200, { settings: readSettings() });
     } catch (error) {
       return sendError(res, 400, error.message);
     }
+  }
+
+  if (pathname === '/api/activity') {
+    const rawHandle = url.searchParams.get('handle');
+    if (!rawHandle) return sendError(res, 400, '请先填写 Codeforces 用户名');
+    const handleKey = db.normalizeHandle(rawHandle);
+    if (!db.getUser(handleKey)) return sendError(res, 404, '还没有这个用户的数据，请先加载一次');
+    const offsetSeconds = Number(url.searchParams.get('offset') || 0);
+    const activity = db.getDailyActivity(
+      handleKey,
+      Number.isFinite(offsetSeconds) ? Math.round(offsetSeconds) : 0,
+    );
+    return sendJson(res, 200, { activity });
   }
 
   if (pathname === '/api/calendar') {

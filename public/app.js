@@ -1,3 +1,5 @@
+import { buildSchedule, dateKey, heatmapWeeks, monthMatrix, parseDateKey, WEEKDAY_LABELS } from './schedule.js';
+
 const state = {
   handle: '',
   target: 1800,
@@ -7,6 +9,30 @@ const state = {
   virtual: null,
   reviewId: 0,
   hasSavedTarget: false,
+  // 外观
+  theme: 'dark',
+  palette: 'green',
+  // 日程
+  restDays: [],
+  dayOff: {},
+  planProblems: [],
+  schedule: null,
+  calCursor: null,
+  selectedDate: null,
+  // 热力图
+  activity: null,
+  heatmapYear: new Date().getFullYear(),
+  heatmapMetric: 'solved',
+};
+
+const THEME_LABELS = { dark: '暗色', light: '亮色', gray: '灰色', eye: '护眼' };
+const PALETTE_LABELS = { green: '绿', blue: '蓝', pink: '粉', orange: '橙', purple: '紫' };
+const PALETTE_COLORS = {
+  green: ['#46695a', '#3a8a5e', '#2aa862', '#12c46e'],
+  blue: ['#44607e', '#3a7ab0', '#2b95da', '#14aef7'],
+  pink: ['#7d5a6d', '#ac6089', '#d664a4', '#f25fbb'],
+  orange: ['#7d6349', '#ad7539', '#d9902b', '#f5a81b'],
+  purple: ['#5d5878', '#7a5cb0', '#9260dd', '#a866ff'],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -78,6 +104,26 @@ async function postJson(url, body) {
 function saveSettings(patch) {
   postJson('/api/settings', patch).catch(() => {
     /* 静默失败：记不住设置不该影响正常使用 */
+  });
+}
+
+/** 外观写在 <html> 上，CSS 按属性切换整套颜色变量。 */
+function applyAppearance() {
+  document.documentElement.dataset.theme = state.theme;
+  document.documentElement.dataset.palette = state.palette;
+  document.querySelectorAll('#theme-switch .theme-btn').forEach((button) => {
+    button.classList.toggle('active', button.dataset.themeValue === state.theme);
+  });
+}
+
+function bindAppearance() {
+  $('theme-switch').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-theme-value]');
+    if (!button) return;
+    state.theme = button.dataset.themeValue;
+    applyAppearance();
+    saveSettings({ theme: state.theme });
+    if (state.activity) renderHeatmap();
   });
 }
 
@@ -235,6 +281,7 @@ async function loadUser(force = false) {
     setStatus(`已同步 ${user.displayHandle} 的数据`);
     showHint('数据抓好了，接着设定目标 rating 就行。');
     loadCalendar();
+    loadActivity();
     return true;
   } catch (error) {
     setStatus('抓取失败');
@@ -259,6 +306,7 @@ async function generatePlan(force = false, { scroll = true } = {}) {
   state.target = Math.round(target);
   state.weekly = Math.max(1, Math.round(weekly) || 10);
   state.hasSavedTarget = true;
+  $('weekly-input-2').value = state.weekly;
   saveSettings({ handle: state.handle, target: state.target, weekly: state.weekly });
 
   const button = $('plan-btn');
@@ -272,13 +320,19 @@ async function generatePlan(force = false, { scroll = true } = {}) {
     );
     state.planData = data.plan;
     state.done = new Set(data.done ?? []);
+    // 把各阶段的题目拍平成一条有序列表，按天排布要用
+    state.planProblems = data.plan.stageList.flatMap((stage) =>
+      stage.problems.map((problem) => ({ ...problem, stage: stage.index })),
+    );
     renderPlan(data.plan);
     renderAxes(data.plan.axes ?? []);
     renderTags(data.plan.weakTags);
     $('panel-plan').classList.remove('hidden');
     $('panel-tags').classList.remove('hidden');
+    $('subnav').classList.remove('hidden');
     setStatus('计划已生成');
     if (scroll) $('panel-plan').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    rebuildSchedule();
     loadVirtual();
   } catch (error) {
     setStatus('生成失败');
@@ -379,7 +433,7 @@ function renderAxes(axes) {
         : 0;
       const gap = entry.gapVsSelf;
       const note = has
-        ? `${entry.representative} 分 · ${gap >= 0 ? '+' : ''}${gap} · ${entry.count} 题`
+        ? `${entry.representative} · ${gap >= 0 ? '+' : ''}${gap} · ${entry.count} 题`
         : '还没接触过';
       const noteClass = has ? (gap >= 0 ? 'above' : 'below') : '';
       return `
@@ -798,6 +852,351 @@ $('panel-virtual').addEventListener('click', (event) => {
 
 $('timer-finish').addEventListener('click', finishVirtual);
 
+// ---------- 活动热力图 ----------
+
+async function loadActivity() {
+  if (!state.handle) return;
+  try {
+    // 按本机时区归日：数据库里存的是 UTC 秒，这里把偏移量传过去
+    const offset = -new Date().getTimezoneOffset() * 60;
+    const { activity } = await getJson(
+      `/api/activity?handle=${encodeURIComponent(state.handle)}&offset=${offset}`,
+    );
+    state.activity = activity;
+    renderHeatmap();
+    $('panel-heatmap').classList.remove('hidden');
+  } catch (error) {
+    $('panel-heatmap').classList.remove('hidden');
+    $('heatmap-summary').textContent = `活动记录加载失败：${error.message}`;
+  }
+}
+
+/** 按分位数把每日数量分成 0~4 级，深浅随你自己的活跃度自适应。 */
+function levelScale(counts) {
+  const values = Object.values(counts).filter((n) => n > 0).sort((a, b) => a - b);
+  if (!values.length) return () => 0;
+  const pick = (p) => values[Math.min(values.length - 1, Math.floor(values.length * p))];
+  const q1 = pick(0.25);
+  const q2 = pick(0.5);
+  const q3 = pick(0.75);
+  return (n) => (n <= 0 ? 0 : n <= q1 ? 1 : n <= q2 ? 2 : n <= q3 ? 3 : 4);
+}
+
+function renderHeatmap() {
+  if (!state.activity) return;
+  const isSolved = state.heatmapMetric === 'solved';
+  const counts = isSolved ? state.activity.solved : state.activity.submissions;
+  const weeks = heatmapWeeks();
+  const level = levelScale(counts);
+  const unit = isSolved ? '题' : '次';
+
+  const monthLabels = weeks.map((week) => {
+    const first = parseDateKey(week[0].date);
+    return first.getDate() <= 7 ? `${first.getMonth() + 1}月` : '';
+  });
+
+  // 只统计网格覆盖到的这一年，否则会把全部历史算进来，跟图上看到的对不上
+  const rangeStart = weeks[0][0].date;
+  const rangeEnd = dateKey(new Date());
+  const inRange = Object.entries(counts).filter(([date]) => date >= rangeStart && date <= rangeEnd);
+  const total = inRange.reduce((sum, [, n]) => sum + n, 0);
+  const activeDays = inRange.filter(([, n]) => n > 0).length;
+  const best = inRange.length ? Math.max(...inRange.map(([, n]) => n)) : 0;
+
+  $('heatmap-summary').textContent = isSolved
+    ? `这块图是最近一年（${rangeStart} 起）：通过 ${total} 道题，分布在 ${activeDays} 天里，单日最多 ${best} 题。`
+    : `这块图是最近一年（${rangeStart} 起）：提交 ${total} 次，覆盖 ${activeDays} 天，单日最多 ${best} 次。`;
+
+  const cells = weeks
+    .map((week) => {
+      const column = week
+        .map((cell) => {
+          if (cell.future) return '<div class="heatmap-cell" style="visibility:hidden"></div>';
+          const n = counts[cell.date] ?? 0;
+          return `<div class="heatmap-cell" data-level="${level(n)}" title="${cell.date} · ${n} ${unit}"></div>`;
+        })
+        .join('');
+      return `<div class="heatmap-week">${column}</div>`;
+    })
+    .join('');
+
+  const monthRow = monthLabels.map((label) => `<span>${label}</span>`).join('');
+  $('heatmap-wrap').innerHTML = `
+    <div class="heatmap-months">${monthRow}</div>
+    <div class="heatmap-grid">${cells}</div>`;
+
+  const legendCells = ['var(--hm-empty)', 'var(--hm1)', 'var(--hm2)', 'var(--hm3)', 'var(--hm4)']
+    .map((color) => `<span class="heatmap-cell" style="background:${color}"></span>`)
+    .join('');
+  $('heatmap-legend').innerHTML =
+    `<span>少</span>${legendCells}<span>多</span>` +
+    `<span style="margin-left:10px">每天${isSolved ? '首次通过的题数' : '提交次数'}</span>`;
+
+  const metricButtons = `
+    <div class="theme-switch" style="margin-right:12px">
+      <button type="button" class="theme-btn ${isSolved ? 'active' : ''}" data-metric="solved">过题数</button>
+      <button type="button" class="theme-btn ${isSolved ? '' : 'active'}" data-metric="submissions">提交数</button>
+    </div>`;
+  const dots = Object.entries(PALETTE_COLORS)
+    .map(([name, colors]) => {
+      const active = state.palette === name ? 'active' : '';
+      const style = `background:linear-gradient(135deg, ${colors[1]}, ${colors[3]})`;
+      return `<button type="button" class="palette-dot ${active}" data-palette-value="${name}" title="${PALETTE_LABELS[name]}色" style="${style}"></button>`;
+    })
+    .join('');
+  $('palette-switch').innerHTML = metricButtons + dots;
+}
+
+$('palette-switch').addEventListener('click', (event) => {
+  const metric = event.target.closest('[data-metric]');
+  if (metric) {
+    state.heatmapMetric = metric.dataset.metric;
+    renderHeatmap();
+    return;
+  }
+  const dot = event.target.closest('[data-palette-value]');
+  if (dot) {
+    state.palette = dot.dataset.paletteValue;
+    applyAppearance();
+    renderHeatmap();
+    saveSettings({ heatmapPalette: state.palette });
+  }
+});
+
+// ---------- 训练日程 ----------
+
+function escapeHtml(text) {
+  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return String(text ?? '').replace(/[&<>"']/g, (char) => map[char]);
+}
+
+function formatMonthDay(key) {
+  const date = parseDateKey(key);
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${WEEKDAY_LABELS[date.getDay()]}`;
+}
+
+function rebuildSchedule() {
+  if (!state.planProblems.length) return;
+  state.schedule = buildSchedule({
+    problems: state.planProblems,
+    weekly: state.weekly,
+    restDays: state.restDays,
+    dayOff: state.dayOff,
+    startDate: new Date(),
+  });
+  if (!state.calCursor) {
+    const now = new Date();
+    state.calCursor = { year: now.getFullYear(), month: now.getMonth() };
+  }
+  if (!state.selectedDate) state.selectedDate = dateKey(new Date());
+  renderSchedule();
+}
+
+function renderSchedule() {
+  $('panel-schedule').classList.remove('hidden');
+  const schedule = state.schedule;
+  if (!schedule) {
+    $('schedule-summary').textContent = '先生成训练计划，再来排日程。';
+    return;
+  }
+
+  $('schedule-summary').textContent =
+    `从今天（${formatMonthDay(schedule.startDate)}）开始，到 ${formatMonthDay(schedule.endDate)} 做完 ${schedule.totalProblems} 题；` +
+    `平均每个做题日 ${schedule.perActiveDay} 题，中间有 ${schedule.restDates.length} 天不安排任务。`;
+
+  $('rest-picker').innerHTML = WEEKDAY_LABELS.map((label, index) => {
+    const active = state.restDays.includes(index) ? 'active' : '';
+    return `<button type="button" class="rest-chip ${active}" data-rest-day="${index}">${label}</button>`;
+  }).join('');
+
+  renderMonthCalendar();
+  renderDayDetail();
+  renderUpcoming();
+}
+
+function renderMonthCalendar() {
+  const { year, month } = state.calCursor;
+  $('cal-title').textContent = `${year} 年 ${month + 1} 月`;
+  $('cal-weekdays').innerHTML = WEEKDAY_LABELS.map((label) => `<span>${label.slice(1)}</span>`).join('');
+
+  const today = dateKey(new Date());
+  const maxQuota = Math.max(1, ...state.schedule.days.map((day) => day.quota));
+  const offMap = new Map(state.schedule.restDates.map((item) => [item.date, item]));
+
+  $('cal-grid').innerHTML = monthMatrix(year, month)
+    .flat()
+    .map((cell) => {
+      const day = state.schedule.byDate.get(cell.date);
+      const off = offMap.get(cell.date);
+      const classes = ['cal-cell'];
+      if (!cell.inMonth) classes.push('dim');
+      if (cell.date === today) classes.push('today');
+      if (cell.date === state.selectedDate) classes.push('selected');
+      if (cell.date < today) classes.push('past');
+
+      let body = '<span class="cal-quota">—</span>';
+      if (off) {
+        body = `<span class="cal-note">${off.reason ? `休息 · ${escapeHtml(off.reason)}` : '休息'}</span>`;
+      } else if (day) {
+        const level = Math.max(1, Math.min(4, Math.ceil((day.quota / maxQuota) * 4)));
+        const width = Math.round((day.quota / maxQuota) * 100);
+        body =
+          `<span class="cal-quota">${day.quota} 题</span>` +
+          `<div class="cal-bar"><span style="width:${width}%;background:var(--hm${level})"></span></div>`;
+      }
+
+      return `<div class="${classes.join(' ')}" data-cal-date="${cell.date}"><span class="cal-day">${cell.day}</span>${body}</div>`;
+    })
+    .join('');
+
+  $('cal-legend').textContent = '点任意一天可标记「这天没空」，后面的安排会自动顺延，总题量不变';
+}
+
+function renderDayDetail() {
+  const key = state.selectedDate;
+  if (!key) {
+    $('day-detail').innerHTML = '';
+    return;
+  }
+
+  const day = state.schedule.byDate.get(key);
+  const off = state.schedule.restDates.find((item) => item.date === key);
+  const weekdayOff = state.restDays.includes(parseDateKey(key).getDay());
+  const isOff = Boolean(off);
+
+  const status = isOff
+    ? '这天不安排任务'
+    : day
+      ? `安排 ${day.problems.length} 题`
+      : '不在计划时间范围内';
+
+  let actions;
+  if (weekdayOff) {
+    actions = '<span class="stage-meta">这天属于每周固定休息，取消上面「每周固定休息」里的勾选即可恢复</span>';
+  } else {
+    actions =
+      `<input type="text" id="day-note" placeholder="原因，例如：聚餐（可留空）" value="${escapeHtml(off?.reason ?? '')}" />` +
+      `<button class="btn" id="day-toggle">${isOff ? '这天恢复做题' : '这天不做题'}</button>`;
+  }
+
+  const header = `
+    <div class="day-detail-head">
+      <div><strong>${formatMonthDay(key)}</strong> <span class="stage-meta">${status}</span></div>
+      <div class="day-detail-actions">${actions}</div>
+    </div>`;
+
+  if (!day || isOff) {
+    $('day-detail').innerHTML =
+      header +
+      `<p class="subtle">${isOff ? '这天休息，题目会自动顺延到后面，总量不变。' : '这一天没有安排题目。'}</p>`;
+  } else {
+    const stageOf = day.problems[0]?.stage ?? 1;
+    const rows = day.problems
+      .map(
+        (problem) => `
+      <tr>
+        <td class="problem-code">${problem.contestId}${problem.index}</td>
+        <td><a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>
+            <div class="problem-tags">${problem.tags.slice(0, 3).join('、')}</div></td>
+        <td style="width:70px">${ratingBadge(problem.rating)}</td>
+        <td style="width:86px" class="problem-tags">第 ${problem.stage ?? stageOf} 阶段</td>
+      </tr>`,
+      )
+      .join('');
+    $('day-detail').innerHTML = header + `<table class="problem-table">${rows}</table>`;
+  }
+
+  const toggle = $('day-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', () => {
+      if (Object.hasOwn(state.dayOff, key)) delete state.dayOff[key];
+      else state.dayOff[key] = $('day-note')?.value.trim() ?? '';
+      saveSettings({ dayOff: state.dayOff });
+      rebuildSchedule();
+    });
+  }
+
+  const note = $('day-note');
+  if (note && isOff) {
+    note.addEventListener('change', () => {
+      state.dayOff[key] = note.value.trim();
+      saveSettings({ dayOff: state.dayOff });
+      rebuildSchedule();
+    });
+  }
+}
+
+function renderUpcoming() {
+  const upcoming = state.schedule.days.slice(0, 10);
+  if (!upcoming.length) {
+    $('upcoming-list').innerHTML = '';
+    return;
+  }
+  $('upcoming-list').innerHTML =
+    '<div class="stage-meta" style="margin-bottom:8px">接下来的安排（点一行可以跳到那天）</div>' +
+    upcoming
+      .map((day) => {
+        const names = day.problems
+          .slice(0, 4)
+          .map((problem) => `${problem.contestId}${problem.index}`)
+          .join(' · ');
+        const more = day.problems.length > 4 ? ` 等 ${day.problems.length} 题` : '';
+        return `<div class="upcoming-row" data-cal-date="${day.date}">
+          <span class="upcoming-date">${formatMonthDay(day.date)}</span>
+          <span class="upcoming-count">${day.problems.length} 题</span>
+          <span class="upcoming-problems">${names}${more}</span>
+        </div>`;
+      })
+      .join('');
+}
+
+$('panel-schedule').addEventListener('click', (event) => {
+  const nav = event.target.closest('[data-cal-nav]');
+  if (nav) {
+    const cursor = state.calCursor ?? { year: new Date().getFullYear(), month: new Date().getMonth() };
+    const next = new Date(cursor.year, cursor.month + Number(nav.dataset.calNav), 1);
+    state.calCursor = { year: next.getFullYear(), month: next.getMonth() };
+    renderMonthCalendar();
+    return;
+  }
+  const target = event.target.closest('[data-cal-date]');
+  if (target && state.schedule) {
+    state.selectedDate = target.dataset.calDate;
+    renderMonthCalendar();
+    renderDayDetail();
+  }
+});
+
+$('rest-picker').addEventListener('click', (event) => {
+  const chip = event.target.closest('[data-rest-day]');
+  if (!chip) return;
+  const day = Number(chip.dataset.restDay);
+  state.restDays = state.restDays.includes(day)
+    ? state.restDays.filter((value) => value !== day)
+    : [...state.restDays, day].sort((a, b) => a - b);
+  saveSettings({ restDays: state.restDays });
+  rebuildSchedule();
+});
+
+$('schedule-reset').addEventListener('click', () => {
+  state.dayOff = {};
+  saveSettings({ dayOff: {} });
+  rebuildSchedule();
+});
+
+/** 两个每周题量输入框绑同一个值，改哪个都同步。 */
+function syncWeekly(value, source) {
+  const weekly = Math.max(1, Math.round(Number(value) || 10));
+  state.weekly = weekly;
+  if (source !== 'main') $('weekly-input').value = weekly;
+  if (source !== 'schedule') $('weekly-input-2').value = weekly;
+  saveSettings({ weekly });
+  rebuildSchedule();
+}
+
+$('weekly-input').addEventListener('change', (event) => syncWeekly(event.target.value, 'main'));
+$('weekly-input-2').addEventListener('change', (event) => syncWeekly(event.target.value, 'schedule'));
+
 loadCalendar();
 
 /** 底部显示版本号，方便确认装的是哪一版。 */
@@ -814,13 +1213,20 @@ loadVersion();
 
 /** 启动时自动恢复上次的账号、目标分数和训练计划，不用重新输一遍。 */
 async function restoreSession() {
-  let settings;
+  let settings = null;
   try {
     ({ settings } = await getJson('/api/settings'));
   } catch {
-    setStatus('未连接');
-    return;
+    /* 读不到就用默认外观 */
   }
+
+  if (settings) {
+    state.theme = settings.theme ?? 'dark';
+    state.palette = settings.heatmapPalette ?? 'green';
+    state.restDays = Array.isArray(settings.restDays) ? settings.restDays : [];
+    state.dayOff = settings.dayOff ?? {};
+  }
+  applyAppearance();
 
   if (!settings?.handle) {
     setStatus('未连接');
@@ -836,6 +1242,7 @@ async function restoreSession() {
   }
   if (settings.weekly) {
     $('weekly-input').value = settings.weekly;
+    $('weekly-input-2').value = settings.weekly;
     state.weekly = settings.weekly;
   }
 
@@ -846,4 +1253,5 @@ async function restoreSession() {
   }
 }
 
+bindAppearance();
 restoreSession();

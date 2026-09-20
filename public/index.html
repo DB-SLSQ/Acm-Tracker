@@ -16,8 +16,27 @@
             <p class="brand-sub">给一个人的 Codeforces 训练计划</p>
           </div>
         </div>
-        <div class="topbar-status" id="status">未连接</div>
+        <div class="toolbar">
+          <div class="theme-switch" id="theme-switch">
+            <button type="button" class="theme-btn" data-theme-value="dark">暗色</button>
+            <button type="button" class="theme-btn" data-theme-value="light">亮色</button>
+            <button type="button" class="theme-btn" data-theme-value="gray">灰色</button>
+            <button type="button" class="theme-btn" data-theme-value="eye">护眼</button>
+          </div>
+          <div class="topbar-status" id="status">未连接</div>
+        </div>
       </div>
+      <nav class="subnav hidden" id="subnav">
+        <div class="subnav-inner">
+          <a href="#panel-overview">当前水平</a>
+          <a href="#panel-plan">训练计划</a>
+          <a href="#panel-schedule">训练日程</a>
+          <a href="#panel-calendar">比赛日历</a>
+          <a href="#panel-virtual">虚拟参赛</a>
+          <a href="#panel-heatmap">活动记录</a>
+          <a href="#panel-tags">能力画像</a>
+        </div>
+      </nav>
     </header>
 
     <main>
@@ -79,17 +98,40 @@
         <ul class="notes" id="plan-notes"></ul>
       </section>
 
-      <section class="panel hidden" id="panel-tags">
+      <section class="panel hidden" id="panel-schedule">
         <div class="panel-head">
-          <h2>能力画像</h2>
-          <p>按 8 个知识方向看你的水平。柱长是你在该方向做到过的难度（取 75 分位——比「最高难度」稳健，偶尔蹭过一道难题不会让弱项冒充强项）。</p>
+          <h2>训练日程</h2>
+          <p id="schedule-summary"></p>
         </div>
-        <div class="axis-list" id="axis-list"></div>
-        <div class="panel-head sub">
-          <h2>最该补的专题</h2>
-          <p>相对你的目标区间，最拖后腿的专题排在最前。标「未接触」的是你没做过的盲区。</p>
+
+        <div class="sched-toolbar">
+          <div class="sched-field">
+            <label>每周固定休息</label>
+            <div class="rest-picker" id="rest-picker"></div>
+          </div>
+          <div class="sched-field">
+            <label for="weekly-input-2">每周题量</label>
+            <input id="weekly-input-2" type="number" min="1" max="200" step="1" value="10" />
+          </div>
+          <div class="sched-field">
+            <label>&nbsp;</label>
+            <button class="btn" id="schedule-reset">清空特殊日期</button>
+          </div>
         </div>
-        <div class="tag-list" id="tag-list"></div>
+
+        <div class="day-detail-head">
+          <div class="day-detail-actions">
+            <button class="btn" data-cal-nav="-1">← 上个月</button>
+            <strong id="cal-title"></strong>
+            <button class="btn" data-cal-nav="1">下个月 →</button>
+          </div>
+          <span class="stage-meta" id="cal-legend"></span>
+        </div>
+
+        <div class="cal-weekdays" id="cal-weekdays"></div>
+        <div class="cal-grid" id="cal-grid"></div>
+        <div class="day-detail" id="day-detail"></div>
+        <div class="upcoming-list" id="upcoming-list"></div>
       </section>
 
       <section class="panel hidden" id="panel-calendar">
@@ -109,6 +151,31 @@
         <div id="virtual-recommend"></div>
         <div id="virtual-review"></div>
         <div id="virtual-history"></div>
+      </section>
+
+      <section class="panel hidden" id="panel-heatmap">
+        <div class="panel-head">
+          <h2>活动记录</h2>
+          <p id="heatmap-summary"></p>
+        </div>
+        <div class="heatmap-wrap" id="heatmap-wrap"></div>
+        <div class="heatmap-foot">
+          <div class="heatmap-legend" id="heatmap-legend"></div>
+          <div class="palette-switch" id="palette-switch"></div>
+        </div>
+      </section>
+
+      <section class="panel hidden" id="panel-tags">
+        <div class="panel-head">
+          <h2>能力画像</h2>
+          <p>按 8 个知识方向看你的水平。柱长是你在该方向做到过的难度（取 75 分位——比「最高难度」稳健，偶尔蹭过一道难题不会让弱项冒充强项）。</p>
+        </div>
+        <div class="axis-list" id="axis-list"></div>
+        <div class="panel-head sub">
+          <h2>最该补的专题</h2>
+          <p>相对你的目标区间，最拖后腿的专题排在最前。标「未接触」的是你没做过的盲区。</p>
+        </div>
+        <div class="tag-list" id="tag-list"></div>
       </section>
     </main>
 

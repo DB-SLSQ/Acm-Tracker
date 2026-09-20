@@ -49,7 +49,14 @@ const readPage = (win) =>
     quickPicks: document.getElementById('quick-picks')?.children.length ?? 0,
     version: document.getElementById('app-version')?.textContent ?? null,
     overviewText: document.getElementById('stats')?.innerText?.replace(/\\s+/g, ' ').slice(0, 90) ?? null,
-    planSummary: document.getElementById('plan-summary')?.textContent?.slice(0, 90) ?? null
+    planSummary: document.getElementById('plan-summary')?.textContent?.slice(0, 90) ?? null,
+    theme: document.documentElement.dataset.theme ?? null,
+    themeButtons: document.querySelectorAll('#theme-switch .theme-btn').length,
+    paletteDots: document.querySelectorAll('#palette-switch .palette-dot').length,
+    heatmapCells: document.querySelectorAll('.heatmap-cell[data-level]').length,
+    calendarCells: document.querySelectorAll('#cal-grid .cal-cell').length,
+    restChips: document.querySelectorAll('#rest-picker .rest-chip').length,
+    scheduleSummary: document.getElementById('schedule-summary')?.textContent?.slice(0, 90) ?? null
   })`);
 
 const postSettings = (url, body) =>
@@ -87,15 +94,26 @@ app.whenReady().then(async () => {
     handle: original?.handle ?? '',
     target: original?.target ?? '',
     weekly: original?.weekly ?? '',
+    theme: original?.theme ?? 'dark',
+    heatmapPalette: original?.heatmapPalette ?? 'green',
   });
+
+  // 点一下「亮色」，页面上的主题属性应该立刻跟着变
+  const themeAfterClick = await win.webContents.executeJavaScript(`
+    document.querySelector('[data-theme-value="light"]').click();
+    document.documentElement.dataset.theme || '';
+  `);
 
   const checks = [
     ['页面标题正确', restored.title === 'ACM 训练台'],
-    ['7 个界面区块都在', restored.panels === 7],
+    ['9 个界面区块都在', restored.panels === 9],
     ['冷启动只显示输入框和日历', cold.visiblePanels.join(',') === 'panel-handle,panel-calendar'],
     ['冷启动时输入框为空', !cold.handle],
     ['比赛日历加载成功', cold.calendarRows > 0],
     ['底部显示版本号', /^v\d+\.\d+\.\d+$/.test(cold.version ?? '')],
+    ['主题按钮有 4 个', cold.themeButtons === 4],
+    ['默认是暗色主题', cold.theme === 'dark'],
+    ['点击可切换主题', themeAfterClick === 'light'],
     ['重启后自动填好用户名', restored.handle === TEST_HANDLE],
     ['重启后自动填好目标分数', restored.target === '1900'],
     ['重启后自动填好每周题量', restored.weekly === '12'],
@@ -108,6 +126,11 @@ app.whenReady().then(async () => {
       ['读到真实 rating', /rating/.test(restored.overviewText ?? '')],
       ['自动生成出训练计划', restored.visiblePanels.includes('panel-plan')],
       ['计划内容非空', /目标/.test(restored.planSummary ?? '')],
+      ['训练日程渲染出月历', restored.calendarCells >= 28],
+      ['日程摘要非空', /开始/.test(restored.scheduleSummary ?? '')],
+      ['每周休息日有 7 个按钮', restored.restChips === 7],
+      ['热力图渲染出瓷砖', restored.heatmapCells > 300],
+      ['配色可选 5 种', restored.paletteDots === 5],
     );
   }
 
