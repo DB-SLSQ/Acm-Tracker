@@ -1,6 +1,6 @@
 {
   "name": "acm-trainer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "main": "electron/main.js",
@@ -14,23 +14,31 @@
   "build": {
     "appId": "com.dbslsq.acmtracker",
     "productName": "ACM Trainer",
+    "directories": {
+      "buildResources": "build"
+    },
     "files": [
       "electron/**",
       "lib/**",
       "public/**",
       "scripts/**",
+      "build/icon.png",
       "server.js",
       "package.json"
     ],
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "ACM 训练台"
+      "shortcutName": "ACM 训练台",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
     }
   },
   "engines": {

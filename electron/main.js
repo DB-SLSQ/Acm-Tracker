@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(HERE, '..');
+// 开发模式下窗口用这个图标；打包后用的是 exe 内置的图标资源
+const DEV_ICON = join(PROJECT_ROOT, 'build', 'icon.png');
 
 // 必须在导入服务之前设定数据目录：打包后安装目录是只读的，
 // 数据库要放到用户数据目录（Windows 上是 %APPDATA%\ACM Trainer）。
@@ -31,6 +33,7 @@ async function createWindow() {
     minWidth: 900,
     minHeight: 620,
     title: 'ACM 训练台',
+    icon: app.isPackaged ? undefined : DEV_ICON,
     backgroundColor: '#0f1115',
     autoHideMenuBar: true,
     show: false,
