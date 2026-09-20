@@ -100,3 +100,7 @@ data/trainer.db           你的所有数据（可随时删除重建）
 ## 参考
 
 知识点建模（tag 归方向、加权分位数、样本置信度）参考了 [OJ Insight](https://github.com/Whalica/OJ_Insight)（MIT 协议）的思路。那是一个用 Rust + React 写的多平台训练数据面板，做的是「把六个 OJ 的数据看清楚」；本项目做的是「告诉你下一步练什么」，两者互补。本项目没有使用它的任何代码，只是在统计口径上借鉴了它的做法。
+
+## 协议
+
+[MIT](LICENSE)
