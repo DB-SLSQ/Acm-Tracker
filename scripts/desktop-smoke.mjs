@@ -56,7 +56,8 @@ const readPage = (win) =>
     heatmapCells: document.querySelectorAll('.heatmap-cell[data-level]').length,
     calendarCells: document.querySelectorAll('#cal-grid .cal-cell').length,
     restChips: document.querySelectorAll('#rest-picker .rest-chip').length,
-    scheduleSummary: document.getElementById('schedule-summary')?.textContent?.slice(0, 90) ?? null
+    scheduleSummary: document.getElementById('schedule-summary')?.textContent?.slice(0, 90) ?? null,
+    qqLink: document.getElementById('qq-toggle')?.textContent?.trim() ?? null
   })`);
 
 const postSettings = (url, body) =>
@@ -104,6 +105,17 @@ app.whenReady().then(async () => {
     document.documentElement.dataset.theme || '';
   `);
 
+  // 页脚的交流群入口：点一下应该把二维码弹出来
+  const qrPopup = await win.webContents.executeJavaScript(`
+    (() => {
+      document.getElementById('qq-toggle').click();
+      const pop = document.getElementById('qq-pop');
+      const shown = !pop.classList.contains('hidden');
+      const img = pop.querySelector('img');
+      return { shown, src: img?.getAttribute('src') ?? null, loaded: img ? img.naturalWidth > 0 : false };
+    })();
+  `);
+
   const checks = [
     ['页面标题正确', restored.title === 'ACM 训练台'],
     ['9 个界面区块都在', restored.panels === 9],
@@ -114,6 +126,9 @@ app.whenReady().then(async () => {
     ['主题按钮有 4 个', cold.themeButtons === 4],
     ['默认是暗色主题', cold.theme === 'dark'],
     ['点击可切换主题', themeAfterClick === 'light'],
+    ['页脚有交流群入口', /1124017564/.test(cold.qqLink ?? '')],
+    ['点击弹出二维码', qrPopup.shown === true],
+    ['二维码图片能加载', qrPopup.loaded === true],
     ['重启后自动填好用户名', restored.handle === TEST_HANDLE],
     ['重启后自动填好目标分数', restored.target === '1900'],
     ['重启后自动填好每周题量', restored.weekly === '12'],

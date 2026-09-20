@@ -1211,6 +1211,15 @@ async function loadVersion() {
 
 loadVersion();
 
+/** 页脚的交流群入口：点开显示二维码，点别处收起。 */
+$('qq-toggle').addEventListener('click', () => $('qq-pop').classList.toggle('hidden'));
+document.addEventListener('click', (event) => {
+  const pop = $('qq-pop');
+  if (pop.classList.contains('hidden')) return;
+  if (event.target.closest('#qq-pop') || event.target.closest('#qq-toggle')) return;
+  pop.classList.add('hidden');
+});
+
 /** 启动时自动恢复上次的账号、目标分数和训练计划，不用重新输一遍。 */
 async function restoreSession() {
   let settings = null;

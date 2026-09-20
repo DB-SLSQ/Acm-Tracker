@@ -77,6 +77,11 @@ app.whenReady().then(async () => {
   await shot(win, '07-亮色主题-日程', { scrollTo: 'panel-schedule' });
   await shot(win, '08-亮色主题-顶部', { scrollTo: null, height: 1000 });
 
+  // 页脚的交流群二维码
+  await win.webContents.executeJavaScript(`document.getElementById('qq-toggle').click();`);
+  await wait(600);
+  await shot(win, '09-交流群二维码');
+
   console.log('输出目录:', SHOTS);
   app.exit(0);
 });
