@@ -120,7 +120,12 @@ app.whenReady().then(async () => {
       const pop = document.getElementById('qq-pop');
       const shown = !pop.classList.contains('hidden');
       const img = pop.querySelector('img');
-      return { shown, src: img?.getAttribute('src') ?? null, loaded: img ? img.naturalWidth > 0 : false };
+      return {
+        shown,
+        src: img?.getAttribute('src') ?? null,
+        loaded: img ? img.naturalWidth > 0 : false,
+        name: pop.querySelector('strong')?.textContent ?? null,
+      };
     })();
   `);
 
@@ -191,6 +196,7 @@ app.whenReady().then(async () => {
     ['顶部有交流群入口', /1124017564/.test(cold.qqLink ?? '') && cold.qqInTopbar],
     ['点击弹出二维码', qrPopup.shown === true],
     ['二维码图片能加载', qrPopup.loaded === true],
+    ['群名显示正确', (qrPopup.name ?? '').includes('onlyfans club')],
     ['面板有折叠按钮', restored.panelToggles === 9],
     ['点击可收起面板', collapseTest.collapsed === true],
     ['收起后按钮仍可见', collapseTest.buttonVisible === true],
