@@ -191,7 +191,7 @@ app.whenReady().then(async () => {
     ['顶部有交流群入口', /1124017564/.test(cold.qqLink ?? '') && cold.qqInTopbar],
     ['点击弹出二维码', qrPopup.shown === true],
     ['二维码图片能加载', qrPopup.loaded === true],
-    ['面板有折叠按钮', restored.panelToggles === 8],
+    ['面板有折叠按钮', restored.panelToggles === 9],
     ['点击可收起面板', collapseTest.collapsed === true],
     ['收起后按钮仍可见', collapseTest.buttonVisible === true],
     ['按钮文字随状态变化', /收起/.test(collapseTest.labelExpanded) && /展开/.test(collapseTest.labelCollapsed)],
