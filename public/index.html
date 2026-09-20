@@ -37,6 +37,7 @@
           <a href="#panel-calendar">比赛日历</a>
           <a href="#panel-virtual">虚拟参赛</a>
           <a href="#panel-heatmap">活动记录</a>
+          <a href="#panel-platforms">平台数据</a>
           <a href="#panel-tags">能力画像</a>
           <a href="#panel-settings">设置</a>
           <span class="subnav-spacer"></span>
@@ -172,6 +173,14 @@
         </div>
       </section>
 
+      <section class="panel hidden" id="panel-platforms">
+        <div class="panel-head">
+          <h2>平台数据</h2>
+          <p>洛谷和牛客的过题情况。数据来自公开主页，只在你在设置里点同步时抓取。</p>
+        </div>
+        <div id="platform-charts"></div>
+      </section>
+
       <section class="panel hidden" id="panel-tags">
         <div class="panel-head">
           <h2>能力画像</h2>
@@ -195,12 +204,13 @@
         <p class="subtle">不需要的模块可以直接关掉，连标题都不显示。</p>
         <div class="module-list" id="module-list"></div>
 
-        <h3 class="settings-title">其他平台数据</h3>
+        <h3 class="settings-title">平台数据</h3>
         <p class="subtle">
           只抓汇总数字（过题数、提交数），不抓逐题记录——逐题要翻很多页，那才是把 IP 抓封的原因。
           这里不会自动抓取，只有你点同步才请求一次。
         </p>
 
+        <h4 class="settings-sub">牛客</h4>
         <div class="platform-row">
           <div class="sched-field">
             <label for="nowcoder-input">牛客用户 ID</label>
@@ -211,12 +221,23 @@
         <p class="hint" id="nowcoder-hint">
           牛客 ID 在个人主页地址栏里：ac.nowcoder.com/acm/contest/profile/<b>数字</b>
         </p>
-        <div class="platform-cards" id="platform-cards"></div>
+        <p class="hint">同步完成后，图表会显示在「平台数据」里。</p>
 
-        <h3 class="settings-title">洛谷</h3>
+        <h4 class="settings-sub">洛谷</h4>
         <p class="subtle">
-          暂时不支持。洛谷对未登录访客不返回过题数（实测多个真实账号，该字段一律为空），
-          第三方工具的做法是让你提供登录 Cookie，等于把登录凭证交给程序保存——这个取舍留给你决定。
+          读的是公开练习页，一个请求就能拿到全部做过的题（含每题的洛谷难度）。
+          其中**洛谷镜像的 Codeforces 题**会自动在训练计划里标记出来。
+          如果对方把练习数据设成了私密，会读不到。
+        </p>
+        <div class="platform-row">
+          <div class="sched-field">
+            <label for="luogu-input">洛谷用户 ID</label>
+            <input id="luogu-input" type="text" placeholder="例如 377873" autocomplete="off" />
+          </div>
+          <button class="btn primary" id="luogu-sync">同步洛谷数据</button>
+        </div>
+        <p class="hint" id="luogu-hint">
+          洛谷 ID 在个人主页地址栏里：luogu.com.cn/user/<b>数字</b>
         </p>
       </section>
     </main>

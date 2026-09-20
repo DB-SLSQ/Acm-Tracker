@@ -1427,6 +1427,105 @@ input[type="number"]:focus {
   margin-top: 10px;
 }
 
+.settings-sub {
+  margin: 20px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.diff-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 12px;
+}
+
+/* 洛谷难度分布柱状图 */
+.chart-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 22px 0 6px;
+}
+
+.luogu-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.chart-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+
+.chart-value {
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-bar {
+  width: 100%;
+  max-width: 54px;
+  min-height: 6px;
+  border-radius: 6px 6px 0 0;
+}
+
+.chart-label {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.3;
+  word-break: break-all;
+}
+
+.diff-row {
+  display: grid;
+  grid-template-columns: 108px 1fr 40px;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.diff-bar {
+  height: 7px;
+  border-radius: 999px;
+  background: var(--bg-track);
+  overflow: hidden;
+}
+
+.diff-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-alt));
+}
+
+.diff-count {
+  text-align: right;
+}
+
+/* 计划里标记「洛谷上也做过」 */
+.solved-elsewhere {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+  color: var(--ok-text);
+  vertical-align: middle;
+}
+
 .module-item {
   display: flex;
   align-items: center;

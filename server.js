@@ -15,7 +15,7 @@ import {
   parseContestInfo,
   recommendVirtualContests,
 } from './lib/contests.js';
-import { fetchNowcoder, PlatformError } from './lib/platforms.js';
+import { fetchLuogu, fetchNowcoder, PlatformError } from './lib/platforms.js';
 
 // 同一个账号多久之内不重复抓取（毫秒）。手动同步也走这个限制，防止连点。
 const SYNC_COOLDOWN_MS = 20_000;
@@ -502,10 +502,10 @@ async function route(req, res, url) {
       const body = await readJsonBody(req);
       const platform = String(body.platform ?? '');
       const account = String(body.account ?? '').trim();
-      if (platform !== 'nowcoder') {
-        return sendError(res, 400, '目前只支持牛客，洛谷的说明见设置页');
+      if (!['nowcoder', 'luogu'].includes(platform)) {
+        return sendError(res, 400, '暂不支持这个平台');
       }
-      if (!account) return sendError(res, 400, '请先填写牛客用户 ID');
+      if (!account) return sendError(res, 400, '请先填写用户 ID');
 
       const key = `${platform}:${account}`;
       if (Date.now() - (recentSyncs.get(key) ?? 0) < SYNC_COOLDOWN_MS) {
@@ -513,7 +513,7 @@ async function route(req, res, url) {
       }
       recentSyncs.set(key, Date.now());
 
-      const result = await fetchNowcoder(account);
+      const result = platform === 'luogu' ? await fetchLuogu(account) : await fetchNowcoder(account);
       db.savePlatformStats(result);
       return sendJson(res, 200, { result, platforms: db.listPlatformStats() });
     } catch (error) {

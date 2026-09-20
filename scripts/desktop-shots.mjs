@@ -101,18 +101,28 @@ app.whenReady().then(async () => {
   await wait(600);
   await shot(win, '11-交流群二维码');
 
-  // 设置面板：顺便同步一次牛客数据，展示平台卡片的样子
+  // 设置面板：同步牛客和洛谷，展示平台卡片和难度分布
   await win.webContents.executeJavaScript(`
     document.getElementById('qq-toggle').click();
     document.getElementById('nowcoder-input').value = '886965097';
+    document.getElementById('luogu-input').value = '377873';
   `);
   await wait(300);
   await win.webContents.executeJavaScript(`
     document.getElementById('nowcoder-sync').click();
     document.getElementById('panel-settings').scrollIntoView({ block: 'start' });
   `);
-  await wait(5000);
+  await wait(4000);
+  await win.webContents.executeJavaScript(`document.getElementById('luogu-sync').click();`);
+  await wait(6000);
   await shot(win, '12-设置面板');
+
+  // 平台数据：洛谷难度分布图
+  await win.webContents.executeJavaScript(`
+    document.getElementById('panel-platforms').scrollIntoView({ block: 'start' });
+  `);
+  await wait(800);
+  await shot(win, '13-平台数据图表');
 
   console.log('输出目录:', SHOTS);
   app.exit(0);

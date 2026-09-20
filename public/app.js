@@ -30,6 +30,8 @@ const state = {
   // 其他平台
   nowcoderUid: null,
   platforms: [],
+  // 洛谷镜像的 CF 题号集合，用来标记「这题你在洛谷做过」
+  luoguKeys: new Set(),
 };
 
 const THEME_LABELS = { dark: '暗色', light: '亮色', gray: '灰色', eye: '护眼' };
@@ -400,6 +402,9 @@ function problemRow(problem, target, extraNote = '') {
   const key = `${problem.contestId}-${problem.index}`;
   const isDone = state.done.has(key);
   const tags = problem.tags.slice(0, 3).join('、');
+  const elsewhere = state.luoguKeys.has(key)
+    ? '<span class="solved-elsewhere">洛谷做过</span>'
+    : '';
   return `
     <tr class="${isDone ? 'done' : ''}" data-key="${key}">
       <td style="width:28px">
@@ -408,7 +413,7 @@ function problemRow(problem, target, extraNote = '') {
       </td>
       <td class="problem-code">${problem.contestId}${problem.index}</td>
       <td>
-        <a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>
+        <a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>${elsewhere}
         <div class="problem-tags">${tags}${extraNote ? ` · ${extraNote}` : ''}</div>
       </td>
       <td style="width:70px">${ratingBadge(problem.rating)}</td>
@@ -1104,6 +1109,7 @@ function renderDayDetail() {
       <tr>
         <td class="problem-code">${problem.contestId}${problem.index}</td>
         <td><a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>
+            ${state.luoguKeys.has(`${problem.contestId}-${problem.index}`) ? '<span class="solved-elsewhere">洛谷做过</span>' : ''}
             <div class="problem-tags">${problem.tags.slice(0, 3).join('、')}</div></td>
         <td style="width:70px">${ratingBadge(problem.rating)}</td>
         <td style="width:86px" class="problem-tags">第 ${problem.stage ?? stageOf} 阶段</td>
@@ -1238,6 +1244,7 @@ const COLLAPSIBLE_PANELS = [
   'panel-calendar',
   'panel-virtual',
   'panel-heatmap',
+  'panel-platforms',
   'panel-tags',
 ];
 
@@ -1312,6 +1319,7 @@ const MODULE_META = [
   { id: 'panel-calendar', label: '比赛日历' },
   { id: 'panel-virtual', label: '虚拟参赛' },
   { id: 'panel-heatmap', label: '活动记录' },
+  { id: 'panel-platforms', label: '平台数据' },
   { id: 'panel-tags', label: '能力画像' },
 ];
 
@@ -1355,23 +1363,59 @@ $('module-list').addEventListener('change', (event) => {
 
 async function loadPlatforms() {
   try {
-    const { platforms } = await getJson('/api/platforms');
-    state.platforms = platforms;
-    renderPlatformCards();
+      const { platforms } = await getJson('/api/platforms');
+      state.platforms = platforms;
+      refreshLuoguKeys();
+      renderPlatformCards();
   } catch {
     /* 读不到就先不显示 */
   }
 }
 
-const PLATFORM_LABELS = { nowcoder: '牛客' };
+const PLATFORM_LABELS = { nowcoder: '牛客', luogu: '洛谷' };
 const STAT_ORDER = ['题已通过', '题已挑战', '次提交', 'Rating', 'Rating排名'];
 
+// 洛谷官方的难度配色，一眼就能和自己主页对上
+const LUOGU_COLORS = {
+  0: '#bfbfbf',
+  1: '#fe4c61',
+  2: '#f39c11',
+  3: '#ffc116',
+  4: '#52c41a',
+  5: '#3498db',
+  6: '#9d3dcf',
+  7: '#0e1d69',
+  8: '#8c8c8c',
+};
+const LUOGU_SHORT = {
+  0: '未评定',
+  1: '入门',
+  2: '普及−',
+  3: '普及/提高−',
+  4: '普及+/提高',
+  5: '提高+/省选−',
+  6: '省选/NOI−',
+  7: 'NOI/CTSC',
+  8: '未知',
+};
+
+  /** 从已同步的平台数据里取出洛谷镜像的 CF 题号。 */
+  function refreshLuoguKeys() {
+    const luogu = state.platforms.find((entry) => entry.platform === 'luogu');
+    state.luoguKeys = new Set(luogu?.extra?.cfProblems ?? []);
+  }
+
+/** 平台数据面板：每同步一个平台就多一张卡片，洛谷额外画难度分布图。 */
 function renderPlatformCards() {
   if (!state.platforms.length) {
-    $('platform-cards').innerHTML = '';
+    // 没同步过就别把这个面板摆出来，免得空占一块
+    $('panel-platforms').classList.add('hidden');
+    $('platform-charts').innerHTML =
+      '<p class="subtle">还没有同步任何平台。到「设置」里填入洛谷或牛客的用户 ID，点同步即可。</p>';
     return;
   }
-  $('platform-cards').innerHTML = state.platforms
+  $('panel-platforms').classList.remove('hidden');
+  $('platform-charts').innerHTML = state.platforms
     .map((entry) => {
       const keys = [
         ...STAT_ORDER.filter((key) => key in entry.stats),
@@ -1380,45 +1424,110 @@ function renderPlatformCards() {
       const stats = keys
         .map((key) => `<div class="platform-stat"><b>${entry.stats[key]}</b>${key}</div>`)
         .join('');
-      const who = `${escapeHtml(entry.nickname ?? '')} ID ${entry.account} · 同步于 ${new Date(entry.fetchedAt).toLocaleString('zh-CN')}`;
+      const who = `${escapeHtml(entry.nickname ?? '')} · ID ${entry.account} · 同步于 ${new Date(entry.fetchedAt).toLocaleString('zh-CN')}`;
       return `<div class="platform-card">
         <h4>${PLATFORM_LABELS[entry.platform] ?? entry.platform}</h4>
         <div class="who">${who}</div>
         <div class="platform-stats">${stats}</div>
+        ${renderLuoguChart(entry)}
       </div>`;
     })
     .join('');
 }
 
-$('nowcoder-sync').addEventListener('click', async () => {
-  const account = $('nowcoder-input').value.trim();
-  const hint = $('nowcoder-hint');
-  if (!account) {
-    hint.textContent = '先填牛客用户 ID 再同步。';
-    hint.classList.add('error');
-    return;
-  }
+/** 洛谷难度分布柱状图。 */
+function renderLuoguChart(entry) {
+  const difficulty = entry.extra?.difficulty;
+  if (!difficulty) return '';
 
-  const button = $('nowcoder-sync');
-  button.disabled = true;
-  button.textContent = '同步中…';
-  hint.classList.remove('error');
-  hint.textContent = '正在抓取，只请求一次…';
+  const rows = Object.entries(difficulty).sort((a, b) => Number(a[0]) - Number(b[0]));
+  const max = Math.max(1, ...rows.map(([, count]) => count));
+  const total = rows.reduce((sum, [, count]) => sum + count, 0);
+  const hard = rows
+    .filter(([level]) => Number(level) >= 5)
+    .reduce((sum, [, count]) => sum + count, 0);
 
-  try {
-    const data = await postJson('/api/platforms/sync', { platform: 'nowcoder', account });
-    state.platforms = data.platforms;
-    renderPlatformCards();
-    saveSettings({ nowcoderUid: account });
-    hint.textContent = `同步成功：已通过 ${data.result.solved ?? '?'} 题。`;
-  } catch (error) {
-    hint.textContent = error.message;
-    hint.classList.add('error');
-  } finally {
-    button.disabled = false;
-    button.textContent = '同步牛客数据';
-  }
+  const columns = rows
+    .map(([level, count]) => {
+      const height = Math.max(6, Math.round((count / max) * 168));
+      const color = LUOGU_COLORS[level] ?? '#8c8c8c';
+      const name = LUOGU_SHORT[level] ?? `难度 ${level}`;
+      return `<div class="chart-col">
+        <span class="chart-value">${count}</span>
+        <div class="chart-bar" style="height:${height}px;background:${color}" title="${name} · ${count} 题"></div>
+        <span class="chart-label">${escapeHtml(name)}</span>
+      </div>`;
+    })
+    .join('');
+
+  const percent = total ? Math.round((hard / total) * 100) : 0;
+  return `<div class="chart-title">洛谷难度分布</div>
+    <div class="luogu-chart">${columns}</div>
+    <p class="subtle" style="margin-top:12px">
+      共 ${total} 题，其中提高+/省选− 及以上 ${hard} 题，占 ${percent}%。
+    </p>`;
+}
+
+/** 两个平台的同步按钮走同一套逻辑。 */
+function bindPlatformSync({ platform, inputId, hintId, buttonId, label, settingsKey }) {
+  $(buttonId).addEventListener('click', async () => {
+    const account = $(inputId).value.trim();
+    const hint = $(hintId);
+    const button = $(buttonId);
+
+    if (!account) {
+      hint.textContent = `先填${label}用户 ID 再同步。`;
+      hint.classList.add('error');
+      return;
+    }
+
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = '同步中…';
+    hint.classList.remove('error');
+    hint.textContent = '正在抓取，只请求一次…';
+
+    try {
+      const data = await postJson('/api/platforms/sync', { platform, account });
+      state.platforms = data.platforms;
+      refreshLuoguKeys();
+      renderPlatformCards();
+      applyLuoguMarks();
+      saveSettings({ [settingsKey]: account });
+      hint.textContent = `同步成功：已通过 ${data.result.solved ?? '?'} 题。`;
+    } catch (error) {
+      hint.textContent = error.message;
+      hint.classList.add('error');
+    } finally {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  });
+}
+
+bindPlatformSync({
+  platform: 'nowcoder',
+  inputId: 'nowcoder-input',
+  hintId: 'nowcoder-hint',
+  buttonId: 'nowcoder-sync',
+  label: '牛客',
+  settingsKey: 'nowcoderUid',
 });
+
+bindPlatformSync({
+  platform: 'luogu',
+  inputId: 'luogu-input',
+  hintId: 'luogu-hint',
+  buttonId: 'luogu-sync',
+  label: '洛谷',
+  settingsKey: 'luoguUid',
+});
+
+/** 洛谷同步后，重新渲染计划，把「洛谷做过」的标记刷出来。 */
+function applyLuoguMarks() {
+  if (state.planData) renderPlan(state.planData);
+  if (state.schedule) renderDayDetail();
+}
 
 /** 启动时自动恢复上次的账号、目标分数和训练计划，不用重新输一遍。 */
 async function restoreSession() {
@@ -1440,6 +1549,7 @@ async function restoreSession() {
       state.nowcoderUid = settings.nowcoderUid;
       $('nowcoder-input').value = settings.nowcoderUid;
     }
+    if (settings.luoguUid) $('luogu-input').value = settings.luoguUid;
   }
   applyAppearance();
   setupPanelToggles();

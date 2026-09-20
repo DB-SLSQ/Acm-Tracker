@@ -64,6 +64,7 @@ const readPage = (win) =>
     hasSettingsPanel: !!document.getElementById('panel-settings'),
     moduleToggles: document.querySelectorAll('#module-list [data-module]').length,
     hasNowcoderInput: !!document.getElementById('nowcoder-input'),
+    hasLuoguInput: !!document.getElementById('luogu-input'),
     navLinks: document.querySelectorAll('.subnav a').length
   })`);
 
@@ -179,7 +180,7 @@ app.whenReady().then(async () => {
 
   const checks = [
     ['页面标题正确', restored.title === 'ACM 训练台'],
-    ['10 个界面区块都在', restored.panels === 10],
+    ['11 个界面区块都在', restored.panels === 11],
     ['冷启动只显示输入框、日历和设置', cold.visiblePanels.join(',') === 'panel-handle,panel-calendar,panel-settings'],
     ['冷启动时输入框为空', !cold.handle],
     ['比赛日历加载成功', cold.calendarRows > 0],
@@ -200,8 +201,9 @@ app.whenReady().then(async () => {
     ['收起后标题仍可见', bulkTest.titlesVisible === true],
     ['展开全部能恢复', bulkTest.afterExpand === 0],
     ['有独立的设置面板', cold.hasSettingsPanel === true],
-    ['模块开关有 8 个', cold.moduleToggles === 8],
+    ['模块开关有 9 个', cold.moduleToggles === 9],
     ['有牛客 ID 输入框', cold.hasNowcoderInput === true],
+    ['有洛谷 ID 输入框', cold.hasLuoguInput === true],
     ['关掉模块后面板消失', moduleTest.panelHidden === true],
     ['导航入口也一起消失', moduleTest.navHidden === true],
     ['重新打开能恢复', moduleTest.backAgain === true],
