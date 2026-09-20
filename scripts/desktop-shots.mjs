@@ -76,8 +76,9 @@ app.whenReady().then(async () => {
 
   // ---- 暗色主题下的主要界面 ----
   await shot(win, '01-当前水平', { scrollTo: 'panel-overview', height: 1000 });
-  await shot(win, '02-训练计划', { scrollTo: 'panel-plan', height: 1150 });
-  await shot(win, '03-训练日程', { scrollTo: 'panel-schedule', height: 1250 });
+  await shot(win, '02-目标设置', { scrollTo: 'panel-target', height: 760 });
+  await shot(win, '03-训练计划', { scrollTo: 'panel-plan', height: 1150 });
+  await shot(win, '04-训练日程', { scrollTo: 'panel-schedule', height: 1250 });
 
   // 标记某天没空，看题目怎么顺延
   await win.webContents.executeJavaScript(`
@@ -97,10 +98,11 @@ app.whenReady().then(async () => {
     })();
   `);
   await wait(900);
-  await shot(win, '04-训练日程-某天没空');
+  await shot(win, '05-训练日程-某天没空');
 
-  await shot(win, '05-虚拟参赛', { scrollTo: 'panel-virtual' });
-  await shot(win, '06-活动热力图', { scrollTo: 'panel-heatmap', height: 900 });
+  await shot(win, '06-虚拟参赛', { scrollTo: 'panel-virtual' });
+  await shot(win, '07-比赛日历', { scrollTo: 'panel-calendar', height: 900 });
+  await shot(win, '08-活动热力图', { scrollTo: 'panel-heatmap', height: 900 });
 
   // 同步两个平台，好把图表也拍下来
   await win.webContents.executeJavaScript(`
@@ -112,8 +114,8 @@ app.whenReady().then(async () => {
   await wait(3500);
   await win.webContents.executeJavaScript(`document.getElementById('luogu-sync').click();`);
   await wait(6000);
-  await shot(win, '07-平台数据', { scrollTo: 'panel-platforms', height: 1050 });
-  await shot(win, '08-能力画像', { scrollTo: 'panel-tags', height: 1000 });
+  await shot(win, '09-平台数据', { scrollTo: 'panel-platforms', height: 1050 });
+  await shot(win, '10-能力画像', { scrollTo: 'panel-tags', height: 1000 });
 
   // ---- 交互状态 ----
   await win.webContents.executeJavaScript(`
@@ -121,22 +123,22 @@ app.whenReady().then(async () => {
     window.scrollTo(0, 0);
   `);
   await wait(800);
-  await shot(win, '09-全部收起');
+  await shot(win, '11-全部收起');
   await win.webContents.executeJavaScript(`document.getElementById('expand-all').click();`);
   await wait(500);
 
   await win.webContents.executeJavaScript(`document.getElementById('qq-toggle').click();`);
   await wait(600);
-  await shot(win, '10-交流群二维码');
+  await shot(win, '12-交流群二维码');
   await win.webContents.executeJavaScript(`document.getElementById('qq-toggle').click();`);
   await wait(300);
 
-  await shot(win, '11-设置面板', { scrollTo: 'panel-settings', height: 1250 });
+  await shot(win, '13-设置面板', { scrollTo: 'panel-settings', height: 1250 });
 
   // ---- 其他主题 ----
-  await shot(win, '12-亮色主题', { scrollTo: 'panel-overview', theme: 'light', height: 1000 });
-  await shot(win, '13-护眼主题', { scrollTo: 'panel-overview', theme: 'eye' });
-  await shot(win, '14-灰色主题', { scrollTo: 'panel-overview', theme: 'gray' });
+  await shot(win, '14-亮色主题', { scrollTo: 'panel-overview', theme: 'light', height: 1000 });
+  await shot(win, '15-护眼主题', { scrollTo: 'panel-overview', theme: 'eye' });
+  await shot(win, '16-灰色主题', { scrollTo: 'panel-overview', theme: 'gray' });
 
   console.log('输出目录:', SHOTS);
   app.exit(0);
