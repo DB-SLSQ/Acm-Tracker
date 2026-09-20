@@ -800,6 +800,18 @@ $('timer-finish').addEventListener('click', finishVirtual);
 
 loadCalendar();
 
+/** 底部显示版本号，方便确认装的是哪一版。 */
+async function loadVersion() {
+  try {
+    const { version } = await getJson('/api/health');
+    if (version) $('app-version').textContent = `v${version}`;
+  } catch {
+    $('app-version').textContent = '';
+  }
+}
+
+loadVersion();
+
 /** 启动时自动恢复上次的账号、目标分数和训练计划，不用重新输一遍。 */
 async function restoreSession() {
   let settings;

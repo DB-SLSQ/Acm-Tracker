@@ -47,6 +47,7 @@ const readPage = (win) =>
     calendarSummary: document.getElementById('calendar-summary')?.textContent ?? null,
     calendarRows: document.getElementById('calendar-list')?.children.length ?? 0,
     quickPicks: document.getElementById('quick-picks')?.children.length ?? 0,
+    version: document.getElementById('app-version')?.textContent ?? null,
     overviewText: document.getElementById('stats')?.innerText?.replace(/\\s+/g, ' ').slice(0, 90) ?? null,
     planSummary: document.getElementById('plan-summary')?.textContent?.slice(0, 90) ?? null
   })`);
@@ -94,6 +95,7 @@ app.whenReady().then(async () => {
     ['冷启动只显示输入框和日历', cold.visiblePanels.join(',') === 'panel-handle,panel-calendar'],
     ['冷启动时输入框为空', !cold.handle],
     ['比赛日历加载成功', cold.calendarRows > 0],
+    ['底部显示版本号', /^v\d+\.\d+\.\d+$/.test(cold.version ?? '')],
     ['重启后自动填好用户名', restored.handle === TEST_HANDLE],
     ['重启后自动填好目标分数', restored.target === '1900'],
     ['重启后自动填好每周题量', restored.weekly === '12'],

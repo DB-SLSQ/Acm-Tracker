@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
 import { dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -19,6 +20,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(HERE, 'public');
 const DEFAULT_PORT = Number(process.env.PORT || 5173);
 const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
+
+// 版本号取自 package.json，界面底部会显示，方便确认装的是哪个版本
+const VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(join(HERE, 'package.json'), 'utf8')).version ?? null;
+  } catch {
+    return null;
+  }
+})();
 
 const USER_CACHE_MS = 1000 * 60 * 60 * 6; // 用户数据 6 小时内不重复抓
 const PROBLEMS_CACHE_MS = 1000 * 60 * 60 * 24; // 题库每天更新一次
@@ -370,7 +380,7 @@ async function route(req, res, url) {
   const { pathname } = url;
 
   if (pathname === '/api/health') {
-    return sendJson(res, 200, { ok: true, problems: db.countProblems() });
+    return sendJson(res, 200, { ok: true, version: VERSION, problems: db.countProblems() });
   }
 
   if (pathname === '/api/settings' && req.method === 'GET') {
