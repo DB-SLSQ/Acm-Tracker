@@ -226,6 +226,8 @@ async function handlePlan(url) {
       target: Math.round(target),
       weekly: Number.isFinite(weekly) && weekly > 0 ? Math.round(weekly) : 10,
       floorGap: readSettings().floorGap,
+      // 题目年份偏好要用：老题在人气分上占便宜，靠比赛开始时间把新题提上来
+      contestDates: new Map(db.getContests().map((contest) => [contest.id, contest.startTime])),
     });
 
   const done = db.getProgress(handleKey, Math.round(target));
