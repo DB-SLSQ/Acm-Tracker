@@ -2,6 +2,7 @@
   "name": "acm-trainer",
   "version": "0.1.3",
   "private": true,
+  "author": "DB_SLSQ",
   "type": "module",
   "main": "electron/main.js",
   "description": "单人本地使用的 ACM 训练网站：抓取 Codeforces 过题与 rating，给出目标 rating 训练计划与推荐题目",
@@ -14,6 +15,7 @@
   "build": {
     "appId": "com.dbslsq.acmtracker",
     "productName": "ACM Trainer",
+    "electronDist": "node_modules/electron/dist",
     "directories": {
       "buildResources": "build"
     },
