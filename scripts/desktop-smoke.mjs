@@ -65,6 +65,7 @@ const readPage = (win) =>
     moduleToggles: document.querySelectorAll('#module-list [data-module]').length,
     hasNowcoderInput: !!document.getElementById('nowcoder-input'),
     hasLuoguInput: !!document.getElementById('luogu-input'),
+    hasFloorGapInput: !!document.getElementById('floor-gap-input'),
     navLinks: document.querySelectorAll('.subnav a').length
   })`);
 
@@ -210,6 +211,7 @@ app.whenReady().then(async () => {
     ['模块开关有 9 个', cold.moduleToggles === 9],
     ['有牛客 ID 输入框', cold.hasNowcoderInput === true],
     ['有洛谷 ID 输入框', cold.hasLuoguInput === true],
+    ['有排除区间设置', cold.hasFloorGapInput === true],
     ['关掉模块后面板消失', moduleTest.panelHidden === true],
     ['导航入口也一起消失', moduleTest.navHidden === true],
     ['重新打开能恢复', moduleTest.backAgain === true],

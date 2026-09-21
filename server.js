@@ -193,7 +193,9 @@ function readSettings() {
     // 其他平台的账号
     nowcoderUid: raw.nowcoder_uid ?? null,
     luoguUid: raw.luogu_uid ?? null,
-    updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
+      // 评估水平时忽略「比当前 rating 低多少分」以内的题（null = 用默认值）
+      floorGap: raw.floor_gap === undefined ? null : Number(raw.floor_gap),
+      updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
   };
 }
 
@@ -221,9 +223,10 @@ async function handlePlan(url) {
     solved,
     attempted,
     problems: db.getAllProblems(),
-    target: Math.round(target),
-    weekly: Number.isFinite(weekly) && weekly > 0 ? Math.round(weekly) : 10,
-  });
+      target: Math.round(target),
+      weekly: Number.isFinite(weekly) && weekly > 0 ? Math.round(weekly) : 10,
+      floorGap: readSettings().floorGap,
+    });
 
   const done = db.getProgress(handleKey, Math.round(target));
   return {
@@ -473,6 +476,13 @@ async function route(req, res, url) {
       }
       if (body.nowcoderUid !== undefined) patch.nowcoder_uid = String(body.nowcoderUid).trim();
       if (body.luoguUid !== undefined) patch.luogu_uid = String(body.luoguUid).trim();
+      if (body.floorGap !== undefined) {
+        const value = Number(body.floorGap);
+        if (!Number.isFinite(value) || value < 0 || value > 2000) {
+          return sendError(res, 400, '排除区间请填 0 到 2000 之间的数字');
+        }
+        patch.floor_gap = String(Math.round(value));
+      }
       db.saveSettings(patch);
       return sendJson(res, 200, { settings: readSettings() });
     } catch (error) {

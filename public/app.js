@@ -1523,11 +1523,35 @@ bindPlatformSync({
   settingsKey: 'luoguUid',
 });
 
-/** 洛谷同步后，重新渲染计划，把「洛谷做过」的标记刷出来。 */
-function applyLuoguMarks() {
-  if (state.planData) renderPlan(state.planData);
-  if (state.schedule) renderDayDetail();
-}
+  /** 洛谷同步后，重新渲染计划，把「洛谷做过」的标记刷出来。 */
+  function applyLuoguMarks() {
+    if (state.planData) renderPlan(state.planData);
+    if (state.schedule) renderDayDetail();
+  }
+
+  // ---------- 设置：水平评估的排除区间 ----------
+  // 签到题会把某些标签的分位数拖低（做过的贪心里大半是签到题），
+  // 所以允许忽略比当前 rating 低一段的题。默认 400。
+
+  $('floor-gap-save').addEventListener('click', async () => {
+    const hint = $('floor-gap-hint');
+    const value = Number($('floor-gap-input').value);
+    if (!Number.isFinite(value) || value < 0 || value > 2000) {
+      hint.textContent = '请填 0 到 2000 之间的数字。';
+      hint.classList.add('error');
+      return;
+    }
+
+    saveSettings({ floorGap: Math.round(value) });
+    hint.classList.remove('error');
+    hint.textContent = value === 0 ? '已关闭排除，正在重新生成计划…' : `已设为 ${value} 分，正在重新生成计划…`;
+
+    if (state.handle) await generatePlan(false, { scroll: false });
+    hint.textContent =
+      value === 0
+        ? '已关闭排除。所有做过的题都会计入水平评估。'
+        : `已忽略低于 ${state.planData?.analysisFloor ?? '—'} 分的题（共 ${state.planData?.excludedFromAnalysis ?? 0} 道）。`;
+  });
 
 /** 启动时自动恢复上次的账号、目标分数和训练计划，不用重新输一遍。 */
 async function restoreSession() {
@@ -1550,6 +1574,9 @@ async function restoreSession() {
       $('nowcoder-input').value = settings.nowcoderUid;
     }
     if (settings.luoguUid) $('luogu-input').value = settings.luoguUid;
+    if (settings.floorGap !== null && settings.floorGap !== undefined) {
+      $('floor-gap-input').value = settings.floorGap;
+    }
   }
   applyAppearance();
   setupPanelToggles();

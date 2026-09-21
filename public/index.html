@@ -204,6 +204,21 @@
         <p class="subtle">不需要的模块可以直接关掉，连标题都不显示。</p>
         <div class="module-list" id="module-list"></div>
 
+        <h3 class="settings-title">水平评估</h3>
+        <p class="subtle">
+          算「你在这个专题上做到什么难度」时，忽略掉比当前 rating 低一段的题。
+          签到题人人都做、只是恰好带了这个标签，算进来会把你的水平整体拉低——
+          比如做过的贪心题里大半是签到题，75 分位就会被拖到比你的实际水平低两三百分。
+        </p>
+        <div class="platform-row">
+          <div class="sched-field">
+            <label for="floor-gap-input">忽略低于当前分多少分以内的题</label>
+            <input id="floor-gap-input" type="number" min="0" max="2000" step="50" value="400" />
+          </div>
+          <button class="btn primary" id="floor-gap-save">应用并重新生成计划</button>
+        </div>
+        <p class="hint" id="floor-gap-hint">填 0 表示不排除；默认 400。</p>
+
         <h3 class="settings-title">平台数据</h3>
         <p class="subtle">
           只抓汇总数字（过题数、提交数），不抓逐题记录——逐题要翻很多页，那才是把 IP 抓封的原因。
