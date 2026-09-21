@@ -228,6 +228,8 @@ async function handlePlan(url) {
       floorGap: readSettings().floorGap,
       // 题目年份偏好要用：老题在人气分上占便宜，靠比赛开始时间把新题提上来
       contestDates: new Map(db.getContests().map((contest) => [contest.id, contest.startTime])),
+      // 用户手动屏蔽的题，永远不再推荐
+      blocked: new Set(db.blockedKeys(handleKey)),
     });
 
   const done = db.getProgress(handleKey, Math.round(target));
@@ -507,6 +509,60 @@ async function route(req, res, url) {
 
   if (pathname === '/api/platforms' && req.method === 'GET') {
     return sendJson(res, 200, { platforms: db.listPlatformStats() });
+  }
+
+  // 手动屏蔽的题目：屏蔽后永远不再出现在推荐里
+  if (pathname === '/api/blocked' && req.method === 'GET') {
+    const rawHandle = url.searchParams.get('handle');
+    if (!rawHandle) return sendError(res, 400, '请先填写 Codeforces 用户名');
+    return sendJson(res, 200, { blocked: db.listBlockedProblems(db.normalizeHandle(rawHandle)) });
+  }
+
+  // 做过的题，按首次通过时间倒序
+  if (pathname === '/api/solved') {
+    const rawHandle = url.searchParams.get('handle');
+    if (!rawHandle) return sendError(res, 400, '请先填写 Codeforces 用户名');
+    const handleKey = db.normalizeHandle(rawHandle);
+    const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit') || 100)));
+    const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
+    return sendJson(res, 200, {
+      total: db.countSolved(handleKey),
+      solved: db.recentlySolved(handleKey, limit, offset),
+    });
+  }
+
+  if (pathname === '/api/blocked' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      const contestId = Number(body.contestId);
+      if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
+      if (!Number.isFinite(contestId) || !body.index) return sendError(res, 400, '题目参数不完整');
+      db.blockProblem(handleKey, {
+        contestId,
+        index: String(body.index),
+        name: body.name,
+        rating: Number.isFinite(Number(body.rating)) ? Number(body.rating) : null,
+        reason: body.reason,
+      });
+      return sendJson(res, 200, { blocked: db.listBlockedProblems(handleKey) });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  if (pathname === '/api/blocked' && req.method === 'DELETE') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      const contestId = Number(body.contestId);
+      if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
+      if (!Number.isFinite(contestId) || !body.index) return sendError(res, 400, '题目参数不完整');
+      db.unblockProblem(handleKey, contestId, String(body.index));
+      return sendJson(res, 200, { blocked: db.listBlockedProblems(handleKey) });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
   }
 
   if (pathname === '/api/platforms/sync' && req.method === 'POST') {

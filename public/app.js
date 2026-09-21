@@ -32,6 +32,10 @@ const state = {
   platforms: [],
   // 洛谷镜像的 CF 题号集合，用来标记「这题你在洛谷做过」
   luoguKeys: new Set(),
+  // 做题记录
+  blocked: [],
+  solved: [],
+  solvedTotal: 0,
 };
 
 const THEME_LABELS = { dark: '暗色', light: '亮色', gray: '灰色', eye: '护眼' };
@@ -291,6 +295,8 @@ async function loadUser(force = false) {
     showHint('数据抓好了，接着设定目标 rating 就行。');
     loadCalendar();
     loadActivity();
+    loadBlocked();
+    loadSolved();
     return true;
   } catch (error) {
     setStatus('抓取失败');
@@ -418,6 +424,12 @@ function problemRow(problem, target, extraNote = '') {
       </td>
       <td style="width:70px">${ratingBadge(problem.rating)}</td>
       <td style="width:90px" class="problem-tags">${problem.solvedCount} 人过</td>
+      <td style="width:44px">
+        <button type="button" class="block-btn" data-block-key="${key}"
+                data-block-contest="${problem.contestId}" data-block-index="${problem.index}"
+                data-block-name="${escapeHtml(problem.name)}" data-block-rating="${problem.rating ?? ''}"
+                title="永久屏蔽这道题，以后不再推荐">✕</button>
+      </td>
     </tr>`;
 }
 
@@ -506,6 +518,138 @@ $('plan-stages').addEventListener('change', async (event) => {
 $('handle-input').addEventListener('keydown', (event) => {
   if (event.key === 'Enter') loadUser();
 });
+// ---------- 永久屏蔽题目 ----------
+// 有些题就是不想再做（题目本身有问题、或者不符合你的训练方向）。
+// 屏蔽后不会再出现在任何推荐里，但随时可以在设置里恢复。
+
+async function loadBlocked() {
+  if (!state.handle) return;
+  try {
+    const { blocked } = await getJson(`/api/blocked?handle=${encodeURIComponent(state.handle)}`);
+    state.blocked = blocked;
+    renderBlockedList();
+  } catch {
+    /* 读不到就先不显示 */
+  }
+}
+
+function renderBlockedList() {
+  const box = $('blocked-list');
+  if (!state.blocked?.length) {
+    box.innerHTML =
+      '<p class="subtle">还没有屏蔽任何题目。在训练计划里点题目右侧的 ✕ 就能永久屏蔽。</p>';
+    return;
+  }
+  box.innerHTML = state.blocked
+    .map(
+      (item) => `<div class="record-row">
+        <span class="record-time">${new Date(item.createdAt).toLocaleDateString('zh-CN')}</span>
+        <span class="record-name">
+          <span class="record-code">${item.contestId}${item.index}</span>
+          <a href="https://codeforces.com/problemset/problem/${item.contestId}/${item.index}"
+             target="_blank" rel="noreferrer">${escapeHtml(item.name ?? '（题库里没有这道题）')}</a>
+        </span>
+        <span>${ratingBadge(item.rating)}</span>
+        <button type="button" class="btn" data-unblock-contest="${item.contestId}"
+                data-unblock-index="${item.index}" style="padding:4px 10px;font-size:12px">恢复</button>
+      </div>`,
+    )
+    .join('');
+}
+
+/** 做过的题：按首次通过时间从近到远，每次加载 100 道。 */
+function renderSolved() {
+  const list = state.solved ?? [];
+  $('solved-summary').textContent =
+    `一共通过 ${state.solvedTotal} 道题，下面是最近的 ${list.length} 道（按通过时间从近到远）。`;
+  $('solved-list').innerHTML = list
+    .map(
+      (item) => `<div class="record-row">
+        <span class="record-time">${new Date(item.firstAcAt * 1000).toLocaleDateString('zh-CN')}</span>
+        <span class="record-name">
+          <span class="record-code">${item.contestId}${item.index}</span>
+          <a href="https://codeforces.com/problemset/problem/${item.contestId}/${item.index}"
+             target="_blank" rel="noreferrer">${escapeHtml(item.name ?? '（题库里没有这道题）')}</a>
+        </span>
+        <span>${ratingBadge(item.rating)}</span>
+        <span class="problem-tags">${(item.tags ?? []).slice(0, 2).join('、')}</span>
+      </div>`,
+    )
+    .join('');
+  $('solved-more').classList.toggle('hidden', list.length >= state.solvedTotal);
+}
+
+async function loadSolved({ append = false } = {}) {
+  if (!state.handle) return;
+  try {
+    const offset = append ? state.solved.length : 0;
+    const data = await getJson(
+      `/api/solved?handle=${encodeURIComponent(state.handle)}&limit=100&offset=${offset}`,
+    );
+    state.solved = append ? [...state.solved, ...data.solved] : data.solved;
+    state.solvedTotal = data.total;
+    renderSolved();
+    $('panel-records').classList.remove('hidden');
+  } catch (error) {
+    $('panel-records').classList.remove('hidden');
+    $('solved-summary').textContent = `读取做题记录失败：${error.message}`;
+  }
+}
+
+$('solved-more').addEventListener('click', () => loadSolved({ append: true }));
+
+async function blockProblem(problem) {
+  if (!state.handle) return;
+  setStatus('正在屏蔽这道题', { busy: true });
+  try {
+    await postJson('/api/blocked', {
+      handle: state.handle,
+      contestId: problem.contestId,
+      index: problem.index,
+      name: problem.name,
+      rating: problem.rating,
+    });
+    await loadBlocked();
+    await generatePlan(false, { scroll: false });
+    setStatus('已屏蔽，这道题不会再出现');
+  } catch (error) {
+    setStatus('屏蔽失败');
+    showHint(error.message, true);
+  }
+}
+
+$('plan-stages').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-block-key]');
+  if (!button) return;
+  blockProblem({
+    contestId: Number(button.dataset.blockContest),
+    index: button.dataset.blockIndex,
+    name: button.dataset.blockName,
+    rating: button.dataset.blockRating ? Number(button.dataset.blockRating) : null,
+  });
+});
+
+$('blocked-list').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-unblock-contest]');
+  if (!button || !state.handle) return;
+  try {
+    await fetch('/api/blocked', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        handle: state.handle,
+        contestId: Number(button.dataset.unblockContest),
+        index: button.dataset.unblockIndex,
+      }),
+    });
+    await loadBlocked();
+    await generatePlan(false, { scroll: false });
+    setStatus('已恢复推荐');
+  } catch {
+    setStatus('恢复失败');
+  }
+});
+
 $('load-btn').addEventListener('click', () => loadUser(false));
 $('plan-btn').addEventListener('click', () => generatePlan(false));
 
@@ -1245,6 +1389,7 @@ const COLLAPSIBLE_PANELS = [
   'panel-virtual',
   'panel-heatmap',
   'panel-platforms',
+  'panel-records',
   'panel-tags',
 ];
 
@@ -1320,6 +1465,7 @@ const MODULE_META = [
   { id: 'panel-virtual', label: '虚拟参赛' },
   { id: 'panel-heatmap', label: '活动记录' },
   { id: 'panel-platforms', label: '平台数据' },
+  { id: 'panel-records', label: '做题记录' },
   { id: 'panel-tags', label: '能力画像' },
 ];
 
@@ -1375,28 +1521,29 @@ async function loadPlatforms() {
 const PLATFORM_LABELS = { nowcoder: '牛客', luogu: '洛谷' };
 const STAT_ORDER = ['题已通过', '题已挑战', '次提交', 'Rating', 'Rating排名'];
 
-// 洛谷官方的难度配色，一眼就能和自己主页对上
+// 洛谷官方的难度配色，共 9 档（0-8），和主页「难度统计」的颜色一一对应。
+// 第 5 档「提高」是青绿色，是洛谷后加的档位，之前的版本漏了它。
 const LUOGU_COLORS = {
   0: '#bfbfbf',
   1: '#fe4c61',
   2: '#f39c11',
   3: '#ffc116',
   4: '#52c41a',
-  5: '#3498db',
-  6: '#9d3dcf',
-  7: '#0e1d69',
-  8: '#8c8c8c',
+  5: '#13c2c2',
+  6: '#3498db',
+  7: '#9d3dcf',
+  8: '#0e1d69',
 };
 const LUOGU_SHORT = {
   0: '未评定',
   1: '入门',
   2: '普及−',
-  3: '普及/提高−',
-  4: '普及+/提高',
-  5: '提高+/省选−',
-  6: '省选/NOI−',
-  7: 'NOI/CTSC',
-  8: '未知',
+  3: '普及',
+  4: '普及+/提高−',
+  5: '提高',
+  6: '提高+/省选−',
+  7: '省选/NOI−',
+  8: 'NOI/CTSC',
 };
 
   /** 从已同步的平台数据里取出洛谷镜像的 CF 题号。 */

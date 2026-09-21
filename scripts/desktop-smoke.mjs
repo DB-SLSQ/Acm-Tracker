@@ -66,6 +66,7 @@ const readPage = (win) =>
     hasNowcoderInput: !!document.getElementById('nowcoder-input'),
     hasLuoguInput: !!document.getElementById('luogu-input'),
     hasFloorGapInput: !!document.getElementById('floor-gap-input'),
+    hasRecordsPanel: !!document.getElementById('panel-records'),
     navLinks: document.querySelectorAll('.subnav a').length
   })`);
 
@@ -186,7 +187,7 @@ app.whenReady().then(async () => {
 
   const checks = [
     ['页面标题正确', restored.title === 'ACM 训练台'],
-    ['11 个界面区块都在', restored.panels === 11],
+    ['12 个界面区块都在', restored.panels === 12],
     ['冷启动只显示输入框、日历和设置', cold.visiblePanels.join(',') === 'panel-handle,panel-calendar,panel-settings'],
     ['冷启动时输入框为空', !cold.handle],
     ['比赛日历加载成功', cold.calendarRows > 0],
@@ -198,7 +199,7 @@ app.whenReady().then(async () => {
     ['点击弹出二维码', qrPopup.shown === true],
     ['二维码图片能加载', qrPopup.loaded === true],
     ['群名显示正确', (qrPopup.name ?? '').includes('onlyfans club')],
-    ['面板有折叠按钮', restored.panelToggles === 9],
+    ['面板有折叠按钮', restored.panelToggles === 10],
     ['点击可收起面板', collapseTest.collapsed === true],
     ['收起后按钮仍可见', collapseTest.buttonVisible === true],
     ['按钮文字随状态变化', /收起/.test(collapseTest.labelExpanded) && /展开/.test(collapseTest.labelCollapsed)],
@@ -208,10 +209,11 @@ app.whenReady().then(async () => {
     ['收起后标题仍可见', bulkTest.titlesVisible === true],
     ['展开全部能恢复', bulkTest.afterExpand === 0],
     ['有独立的设置面板', cold.hasSettingsPanel === true],
-    ['模块开关有 9 个', cold.moduleToggles === 9],
+    ['模块开关有 10 个', cold.moduleToggles === 10],
     ['有牛客 ID 输入框', cold.hasNowcoderInput === true],
     ['有洛谷 ID 输入框', cold.hasLuoguInput === true],
     ['有排除区间设置', cold.hasFloorGapInput === true],
+    ['有做题记录模块', cold.hasRecordsPanel === true],
     ['关掉模块后面板消失', moduleTest.panelHidden === true],
     ['导航入口也一起消失', moduleTest.navHidden === true],
     ['重新打开能恢复', moduleTest.backAgain === true],

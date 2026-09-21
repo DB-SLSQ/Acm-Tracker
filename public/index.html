@@ -38,6 +38,7 @@
           <a href="#panel-virtual">虚拟参赛</a>
           <a href="#panel-heatmap">活动记录</a>
           <a href="#panel-platforms">平台数据</a>
+          <a href="#panel-records">做题记录</a>
           <a href="#panel-tags">能力画像</a>
           <a href="#panel-settings">设置</a>
           <span class="subnav-spacer"></span>
@@ -179,6 +180,27 @@
           <p>洛谷和牛客的过题情况。数据来自公开主页，只在你在设置里点同步时抓取。</p>
         </div>
         <div id="platform-charts"></div>
+      </section>
+
+      <section class="panel hidden" id="panel-records">
+        <div class="panel-head">
+          <h2>做题记录</h2>
+          <p>屏蔽的题可以随时恢复；做过的题按通过时间从近到远排列。</p>
+        </div>
+
+        <h3 class="settings-title">已屏蔽的题目</h3>
+        <p class="subtle">
+          在训练计划里点题目右侧的 ✕ 就能屏蔽。屏蔽后不会出现在任何推荐里，也不会出现在日程里——
+          点错了一键恢复。
+        </p>
+        <div class="record-list" id="blocked-list"></div>
+
+        <h3 class="settings-title">做过的题</h3>
+        <p class="subtle" id="solved-summary"></p>
+        <div class="record-list" id="solved-list"></div>
+        <div class="reco-actions" style="margin-top:14px">
+          <button class="btn hidden" id="solved-more">加载更多</button>
+        </div>
       </section>
 
       <section class="panel hidden" id="panel-tags">

@@ -1612,3 +1612,70 @@ input[type="number"]:focus {
 .module-hidden {
   display: none !important;
 }
+
+/* ============ 做题记录 ============ */
+
+.record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.record-row {
+  display: grid;
+  grid-template-columns: 108px 1fr 74px auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 13px;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 13px;
+}
+
+.record-time {
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+
+.record-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record-name a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.record-name a:hover {
+  color: var(--accent);
+}
+
+.record-code {
+  color: var(--text-dim);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12.5px;
+  margin-right: 8px;
+}
+
+/* 计划里那道「不再推荐」的按钮 */
+.block-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.block-btn:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
