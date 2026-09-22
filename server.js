@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
 import { dirname } from 'node:path';
+import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import * as cf from './lib/cf.js';
@@ -16,10 +17,30 @@ import {
   recommendVirtualContests,
 } from './lib/contests.js';
 import { fetchLuogu, fetchNowcoder, PlatformError } from './lib/platforms.js';
+import * as modelModule from './lib/model.js';
 
 // 同一个账号多久之内不重复抓取（毫秒）。手动同步也走这个限制，防止连点。
 const SYNC_COOLDOWN_MS = 20_000;
 const recentSyncs = new Map();
+
+// 后台训练任务：一次只能跑一个，进度靠这个对象回传，前端轮询。
+const training = {
+  running: false,
+  lines: [],
+  startedAt: null,
+  finishedAt: null,
+  error: null,
+};
+
+function pushTrainingLine(text) {
+  for (const line of String(text).split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    training.lines.push(trimmed);
+  }
+  // 只留最近的一段，前端够显示就行
+  if (training.lines.length > 60) training.lines.splice(0, training.lines.length - 60);
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(HERE, 'public');
@@ -174,6 +195,15 @@ const parseJson = (value, fallback) => {
 };
 
 /** 用户设置：从数据库的字符串还原成有类型的对象。 */
+/**
+ * 单个标签的占比上限：设置里存百分数，算法里用 0~1。
+ * 没设置过用默认 40%，超出范围夹回合法区间，避免脏数据把题单撑爆。
+ */
+function normalizeTagShare(value) {
+  const percent = Number.isFinite(value) ? Math.min(90, Math.max(10, value)) : 40;
+  return percent / 100;
+}
+
 function readSettings() {
   const raw = db.getSettings();
   return {
@@ -195,6 +225,8 @@ function readSettings() {
     luoguUid: raw.luogu_uid ?? null,
       // 评估水平时忽略「比当前 rating 低多少分」以内的题（null = 用默认值）
       floorGap: raw.floor_gap === undefined ? null : Number(raw.floor_gap),
+      // 单个标签在题单里的占比上限，存的是百分数（null = 用默认值 40）
+      tagShare: raw.tag_share === undefined ? null : Number(raw.tag_share),
       updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
   };
 }
@@ -213,6 +245,9 @@ async function handlePlan(url) {
   const problemsState = await ensureProblems();
   await loadUser(rawHandle, { force });
 
+  // 训练过的推题模型（可能没有，或者没通过验证）
+  const model = modelModule.parseModel(db.metaGet(modelModule.MODEL_KEY));
+
   const handleKey = db.normalizeHandle(rawHandle);
   const user = db.getUser(handleKey);
   const submissions = db.getSubmissions(handleKey);
@@ -226,6 +261,9 @@ async function handlePlan(url) {
       target: Math.round(target),
       weekly: Number.isFinite(weekly) && weekly > 0 ? Math.round(weekly) : 10,
       floorGap: readSettings().floorGap,
+      // 设置里存的是百分数，算法里用 0~1 的比例
+      tagShare: normalizeTagShare(readSettings().tagShare),
+      model,
       // 题目年份偏好要用：老题在人气分上占便宜，靠比赛开始时间把新题提上来
       contestDates: new Map(db.getContests().map((contest) => [contest.id, contest.startTime])),
       // 用户手动屏蔽的题，永远不再推荐
@@ -487,11 +525,74 @@ async function route(req, res, url) {
         }
         patch.floor_gap = String(Math.round(value));
       }
+      if (body.tagShare !== undefined) {
+        const value = Number(body.tagShare);
+        if (!Number.isFinite(value) || value < 10 || value > 90) {
+          return sendError(res, 400, '单个标签占比上限请填 10 到 90 之间的数字');
+        }
+        patch.tag_share = String(Math.round(value));
+      }
       db.saveSettings(patch);
       return sendJson(res, 200, { settings: readSettings() });
     } catch (error) {
       return sendError(res, 400, error.message);
     }
+  }
+
+  // ---------- 推题模型：后台训练 + 进度查询 ----------
+  if (pathname === '/api/model' && req.method === 'GET') {
+    const model = modelModule.parseModel(db.metaGet(modelModule.MODEL_KEY));
+    return sendJson(res, 200, {
+      samples: db.countModelSamples(),
+      training: {
+        running: training.running,
+        lines: training.lines,
+        startedAt: training.startedAt,
+        finishedAt: training.finishedAt,
+        error: training.error,
+      },
+      model: model
+        ? {
+            trainedAt: model.trainedAt ?? null,
+            samples: model.samples ?? null,
+            contests: model.contests ?? null,
+            auc: model.metrics?.auc ?? null,
+            baselineAuc: model.baseline?.auc ?? null,
+            logLoss: model.metrics?.logLoss ?? null,
+            baselineLogLoss: model.baseline?.logLoss ?? null,
+            active: modelModule.isModelUseful(model),
+          }
+        : null,
+    });
+  }
+
+  if (pathname === '/api/model/train' && req.method === 'POST') {
+    if (training.running) return sendError(res, 409, '已经有一个训练任务在跑了');
+    const body = await readJsonBody(req).catch(() => ({}));
+    const contests = Math.max(1, Math.min(2000, Number(body.contests) || 300));
+    const extra = body.reset ? ['--reset'] : [];
+    const child = spawn(
+      process.execPath,
+      ['--no-warnings', join(HERE, 'scripts', 'train-model.js'), '--contests', String(contests), ...extra],
+      { cwd: HERE, env: process.env },
+    );
+    training.running = true;
+    training.lines = [`开始采集 ${contests} 场比赛的数据…`];
+    training.startedAt = Date.now();
+    training.finishedAt = null;
+    training.error = null;
+    child.stdout.on('data', (chunk) => pushTrainingLine(chunk));
+    child.stderr.on('data', (chunk) => pushTrainingLine(chunk));
+    child.on('error', (error) => {
+      training.error = error.message;
+    });
+    child.on('close', (code) => {
+      training.running = false;
+      training.finishedAt = Date.now();
+      if (code !== 0 && !training.error) training.error = `训练进程异常退出（代码 ${code}）`;
+      pushTrainingLine(code === 0 ? '训练结束。' : '训练中断。');
+    });
+    return sendJson(res, 202, { started: true, contests });
   }
 
   if (pathname === '/api/activity') {

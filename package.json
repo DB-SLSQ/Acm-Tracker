@@ -1,6 +1,6 @@
 {
   "name": "acm-trainer",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "author": "DB_SLSQ",
   "type": "module",
@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node --no-warnings server.js",
     "sync": "node --no-warnings scripts/sync-problems.js",
+    "train": "node --no-warnings scripts/train-model.js",
     "desktop": "electron .",
     "build": "electron-builder --win"
   },

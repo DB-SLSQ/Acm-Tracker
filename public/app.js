@@ -50,6 +50,65 @@ const PALETTE_COLORS = {
 
 const $ = (id) => document.getElementById(id);
 
+/**
+ * Codeforces 的官方 tag 全是英文，界面上直接显示英文对中文用户不友好。
+ * 这里把 37 个官方 tag 全部译成中文；鼠标悬停在标签上还能看到英文原文，
+ * 方便去 Codeforces 上按 tag 搜题。表里没有的（平台自己加的标签）原样显示。
+ */
+const TAG_ZH = {
+  implementation: '模拟与实现',
+  'brute force': '暴力枚举',
+  sortings: '排序',
+  'expression parsing': '表达式解析',
+  schedules: '调度',
+  'data structures': '数据结构',
+  dsu: '并查集',
+  hashing: '哈希',
+  'divide and conquer': '分治',
+  graphs: '图论',
+  'graph matchings': '图匹配',
+  trees: '树',
+  'dfs and similar': 'DFS 与遍历',
+  'shortest paths': '最短路',
+  flows: '网络流',
+  '2-sat': '2-SAT',
+  dp: '动态规划',
+  'meet-in-the-middle': '折半搜索',
+  math: '数学',
+  'number theory': '数论',
+  combinatorics: '组合数学',
+  geometry: '计算几何',
+  probabilistic: '概率与期望',
+  matrices: '矩阵运算',
+  'chinese remainder theorem': '中国剩余定理',
+  fft: '快速傅里叶变换',
+  games: '博弈论',
+  'ternary search': '三分查找',
+  strings: '字符串',
+  'string suffix structures': '后缀结构',
+  'binary search': '二分查找',
+  'constructive algorithms': '构造',
+  interactive: '交互题',
+  communication: '通信题',
+  greedy: '贪心',
+  'two pointers': '双指针',
+  bitmasks: '位运算',
+  'sqrt decomposition': '根号分治',
+};
+
+/** 单个 tag 的中文名。 */
+function tagZh(tag) {
+  return TAG_ZH[tag] ?? tag;
+}
+
+/** 把一组 tag 渲染成中文标签，悬停能看到原文。 */
+function tagSpans(tags, limit = 3) {
+  return (tags ?? [])
+    .slice(0, limit)
+    .map((tag) => `<span title="${escapeHtml(tag)}">${escapeHtml(tagZh(tag))}</span>`)
+    .join('、');
+}
+
 const RANK_STOPS = [
   [1200, '#b9b9b9'],
   [1400, '#6dd36d'],
@@ -390,7 +449,9 @@ function renderPlan(plan) {
               ${stage.focusTags
                 .map(
                   (item) =>
-                    `<span class="tag-pill">${item.tag}<span class="pill-note">${KIND_LABEL[item.kind] ?? ''}</span></span>`,
+                    `<span class="tag-pill" title="${escapeHtml(item.tag)}">${escapeHtml(
+                      tagZh(item.tag),
+                    )}<span class="pill-note">${KIND_LABEL[item.kind] ?? ''}</span></span>`,
                 )
                 .join('')}
             </div>
@@ -407,7 +468,7 @@ function renderPlan(plan) {
 function problemRow(problem, target, extraNote = '') {
   const key = `${problem.contestId}-${problem.index}`;
   const isDone = state.done.has(key);
-  const tags = problem.tags.slice(0, 3).join('、');
+  const tags = tagSpans(problem.tags, 3);
   const elsewhere = state.luoguKeys.has(key)
     ? '<span class="solved-elsewhere">洛谷做过</span>'
     : '';
@@ -483,7 +544,7 @@ function renderTags(weakTags) {
           : `做过 ${entry.solvedCount} 题 · 75 分位 ${entry.representative} · 最高 ${entry.maxRating}`;
       return `
         <div class="tag-row">
-          <span>${entry.tag}<span class="pill-note">${KIND_LABEL[entry.kind] ?? ''}</span></span>
+          <span title="${escapeHtml(entry.tag)}">${escapeHtml(tagZh(entry.tag))}<span class="pill-note">${KIND_LABEL[entry.kind] ?? ''}</span></span>
           <div class="tag-bar"><span style="width:${Math.max(3, entry.weakness)}%"></span></div>
           <span class="problem-tags">${detail}</span>
         </div>`;
@@ -572,7 +633,7 @@ function renderSolved() {
              target="_blank" rel="noreferrer">${escapeHtml(item.name ?? '（题库里没有这道题）')}</a>
         </span>
         <span>${ratingBadge(item.rating)}</span>
-        <span class="problem-tags">${(item.tags ?? []).slice(0, 2).join('、')}</span>
+        <span class="problem-tags">${tagSpans(item.tags, 2)}</span>
       </div>`,
     )
     .join('');
@@ -781,7 +842,7 @@ function renderRunning(running) {
         <tr>
           <td class="problem-code">${problem.contestId}${problem.index}</td>
           <td><a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>
-              <div class="problem-tags">${problem.tags.slice(0, 3).join('、')}</div></td>
+              <div class="problem-tags">${tagSpans(problem.tags, 3)}</div></td>
           <td style="width:70px">${ratingBadge(problem.rating)}</td>
           <td style="width:90px" class="problem-tags">${problem.solvedCount} 人过</td>
         </tr>`,
@@ -865,7 +926,7 @@ function renderReview(review) {
           </td>
           <td>
             <a class="problem-name" href="${row.url}" target="_blank" rel="noreferrer">${row.name}</a>
-            <div class="problem-tags">${row.tags.slice(0, 3).join('、')}</div>
+            <div class="problem-tags">${tagSpans(row.tags, 3)}</div>
           </td>
           <td style="width:70px">${ratingBadge(row.rating)}</td>
           <td style="width:120px" class="problem-tags">${label}</td>
@@ -1254,7 +1315,7 @@ function renderDayDetail() {
         <td class="problem-code">${problem.contestId}${problem.index}</td>
         <td><a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>
             ${state.luoguKeys.has(`${problem.contestId}-${problem.index}`) ? '<span class="solved-elsewhere">洛谷做过</span>' : ''}
-            <div class="problem-tags">${problem.tags.slice(0, 3).join('、')}</div></td>
+            <div class="problem-tags">${tagSpans(problem.tags, 3)}</div></td>
         <td style="width:70px">${ratingBadge(problem.rating)}</td>
         <td style="width:86px" class="problem-tags">第 ${problem.stage ?? stageOf} 阶段</td>
       </tr>`,
@@ -1700,6 +1761,101 @@ bindPlatformSync({
         : `已忽略低于 ${state.planData?.analysisFloor ?? '—'} 分的题（共 ${state.planData?.excludedFromAnalysis ?? 0} 道）。`;
   });
 
+  // ---------- 设置：单个标签在题单里的占比上限 ----------
+  // 一份计划里同一个专题刷太多遍，别的方向就练不到，所以给个默认 40% 的上限。
+
+  $('tag-share-save').addEventListener('click', async () => {
+    const hint = $('tag-share-hint');
+    const value = Number($('tag-share-input').value);
+    if (!Number.isFinite(value) || value < 10 || value > 90) {
+      hint.textContent = '请填 10 到 90 之间的数字。';
+      hint.classList.add('error');
+      return;
+    }
+
+    saveSettings({ tagShare: Math.round(value) });
+    hint.classList.remove('error');
+    hint.textContent = `已设为 ${Math.round(value)}%，正在重新生成计划…`;
+
+    if (state.handle) await generatePlan(false, { scroll: false });
+    hint.textContent = `同一个标签最多占题单的 ${Math.round(value)}%；填得越低，题目越杂。`;
+  });
+
+  // ---------- 设置：训练推题模型 ----------
+  // 训练在后台进程里跑，这边只负责启动和显示进度。
+
+  let trainingTimer = null;
+
+  function renderTraining(info) {
+    const log = $('train-log');
+    const hint = $('train-hint');
+    const lines = info?.training?.lines ?? [];
+    log.classList.toggle('hidden', !lines.length);
+    log.textContent = lines.slice(-16).join('\n');
+    log.scrollTop = log.scrollHeight;
+
+    if (info?.training?.running) {
+      hint.textContent = '正在训练，可以去做别的，跑完会停。';
+      hint.classList.remove('error');
+      return;
+    }
+    if (info?.training?.error) {
+      hint.textContent = `训练没跑完：${info.training.error}`;
+      hint.classList.add('error');
+      return;
+    }
+    hint.classList.remove('error');
+    const model = info?.model;
+    if (!model) {
+      hint.textContent = `还没有训练过模型，当前存了 ${info?.samples ?? 0} 条比赛样本。`;
+      return;
+    }
+    const auc = model.auc == null ? '—' : model.auc.toFixed(3);
+    const base = model.baselineAuc == null ? '—' : model.baselineAuc.toFixed(3);
+    hint.textContent =
+      `样本 ${model.samples ?? '—'} 条 · 来自 ${model.contests ?? '—'} 场比赛 · ` +
+      `留出集 AUC ${auc}（基线 ${base}）· ${model.active ? '已启用' : '未启用（没明显超过基线）'}`;
+  }
+
+  async function refreshTraining() {
+    try {
+      const info = await getJson('/api/model');
+      renderTraining(info);
+      if (info.training?.running && !trainingTimer) {
+        trainingTimer = setInterval(refreshTraining, 3000);
+      }
+      if (!info.training?.running && trainingTimer) {
+        clearInterval(trainingTimer);
+        trainingTimer = null;
+      }
+      return info;
+    } catch {
+      return null;
+    }
+  }
+
+  $('train-model').addEventListener('click', async () => {
+    const hint = $('train-hint');
+    const contests = Number($('train-contests-input').value);
+    if (!Number.isFinite(contests) || contests < 20 || contests > 2000) {
+      hint.textContent = '请填 20 到 2000 之间的数字。';
+      hint.classList.add('error');
+      return;
+    }
+    hint.classList.remove('error');
+    hint.textContent = '正在启动训练…';
+    try {
+      const result = await postJson('/api/model/train', { contests: Math.round(contests) });
+      hint.textContent = `已开始，采集 ${result.contests} 场比赛。`;
+    } catch (error) {
+      hint.textContent = `启动失败：${error.message}`;
+      hint.classList.add('error');
+      return;
+    }
+    trainingTimer = setInterval(refreshTraining, 3000);
+    await refreshTraining();
+  });
+
 /** 启动时自动恢复上次的账号、目标分数和训练计划，不用重新输一遍。 */
 async function restoreSession() {
   let settings = null;
@@ -1723,6 +1879,9 @@ async function restoreSession() {
     if (settings.luoguUid) $('luogu-input').value = settings.luoguUid;
     if (settings.floorGap !== null && settings.floorGap !== undefined) {
       $('floor-gap-input').value = settings.floorGap;
+    }
+    if (settings.tagShare !== null && settings.tagShare !== undefined) {
+      $('tag-share-input').value = settings.tagShare;
     }
   }
   applyAppearance();

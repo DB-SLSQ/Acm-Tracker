@@ -290,6 +290,21 @@ input[type="number"]:focus {
   color: var(--danger);
 }
 
+.train-log {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--bg-soft, rgba(120, 140, 180, 0.08));
+  border: 1px solid var(--line, rgba(120, 140, 180, 0.18));
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: var(--text-dim);
+}
+
 .stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

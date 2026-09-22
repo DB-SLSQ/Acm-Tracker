@@ -241,6 +241,37 @@
         </div>
         <p class="hint" id="floor-gap-hint">填 0 表示不排除；默认 400。</p>
 
+        <h3 class="settings-title">题单构成</h3>
+        <p class="subtle">
+          推荐题单里，同一个知识点标签最多占多少比例。调低会让题目更杂，
+          调高会更集中在几类题上——一份计划里同一个专题刷太多遍，别的方向就练不到了。
+        </p>
+        <div class="platform-row">
+          <div class="sched-field">
+            <label for="tag-share-input">单个标签最多占的百分比</label>
+            <input id="tag-share-input" type="number" min="10" max="90" step="5" value="40" />
+          </div>
+          <button class="btn primary" id="tag-share-save">应用并重新生成计划</button>
+        </div>
+        <p class="hint" id="tag-share-hint">默认 40%。填得越低，题目越杂。</p>
+
+        <h3 class="settings-title">推题模型</h3>
+        <p class="subtle">
+          从已结束的 rated 比赛里学「以你现在的水平，能不能做出这道题」，
+          用这个概率来挑难度合适的题。数据只统计公开的比赛结果，不会提交任何东西。
+          训练要跑十几分钟，期间可以关掉设置面板，它会在后台继续。
+          模型只有在留出集上明显赢过「只看难度差」的基线时才会启用，否则继续用内置规则。
+        </p>
+        <div class="platform-row">
+          <div class="sched-field">
+            <label for="train-contests-input">采集多少场比赛</label>
+            <input id="train-contests-input" type="number" min="20" max="2000" step="20" value="300" />
+          </div>
+          <button class="btn primary" id="train-model">开始训练</button>
+        </div>
+        <p class="hint" id="train-hint">还没有训练过。300 场大约够十万条样本，十几分钟。</p>
+        <pre class="train-log hidden" id="train-log"></pre>
+
         <h3 class="settings-title">平台数据</h3>
         <p class="subtle">
           只抓汇总数字（过题数、提交数），不抓逐题记录——逐题要翻很多页，那才是把 IP 抓封的原因。
