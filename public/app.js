@@ -32,6 +32,8 @@ const state = {
   platforms: [],
   // 洛谷镜像的 CF 题号集合，用来标记「这题你在洛谷做过」
   luoguKeys: new Set(),
+  // 训练计划里是否隐藏标签（有些人喜欢不看标签自己想）
+  hideTags: false,
   // 做题记录
   blocked: [],
   solved: [],
@@ -434,27 +436,46 @@ function renderPlan(plan) {
            <table class="problem-table">${stage.review.map((problem) => problemRow(problem, stage.targetRating, `失败 ${problem.attempts} 次`)).join('')}</table>`
         : '';
 
+      // 隐藏标签模式下，连「重点补强」那行一起换掉——它就是方向信息，
+      // 留着等于把标签泄了。改成只说覆盖了几个方向、几个是盲区。
+      const blindCount = stage.focusTags.filter((item) => item.kind === 'untouched').length;
+      const focusLine = state.hideTags
+        ? `<div class="focus-tags">
+             <span class="stage-meta">这份计划覆盖 ${stage.axisPlan?.length ?? 0} 个算法方向${
+               blindCount ? `，其中 ${blindCount} 个你还没碰过` : ''
+             }。标签已隐藏，自己判断怎么做。</span>
+           </div>`
+        : `<div class="focus-tags">
+             <span class="stage-meta">重点补强：</span>
+             ${stage.focusTags
+               .map(
+                 (item) =>
+                   `<span class="tag-pill" title="${escapeHtml(item.tag)}">${escapeHtml(
+                     tagZh(item.tag),
+                   )}<span class="pill-note">${KIND_LABEL[item.kind] ?? ''}</span></span>`,
+               )
+               .join('')}
+           </div>`;
+
+      const axisLine =
+        !state.hideTags && stage.axisPlan?.length
+          ? `<div class="axis-plan">${stage.axisPlan
+              .map((row) => `${escapeHtml(row.axis)} ${row.count}`)
+              .join(' · ')}</div>`
+          : '';
+
       return `
         <div class="stage">
           <div class="stage-head">
             <div>
               <div class="stage-title">${stage.label} · 练 ${stage.band[0]} ~ ${stage.band[1]} 分</div>
               <div class="stage-meta">约 ${stage.count} 题 / ${stage.weeks} 周 · 该区间还有 ${stage.unsolvedSupply} 道你没做过的题</div>
+              ${axisLine}
             </div>
             <div class="stage-meta">目标水平 ${stage.targetRating}</div>
           </div>
           <div class="stage-body">
-            <div class="focus-tags">
-              <span class="stage-meta">重点补强：</span>
-              ${stage.focusTags
-                .map(
-                  (item) =>
-                    `<span class="tag-pill" title="${escapeHtml(item.tag)}">${escapeHtml(
-                      tagZh(item.tag),
-                    )}<span class="pill-note">${KIND_LABEL[item.kind] ?? ''}</span></span>`,
-                )
-                .join('')}
-            </div>
+            ${focusLine}
             <table class="problem-table">${rows}</table>
             ${review}
           </div>
@@ -468,7 +489,8 @@ function renderPlan(plan) {
 function problemRow(problem, target, extraNote = '') {
   const key = `${problem.contestId}-${problem.index}`;
   const isDone = state.done.has(key);
-  const tags = tagSpans(problem.tags, 3);
+  // 隐藏标签模式：题单里不显示这道题属于哪些方向，自己判断怎么做
+  const tags = state.hideTags ? '' : tagSpans(problem.tags, 3);
   const elsewhere = state.luoguKeys.has(key)
     ? '<span class="solved-elsewhere">洛谷做过</span>'
     : '';
@@ -481,7 +503,11 @@ function problemRow(problem, target, extraNote = '') {
       <td class="problem-code">${problem.contestId}${problem.index}</td>
       <td>
         <a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>${elsewhere}
-        <div class="problem-tags">${tags}${extraNote ? ` · ${extraNote}` : ''}</div>
+        ${
+          tags || extraNote
+            ? `<div class="problem-tags">${tags}${tags && extraNote ? ' · ' : ''}${extraNote}</div>`
+            : ''
+        }
       </td>
       <td style="width:70px">${ratingBadge(problem.rating)}</td>
       <td style="width:90px" class="problem-tags">${problem.solvedCount} 人过</td>
@@ -1781,6 +1807,16 @@ bindPlatformSync({
     hint.textContent = `同一个标签最多占题单的 ${Math.round(value)}%；填得越低，题目越杂。`;
   });
 
+  // ---------- 训练计划：隐藏标签 ----------
+  // 有些人不想被标签剧透，只想拿到题单自己判断。开着的时候连「重点补强」
+  // 那行也一起换掉，否则方向信息还是漏出去了。
+
+  $('hide-tags').addEventListener('change', () => {
+    state.hideTags = $('hide-tags').checked;
+    saveSettings({ hideTags: state.hideTags });
+    if (state.planData) renderPlan(state.planData);
+  });
+
   // ---------- 设置：训练推题模型 ----------
   // 训练在后台进程里跑，这边只负责启动和显示进度。
 
@@ -1880,6 +1916,8 @@ async function restoreSession() {
     if (settings.floorGap !== null && settings.floorGap !== undefined) {
       $('floor-gap-input').value = settings.floorGap;
     }
+    state.hideTags = Boolean(settings.hideTags);
+    $('hide-tags').checked = state.hideTags;
     if (settings.tagShare !== null && settings.tagShare !== undefined) {
       $('tag-share-input').value = settings.tagShare;
     }

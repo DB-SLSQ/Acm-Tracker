@@ -227,6 +227,8 @@ function readSettings() {
       floorGap: raw.floor_gap === undefined ? null : Number(raw.floor_gap),
       // 单个标签在题单里的占比上限，存的是百分数（null = 用默认值 40）
       tagShare: raw.tag_share === undefined ? null : Number(raw.tag_share),
+      // 训练计划里是否隐藏标签（题单不显示算法方向，自己判断）
+      hideTags: raw.hide_tags === '1',
       updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
   };
 }
@@ -532,6 +534,8 @@ async function route(req, res, url) {
         }
         patch.tag_share = String(Math.round(value));
       }
+      // 训练计划里是否隐藏标签
+      if (body.hideTags !== undefined) patch.hide_tags = body.hideTags ? '1' : '';
       db.saveSettings(patch);
       return sendJson(res, 200, { settings: readSettings() });
     } catch (error) {
