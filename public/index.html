@@ -257,10 +257,21 @@
 
         <div class="panel-head sub">
           <h2>和另一个账号比</h2>
-          <p id="compare-hint">把两个账号叠在一起看：各方向 75 分位差多少、同一道题谁先做出来。</p>
+          <p id="compare-hint">
+            直接写对方的名字就能比：各方向 75 分位差多少、同一道题谁先做出来。不用先把他的数据加载进来。
+          </p>
         </div>
-        <div class="review-toolbar">
-          <select id="compare-handle"><option value="">选一个账号…</option></select>
+        <div class="compare-toolbar">
+          <input
+            id="compare-input"
+            type="text"
+            list="compare-known"
+            placeholder="对方的 Codeforces ID，例如 tourist"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <datalist id="compare-known"></datalist>
+          <button type="button" class="btn primary" id="compare-go">对比</button>
           <button type="button" class="btn" id="compare-clear">清除对比</button>
         </div>
         <div id="compare-result"></div>

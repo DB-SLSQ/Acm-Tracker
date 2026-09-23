@@ -114,6 +114,8 @@ app.whenReady().then(async () => {
     document.querySelector('[data-theme-value="light"]').click();
     document.documentElement.dataset.theme || '';
   `);
+  // 这一下会把主题写进库；测完还回去，否则下次冷启动读到的就不是默认暗色了
+  await postSettings(url, { theme: original?.theme ?? 'dark' });
 
   // 页脚的交流群入口：点一下应该把二维码弹出来
   const qrPopup = await win.webContents.executeJavaScript(`
@@ -187,7 +189,7 @@ app.whenReady().then(async () => {
 
   const checks = [
     ['页面标题正确', restored.title === 'ACM 训练台'],
-    ['12 个界面区块都在', restored.panels === 12],
+    ['14 个界面区块都在', restored.panels === 14],
     ['冷启动只显示输入框、日历和设置', cold.visiblePanels.join(',') === 'panel-handle,panel-calendar,panel-settings'],
     ['冷启动时输入框为空', !cold.handle],
     ['比赛日历加载成功', cold.calendarRows > 0],
@@ -199,7 +201,7 @@ app.whenReady().then(async () => {
     ['点击弹出二维码', qrPopup.shown === true],
     ['二维码图片能加载', qrPopup.loaded === true],
     ['群名显示正确', (qrPopup.name ?? '').includes('onlyfans club')],
-    ['面板有折叠按钮', restored.panelToggles === 10],
+    ['每个内容面板都有折叠按钮', restored.panelToggles === 12],
     ['点击可收起面板', collapseTest.collapsed === true],
     ['收起后按钮仍可见', collapseTest.buttonVisible === true],
     ['按钮文字随状态变化', /收起/.test(collapseTest.labelExpanded) && /展开/.test(collapseTest.labelCollapsed)],
@@ -209,7 +211,7 @@ app.whenReady().then(async () => {
     ['收起后标题仍可见', bulkTest.titlesVisible === true],
     ['展开全部能恢复', bulkTest.afterExpand === 0],
     ['有独立的设置面板', cold.hasSettingsPanel === true],
-    ['模块开关有 10 个', cold.moduleToggles === 10],
+    ['模块开关有 12 个', cold.moduleToggles === 12],
     ['有牛客 ID 输入框', cold.hasNowcoderInput === true],
     ['有洛谷 ID 输入框', cold.hasLuoguInput === true],
     ['有排除区间设置', cold.hasFloorGapInput === true],

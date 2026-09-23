@@ -987,7 +987,11 @@ input[type="number"]:focus {
   margin: 0 auto;
   padding: 7px 24px;
   display: flex;
-  gap: 6px;
+  /* 导航项加到 12 个之后，1080 宽度下一行放不下（实测超出 32px），
+     所以把间距和左右内边距各收一点，再留一道换行兜底：
+     窗口拖得很窄时宁可折成两行，也不要横向滚动条。 */
+  gap: 4px;
+  flex-wrap: wrap;
   overflow-x: auto;
 }
 
@@ -995,7 +999,7 @@ input[type="number"]:focus {
   color: var(--text-dim);
   text-decoration: none;
   font-size: 13px;
-  padding: 5px 11px;
+  padding: 5px 10px;
   border-radius: 7px;
   white-space: nowrap;
 }
@@ -1934,4 +1938,39 @@ input[type="number"]:focus {
 
 .today-behind.warn b {
   color: var(--warn-text);
+}
+
+/* ============ 成长 / 账号对比 ============ */
+
+/* 这两张表的表头行。之前 .growth-head 只有名字没有样式，
+   表头看起来和正文一样，跟题单的表头对不上。 */
+.growth-head td {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 涨分绿、掉分红，和成长曲线上的小圆点一个意思 */
+.growth-up {
+  color: var(--ok-text);
+}
+
+.growth-down {
+  color: var(--danger);
+}
+
+/* 「和另一个账号比」那一栏：直接写对方 ID 就能比 */
+.compare-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.compare-toolbar input[type='text'] {
+  flex: 1 1 240px;
+  max-width: 340px;
 }

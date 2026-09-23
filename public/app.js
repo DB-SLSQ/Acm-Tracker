@@ -760,8 +760,8 @@ async function loadHandles() {
     state.handles = [];
   }
   const switcher = $('handle-switch');
-  const compare = $('compare-handle');
-  if (!switcher || !compare) return;
+  const known = $('compare-known');
+  if (!switcher || !known) return;
 
   const current = (state.handle ?? '').toLowerCase();
   switcher.innerHTML = state.handles
@@ -774,13 +774,16 @@ async function loadHandles() {
     .join('');
   if (!state.handles.length) switcher.innerHTML = '<option value="">还没有账号</option>';
 
-  compare.innerHTML =
-    '<option value="">选一个账号…</option>' +
+  // 对比那一栏是手打 ID 的输入框，这里只是把「本机加载过的其他账号」做成候选，
+  // 点一下就能填进去。没加载过的账号照样能直接打名字。
+  known.innerHTML =
     state.handles
       .filter((item) => item.handleKey !== current)
-      .map((item) => `<option value="${escapeHtml(item.handleKey)}">${escapeHtml(item.display)}</option>`)
+      .map(
+        (item) =>
+          `<option value="${escapeHtml(item.handleKey)}">${escapeHtml(item.display)}</option>`,
+      )
       .join('');
-  compare.value = state.compareOther ?? '';
 }
 
 $('handle-switch').addEventListener('change', async (event) => {
@@ -789,30 +792,61 @@ $('handle-switch').addEventListener('change', async (event) => {
   $('handle-input').value = handle;
   // 切换账号只是换当前用哪个：设置、计划、进度都是按账号存的，互不影响
   saveSettings({ handle });
+  // 上一个人的对比结果要先清掉，否则看着像是新账号比出来的
   state.compare = null;
   state.compareOther = null;
+  $('compare-input').value = '';
+  renderCompare();
   await loadUser(true);
+  // 计划、日程、成长都是按账号算出来的，切完必须重来一遍，
+  // 不然这几块还显示着上一个人的数据，得等手动点「重新生成计划」才对。
+  if (state.hasSavedTarget) await generatePlan(false, { scroll: false });
   setStatus(`已切换到 ${handle}`);
 });
 
-async function loadCompare(otherKey) {
-  if (!otherKey || !state.handle) {
+// 「清除对比」之后要把这句提示恢复成默认的，否则界面上还留着上一对账号的名字
+const COMPARE_HINT_DEFAULT = $('compare-hint').textContent.replace(/\s+/g, ' ').trim();
+
+async function loadCompare(rawOther) {
+  const other = String(rawOther ?? '').trim();
+  const current = (state.handle ?? '').toLowerCase();
+
+  if (!other || !state.handle) {
     state.compare = null;
+    state.compareOther = null;
     $('compare-result').innerHTML = '';
+    $('compare-hint').textContent = COMPARE_HINT_DEFAULT;
     renderGrowth();
     return;
   }
+  if (other.toLowerCase() === current) {
+    showHint('这是当前账号自己，换成别人的 ID 吧。', true);
+    return;
+  }
+
+  // 第一次比某个人的时候要现抓他的数据，会等几秒
+  setStatus(`正在读 ${other} 的数据`, { busy: true });
   try {
     state.compare = await getJson(
-      `/api/compare?handle=${encodeURIComponent(state.handle)}&other=${encodeURIComponent(otherKey)}`,
+      `/api/compare?handle=${encodeURIComponent(state.handle)}&other=${encodeURIComponent(other)}`,
     );
-    state.compareOther = otherKey;
+    state.compareOther = state.compare.other.handle;
+    $('compare-input').value = state.compare.other.display;
     renderCompare();
     renderGrowth();
+    setStatus(`已对比 ${state.compare.other.display}`);
+    // 刚比过的人现在也算「用过的账号」，候选列表顺手补上
+    loadHandles();
   } catch (error) {
     setStatus('对比失败');
     showHint(error.message, true);
   }
+}
+
+/** 涨分涂绿、掉分涂红；0 和没数据保持原色，涂绿会让人以为涨了。 */
+function signedClass(value) {
+  if (value == null || value === 0) return '';
+  return value > 0 ? 'growth-up' : 'growth-down';
 }
 
 function renderCompare() {
@@ -820,13 +854,16 @@ function renderCompare() {
   const box = $('compare-result');
   if (!data) {
     box.innerHTML = '';
+    $('compare-hint').textContent = COMPARE_HINT_DEFAULT;
     return;
   }
   const axisRows = data.axes
     .map((row) => {
       const diff = row.diff;
       const diffText =
-        diff == null ? '—' : `<span class="${diff >= 0 ? 'growth-up' : 'growth-down'}">${diff >= 0 ? '+' : ''}${diff}</span>`;
+        diff == null
+          ? '—'
+          : `<span class="${signedClass(diff)}">${diff > 0 ? '+' : ''}${diff}</span>`;
       return `<tr>
         <td style="width:180px">${escapeHtml(row.axis)}</td>
         <td style="width:90px" class="problem-tags">${row.base ?? '—'}</td>
@@ -881,11 +918,15 @@ function renderCompare() {
     }`;
 }
 
-$('compare-handle').addEventListener('change', (event) => loadCompare(event.target.value));
+$('compare-go').addEventListener('click', () => loadCompare($('compare-input').value));
+$('compare-input').addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  loadCompare($('compare-input').value);
+});
 $('compare-clear').addEventListener('click', () => {
-  $('compare-handle').value = '';
-  state.compareOther = null;
-  loadCompare(null);
+  $('compare-input').value = '';
+  loadCompare('');
 });
 
 function renderGrowth() {
@@ -973,8 +1014,8 @@ function renderGrowth() {
           <td><a class="problem-name" href="https://codeforces.com/contest/${contest.contestId}"
                  target="_blank" rel="noreferrer">${escapeHtml(contest.name || String(contest.contestId))}</a></td>
           <td class="problem-tags">${new Date(contest.at * 1000).toLocaleDateString('zh-CN')}</td>
-          <td style="width:96px" class="${(contest.delta ?? 0) >= 0 ? 'growth-up' : 'growth-down'}">${
-            contest.delta == null ? '—' : `${contest.delta >= 0 ? '+' : ''}${contest.delta}`
+          <td style="width:96px" class="${signedClass(contest.delta)}">${
+            contest.delta == null ? '—' : `${contest.delta > 0 ? '+' : ''}${contest.delta}`
           }</td>
           <td style="width:120px" class="problem-tags">${
             contest.solvedBefore ? `${contest.solvedBefore} 题` : '没有记录'
@@ -1000,7 +1041,7 @@ function renderGrowth() {
           <td style="width:160px">${escapeHtml(row.axis)}</td>
           <td style="width:90px" class="problem-tags">${row.before}</td>
           <td style="width:90px" class="problem-tags">${row.now}</td>
-          <td class="${row.change >= 0 ? 'growth-up' : 'growth-down'}">${row.change >= 0 ? '+' : ''}${row.change}</td>
+          <td class="${signedClass(row.change)}">${row.change > 0 ? '+' : ''}${row.change}</td>
         </tr>`,
       )
       .join('')}</table>`;
@@ -2255,6 +2296,8 @@ const COLLAPSIBLE_PANELS = [
   'panel-heatmap',
   'panel-platforms',
   'panel-records',
+  'panel-review',
+  'panel-growth',
   'panel-tags',
 ];
 

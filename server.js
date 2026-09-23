@@ -1411,10 +1411,23 @@ async function route(req, res, url) {
 
   // 两个账号对比：各方向 75 分位、每周做题量、同一道题谁先做出来
   if (pathname === '/api/compare' && req.method === 'GET') {
-    const baseKey = db.normalizeHandle(url.searchParams.get('handle'));
-    const otherKey = db.normalizeHandle(url.searchParams.get('other'));
+    const rawBase = url.searchParams.get('handle');
+    const rawOther = url.searchParams.get('other');
+    const baseKey = db.normalizeHandle(rawBase);
+    const otherKey = db.normalizeHandle(rawOther);
     if (!baseKey || !otherKey) return sendError(res, 400, '需要两个账号');
-    if (baseKey === otherKey) return sendError(res, 400, '选另一个账号来对比');
+    if (baseKey === otherKey) return sendError(res, 400, '这是当前账号自己，换一个 ID 吧');
+
+    // 对比不要求先在上面把对方「加载」过：库里没有就顺手抓一次。
+    // 已经抓过的走 6 小时缓存，来回切着看不会反复请求 Codeforces。
+    try {
+      await ensureProblems();
+      await loadUser(baseKey, { force: false });
+      await loadUser(rawOther, { force: false });
+    } catch (error) {
+      const message = error instanceof cf.CfError ? error.message : `抓取失败：${error.message}`;
+      return sendError(res, 502, `读不到 ${rawOther} 的数据：${message}`);
+    }
 
     const base = axisProfileOf(baseKey);
     const other = axisProfileOf(otherKey);
