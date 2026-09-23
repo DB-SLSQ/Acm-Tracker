@@ -102,10 +102,6 @@
         <div class="panel-head">
           <h2>训练计划</h2>
           <p id="plan-summary"></p>
-          <label class="tag-hide-toggle" title="不显示题目属于哪个算法方向，自己想">
-            <input type="checkbox" id="hide-tags" />
-            <span>隐藏标签</span>
-          </label>
         </div>
         <div class="plan-stages" id="plan-stages"></div>
         <ul class="notes" id="plan-notes"></ul>
@@ -258,6 +254,16 @@
           <button class="btn primary" id="tag-share-save">应用并重新生成计划</button>
         </div>
         <p class="hint" id="tag-share-hint">默认 40%。填得越低，题目越杂。</p>
+
+        <h4 class="settings-sub">标签显示</h4>
+        <p class="subtle">
+          勾上以后，训练计划和训练日程里的题目都不显示算法标签（「重点补强」那行也会换成模糊说法），
+          自己判断这道题该怎么做。适合不想被剧透的人。能力画像、做题记录这类分析页面不受影响。
+        </p>
+        <label class="tag-hide-toggle" title="训练计划和日程里都不显示算法标签">
+          <input type="checkbox" id="hide-tags" />
+          <span>隐藏题目里的算法标签</span>
+        </label>
 
         <h3 class="settings-title">推题模型</h3>
         <p class="subtle">

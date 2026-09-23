@@ -1341,7 +1341,7 @@ function renderDayDetail() {
         <td class="problem-code">${problem.contestId}${problem.index}</td>
         <td><a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>
             ${state.luoguKeys.has(`${problem.contestId}-${problem.index}`) ? '<span class="solved-elsewhere">洛谷做过</span>' : ''}
-            <div class="problem-tags">${tagSpans(problem.tags, 3)}</div></td>
+            ${state.hideTags ? '' : `<div class="problem-tags">${tagSpans(problem.tags, 3)}</div>`}</td>
         <td style="width:70px">${ratingBadge(problem.rating)}</td>
         <td style="width:86px" class="problem-tags">第 ${problem.stage ?? stageOf} 阶段</td>
       </tr>`,
@@ -1814,7 +1814,9 @@ bindPlatformSync({
   $('hide-tags').addEventListener('change', () => {
     state.hideTags = $('hide-tags').checked;
     saveSettings({ hideTags: state.hideTags });
+    // 计划和日程都要重画：这个开关管的是「所有训练相关的界面」
     if (state.planData) renderPlan(state.planData);
+    if (state.schedule) renderSchedule();
   });
 
   // ---------- 设置：训练推题模型 ----------
