@@ -6,6 +6,8 @@ const state = {
   weekly: 10,
   planData: null,
   done: new Set(),
+  // 其中「按提交记录自动打勾」的部分，界面上单独标出来
+  doneAuto: new Set(),
   virtual: null,
   reviewId: 0,
   hasSavedTarget: false,
@@ -80,6 +82,9 @@ const TAG_ZH = {
   'number theory': '数论',
   combinatorics: '组合数学',
   geometry: '计算几何',
+  // Codeforces 把这个标签从 probabilistic 改名成了 probabilities，
+  // 两个都留着：旧缓存里的题还是前一个写法。
+  probabilities: '概率与期望',
   probabilistic: '概率与期望',
   matrices: '矩阵运算',
   'chinese remainder theorem': '中国剩余定理',
@@ -396,6 +401,7 @@ async function generatePlan(force = false, { scroll = true } = {}) {
     );
     state.planData = data.plan;
     state.done = new Set(data.done ?? []);
+    state.doneAuto = new Set(data.doneAuto ?? []);
     // 把各阶段的题目拍平成一条有序列表，按天排布要用
     state.planProblems = data.plan.stageList.flatMap((stage) =>
       stage.problems.map((problem) => ({ ...problem, stage: stage.index })),
@@ -421,9 +427,26 @@ async function generatePlan(force = false, { scroll = true } = {}) {
 
 function renderPlan(plan) {
   const direction = plan.gap > 0 ? `目标 +${plan.gap}` : '巩固当前水平';
+  // 完成情况：分成「自己勾的」和「提交记录里已经通过的」，后者是这版新加的自动打勾
+  const totalPlanned = plan.stageList.reduce((sum, stage) => sum + stage.problems.length, 0);
+  const doneCount = plan.stageList.reduce(
+    (sum, stage) =>
+      sum + stage.problems.filter((problem) => state.done.has(`${problem.contestId}-${problem.index}`)).length,
+    0,
+  );
+  const autoCount = plan.stageList.reduce(
+    (sum, stage) =>
+      sum +
+      stage.problems.filter((problem) => state.doneAuto.has(`${problem.contestId}-${problem.index}`)).length,
+    0,
+  );
+  const progressLine = doneCount
+    ? `已完成 ${doneCount}/${totalPlanned} 题${autoCount ? `（其中 ${autoCount} 题是提交记录里已经通过的，自动打勾）` : ''}。`
+    : '';
   $('plan-summary').textContent =
     `当前 ${plan.current} 分 → 目标 ${plan.target} 分（${direction}）。` +
-    `按每周 ${plan.weekly} 题估算，全程约 ${plan.totalNeeded} 题、${plan.weeks} 周，分 ${plan.stages} 个阶段推进。`;
+    `按每周 ${plan.weekly} 题估算，全程约 ${plan.totalNeeded} 题、${plan.weeks} 周，分 ${plan.stages} 个阶段推进。` +
+    progressLine;
 
   $('plan-stages').innerHTML = plan.stageList
     .map((stage) => {
@@ -489,20 +512,28 @@ function renderPlan(plan) {
 function problemRow(problem, target, extraNote = '') {
   const key = `${problem.contestId}-${problem.index}`;
   const isDone = state.done.has(key);
+  const isAuto = state.doneAuto.has(key);
   // 隐藏标签模式：题单里不显示这道题属于哪些方向，自己判断怎么做
   const tags = state.hideTags ? '' : tagSpans(problem.tags, 3);
   const elsewhere = state.luoguKeys.has(key)
     ? '<span class="solved-elsewhere">洛谷做过</span>'
     : '';
+  // 自动打勾的题单独标一下，免得看着像自己什么时候点过
+  const autoBadge = isAuto
+    ? '<span class="auto-done" title="提交记录里已经通过了这道题，自动打勾">已通过</span>'
+    : '';
+  const swapButton = problem.swappedFrom
+    ? `<button type="button" class="swap-btn" data-swap-undo="${problem.swappedFrom}" title="换回系统推荐的那道题">还原</button>`
+    : `<button type="button" class="swap-btn" data-swap-key="${key}" title="换一道同方向、难度差不多的题">换一道</button>`;
   return `
-    <tr class="${isDone ? 'done' : ''}" data-key="${key}">
+    <tr class="${isDone ? 'done' : ''}" data-key="${key}"${problem.swappedFrom ? ` data-swapped-from="${problem.swappedFrom}"` : ''}>
       <td style="width:28px">
         <input type="checkbox" ${isDone ? 'checked' : ''}
                data-contest="${problem.contestId}" data-index="${problem.index}" />
       </td>
       <td class="problem-code">${problem.contestId}${problem.index}</td>
       <td>
-        <a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>${elsewhere}
+        <a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>${elsewhere}${autoBadge}
         ${
           tags || extraNote
             ? `<div class="problem-tags">${tags}${tags && extraNote ? ' · ' : ''}${extraNote}</div>`
@@ -517,6 +548,7 @@ function problemRow(problem, target, extraNote = '') {
                 data-block-name="${escapeHtml(problem.name)}" data-block-rating="${problem.rating ?? ''}"
                 title="永久屏蔽这道题，以后不再推荐">✕</button>
       </td>
+      <td style="width:78px">${swapButton}</td>
     </tr>`;
 }
 
@@ -706,6 +738,17 @@ async function blockProblem(problem) {
 }
 
 $('plan-stages').addEventListener('click', (event) => {
+  // 换一道 / 还原，两个按钮都在同一张表里
+  const swap = event.target.closest('[data-swap-key]');
+  if (swap) {
+    swapProblem(swap.dataset.swapKey);
+    return;
+  }
+  const undo = event.target.closest('[data-swap-undo]');
+  if (undo) {
+    undoSwap(undo.dataset.swapUndo);
+    return;
+  }
   const button = event.target.closest('[data-block-key]');
   if (!button) return;
   blockProblem({
@@ -715,6 +758,66 @@ $('plan-stages').addEventListener('click', (event) => {
     rating: button.dataset.blockRating ? Number(button.dataset.blockRating) : null,
   });
 });
+
+// ---------- 换一道题 ----------
+// 计划里每道题右边有个「换一道」：同方向、难度最接近、你还没做过、也不在现有计划里。
+// 换过之后记在后台（plan_swaps），重新生成计划时也会换回去，不会被冲掉。
+
+/** 把某一行换成新题，然后重画计划表和日程。 */
+function applySwap(fromKey, nextProblem) {
+  if (!state.planData || !nextProblem) return;
+  for (const stage of state.planData.stageList) {
+    const at = stage.problems.findIndex((problem) => `${problem.contestId}-${problem.index}` === fromKey);
+    if (at >= 0) {
+      stage.problems[at] = nextProblem;
+      break;
+    }
+  }
+  state.planProblems = state.planData.stageList.flatMap((stage) =>
+    stage.problems.map((problem) => ({ ...problem, stage: stage.index })),
+  );
+  renderPlan(state.planData);
+  rebuildSchedule();
+}
+
+async function swapProblem(key) {
+  if (!state.handle) return;
+  const dash = key.indexOf('-');
+  const contestId = Number(key.slice(0, dash));
+  const index = key.slice(dash + 1);
+  setStatus('正在挑一道替换的题…', { busy: true });
+  try {
+    const data = await postJson('/api/plan/replace', {
+      handle: state.handle,
+      target: state.target,
+      contestId,
+      index,
+      // 现成计划里已有的题不能重复出现，交给后端排掉
+      exclude: state.planProblems.map((problem) => `${problem.contestId}-${problem.index}`),
+    });
+    applySwap(data.fromKey, data.problem);
+    setStatus(`已换成 ${data.problem.contestId}${data.problem.index}`);
+  } catch (error) {
+    setStatus('没有换成功');
+    showHint(error.message, true);
+  }
+}
+
+async function undoSwap(fromKey) {
+  if (!state.handle) return;
+  try {
+    await postJson('/api/plan/swap/clear', {
+      handle: state.handle,
+      target: state.target,
+      fromKey,
+    });
+    await generatePlan(false, { scroll: false });
+    setStatus('已换回系统推荐的题');
+  } catch (error) {
+    setStatus('还原失败');
+    showHint(error.message, true);
+  }
+}
 
 $('blocked-list').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-unblock-contest]');
@@ -738,7 +841,8 @@ $('blocked-list').addEventListener('click', async (event) => {
 });
 
 $('load-btn').addEventListener('click', () => loadUser(false));
-$('plan-btn').addEventListener('click', () => generatePlan(false));
+// 这个按钮是「重新挑一批题」，要绕开计划快照，不能只是刷新一下
+$('plan-btn').addEventListener('click', () => generatePlan(true));
 
 $('target-range').addEventListener('input', (event) => {
   $('target-input').value = event.target.value;
@@ -1958,3 +2062,6 @@ async function restoreSession() {
 
 bindAppearance();
 restoreSession();
+// 启动时把上次的训练结果读出来。原来只在点「开始训练」之后才刷新，
+// 重启程序后「推题模型」那栏又会显示成「还没有训练过」。
+refreshTraining();

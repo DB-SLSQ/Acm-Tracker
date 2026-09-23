@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as cf from './lib/cf.js';
 import * as db from './lib/db.js';
 import { buildPlan, deriveProgress, rankFocusTags, toClientProblem } from './lib/plan.js';
-import { buildTagProfile, isNoiseTag } from './lib/knowledge.js';
+import { buildTagProfile, isNoiseTag, knowledgeAxis } from './lib/knowledge.js';
 import {
   analyzeVirtualSession,
   divisionFit,
@@ -233,6 +233,27 @@ function readSettings() {
   };
 }
 
+// 挑题算法或默认参数的版本号。改动到「同一份设置会挑出不同结果」时 +1，
+// 老的计划快照就自动失效、重挑一次。
+const PLAN_VERSION = 2;
+
+/**
+ * 计划指纹：这几个东西没变，就沿用上次那份计划。
+ *
+ * 故意不包含「做过的题」和「题库总数」——你做掉一道题、题库里多了新题，
+ * 都不该把整份计划打乱重排。
+ */
+function planSignature({ weekly, settings, model }) {
+  return JSON.stringify({
+    v: PLAN_VERSION,
+    weekly: Number.isFinite(weekly) && weekly > 0 ? Math.round(weekly) : 10,
+    floorGap: settings.floorGap ?? null,
+    tagShare: settings.tagShare ?? null,
+    modelTrainedAt: model?.trainedAt ?? null,
+    modelActive: Boolean(model && modelModule.isModelUseful(model)),
+  });
+}
+
 async function handlePlan(url) {
   const rawHandle = url.searchParams.get('handle');
   const target = Number(url.searchParams.get('target'));
@@ -255,24 +276,79 @@ async function handlePlan(url) {
   const submissions = db.getSubmissions(handleKey);
   const { solved, attempted } = deriveProgress(submissions);
 
+  // ---- 这一版开始，计划会「钉住」----
+  // 之前每次刷新都重新挑一遍：你做过的题会被悄悄换掉，计划一直在漂，
+  // 也看不出自己做到哪了。现在只有设置变了、或者点了「重新生成计划」才重挑。
+  const settings = readSettings();
+  const targetRounded = Math.round(target);
+  const signature = planSignature({ weekly, settings, model });
+  const saved = force ? null : db.getPlanSnapshot(handleKey, targetRounded);
+  const reusable = saved && saved.signature === signature ? saved : null;
+  const preferred = new Map();
+  if (reusable) {
+    let order = 0;
+    for (const stage of reusable.stages ?? []) {
+      for (const key of stage.keys ?? []) preferred.set(key, order++);
+    }
+  }
+
   const plan = buildPlan({
     user,
     solved,
     attempted,
     problems: db.getAllProblems(),
-      target: Math.round(target),
+      target: targetRounded,
       weekly: Number.isFinite(weekly) && weekly > 0 ? Math.round(weekly) : 10,
-      floorGap: readSettings().floorGap,
+      floorGap: settings.floorGap,
       // 设置里存的是百分数，算法里用 0~1 的比例
-      tagShare: normalizeTagShare(readSettings().tagShare),
+      tagShare: normalizeTagShare(settings.tagShare),
       model,
       // 题目年份偏好要用：老题在人气分上占便宜，靠比赛开始时间把新题提上来
       contestDates: new Map(db.getContests().map((contest) => [contest.id, contest.startTime])),
       // 用户手动屏蔽的题，永远不再推荐
       blocked: new Set(db.blockedKeys(handleKey)),
+      // 上一份计划里的题：优先保下来，做过的也留在原位
+      preferred: preferred.size ? preferred : null,
     });
 
-  const done = db.getProgress(handleKey, Math.round(target));
+  if (!reusable) {
+    db.savePlanSnapshot(
+      handleKey,
+      targetRounded,
+      signature,
+      plan.stageList.map((stage) => ({
+        index: stage.index,
+        keys: stage.problems.map((problem) => `${problem.contestId}-${problem.index}`),
+      })),
+    );
+  }
+  plan.generatedAt = reusable?.createdAt ?? Date.now();
+  plan.reused = Boolean(reusable);
+  if (reusable) {
+    plan.notes.unshift(
+      `这份计划是 ${new Date(plan.generatedAt).toLocaleDateString('zh-CN')} 定下来的：做过的题会留在原位、自动打勾，不会被换成别的题。` +
+        '想重新挑一批，点右上角的「重新生成计划」。',
+    );
+  }
+
+  const done = db.getProgress(handleKey, targetRounded);
+
+  // ---- 手动换过的题，按记录换回去 ----
+  applyPlanSwaps(plan, handleKey, targetRounded);
+
+  // ---- 自动打勾 ----
+  // 提交记录里已经通过的题，直接在题单里打上勾；手动取消过的题（progress 里有
+  // done=0 的记录）尊重用户的选择，不再自动勾上。
+  const manual = db.getProgressMap(handleKey, targetRounded);
+  const autoDone = [];
+  for (const stage of plan.stageList ?? []) {
+    for (const problem of stage.problems) {
+      const key = `${problem.contestId}-${problem.index}`;
+      if (solved.has(key) && !manual.has(key)) autoDone.push(key);
+    }
+  }
+  const doneList = [...new Set([...done, ...autoDone])];
+
   return {
     status: 200,
     body: {
@@ -283,10 +359,76 @@ async function handlePlan(url) {
         ratingHistory: db.getRatingHistory(handleKey),
       },
       problemsState,
-      done,
+      done: doneList,
+      doneAuto: autoDone,
+      doneManual: done,
+      swapCount: db.listPlanSwaps(handleKey, targetRounded).size,
       plan,
     },
   };
+}
+
+/**
+ * 把用户手动换过的题，按记录换回去。
+ *
+ * 换进来的那道题如果已经不满足条件（被屏蔽、被别的槽位占了、题库里没有了），
+ * 就保留原题——宁可回到默认推荐，也不要在计划里出现重复或失效的题。
+ */
+function applyPlanSwaps(plan, handleKey, target) {
+  const swaps = db.listPlanSwaps(handleKey, target);
+  if (!swaps.size) return plan;
+
+  const blocked = new Set(db.blockedKeys(handleKey));
+  const inPlan = new Set();
+  for (const stage of plan.stageList ?? []) {
+    for (const problem of stage.problems) inPlan.add(`${problem.contestId}-${problem.index}`);
+  }
+
+  const replacements = db.getProblemsByKeys([...swaps.values()]);
+  for (const stage of plan.stageList ?? []) {
+    stage.problems = stage.problems.map((problem) => {
+      const fromKey = `${problem.contestId}-${problem.index}`;
+      const toKey = swaps.get(fromKey);
+      if (!toKey) return problem;
+      const row = replacements.get(toKey);
+      if (!row || blocked.has(toKey) || inPlan.has(toKey)) return problem;
+      inPlan.delete(fromKey);
+      inPlan.add(toKey);
+      return { ...toClientProblem(row), swappedFrom: fromKey };
+    });
+  }
+  return plan;
+}
+
+/**
+ * 换一道题：同方向、难度最接近、你还没做过、也不在现有计划里。
+ *
+ * 题目星级/难度差优先，其次挑通过人数多的（更接近「标准题」而不是偏题怪题）。
+ * 找不到就放宽难度范围再找一次，还是没有就返回 404 让界面说清楚。
+ */
+function pickReplacement({ from, exclude, handleKey }) {
+  const blocked = new Set(db.blockedKeys(handleKey));
+  const fromAxes = new Set((from.tags ?? []).map((tag) => knowledgeAxis(tag)).filter(Boolean));
+  const candidates = db.getAllProblems().filter((problem) => {
+    if (problem.rating == null || from.rating == null) return false;
+    const key = `${problem.contestId}-${problem.index}`;
+    if (key === `${from.contestId}-${from.index}`) return false;
+    if (exclude.has(key) || blocked.has(key)) return false;
+    const axes = (problem.tags ?? []).map((tag) => knowledgeAxis(tag)).filter(Boolean);
+    return axes.some((axis) => fromAxes.has(axis));
+  });
+  if (!candidates.length) return null;
+
+  const rank = (limit) =>
+    candidates
+      .filter((problem) => Math.abs(problem.rating - from.rating) <= limit)
+      .sort((a, b) => {
+        const diff = Math.abs(a.rating - from.rating) - Math.abs(b.rating - from.rating);
+        if (diff !== 0) return diff;
+        return (b.solvedCount ?? 0) - (a.solvedCount ?? 0);
+      });
+
+  return rank(100)[0] ?? rank(200)[0] ?? rank(400)[0] ?? null;
 }
 
 function decorateContest(contest) {
@@ -783,6 +925,58 @@ async function route(req, res, url) {
       }
       db.setProgress(handleKey, target, contestId, String(body.index), Boolean(body.done));
       return sendJson(res, 200, { ok: true });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 换一道题：同方向、难度最接近、没做过、也不在现有计划里
+  if (pathname === '/api/plan/replace' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      const target = Math.round(Number(body.target));
+      const contestId = Number(body.contestId);
+      const index = String(body.index ?? '');
+      if (!handleKey || !Number.isFinite(target) || !Number.isFinite(contestId) || !index) {
+        return sendError(res, 400, '参数不完整');
+      }
+
+      const fromKey = `${contestId}-${index}`;
+      const from = db.getProblemsByKeys([fromKey]).get(fromKey);
+      if (!from) return sendError(res, 404, '题库里找不到这道题，先同步一次题库');
+
+      // 客户端传上来的「当前计划里已有的题」，再加上你已经做过的题
+      const exclude = new Set(
+        (Array.isArray(body.exclude) ? body.exclude : []).map(String).filter(Boolean).slice(0, 800),
+      );
+      for (const key of deriveProgress(db.getSubmissions(handleKey)).solved.keys()) exclude.add(key);
+
+      const picked = pickReplacement({ from, exclude, handleKey });
+      if (!picked) return sendError(res, 404, '这个方向、这个难度已经没有别的题了，可以直接屏蔽掉它');
+
+      const toKey = `${picked.contestId}-${picked.index}`;
+      db.setPlanSwap(handleKey, target, fromKey, toKey);
+      return sendJson(res, 200, {
+        fromKey,
+        problem: { ...toClientProblem(picked), swappedFrom: fromKey },
+      });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 撤销换题：只撤一道，或者把当前目标的换题记录全清掉
+  if (pathname === '/api/plan/swap/clear' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      const target = Math.round(Number(body.target));
+      if (!handleKey || !Number.isFinite(target)) return sendError(res, 400, '参数不完整');
+      if (body.all) db.clearPlanSwaps(handleKey, target);
+      else if (body.fromKey) db.clearPlanSwap(handleKey, target, String(body.fromKey));
+      else return sendError(res, 400, '参数不完整');
+      return sendJson(res, 200, { ok: true, swapCount: db.listPlanSwaps(handleKey, target).size });
     } catch (error) {
       return sendError(res, 400, error.message);
     }
