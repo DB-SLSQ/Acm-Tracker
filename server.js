@@ -8,8 +8,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import * as cf from './lib/cf.js';
 import * as db from './lib/db.js';
-import { buildPlan, deriveProgress, rankFocusTags, toClientProblem } from './lib/plan.js';
-import { buildTagProfile, isNoiseTag, knowledgeAxis } from './lib/knowledge.js';
+import { buildPlan, deriveProgress, problemUrl, rankFocusTags, toClientProblem } from './lib/plan.js';
+import { buildKnowledgeProfile, buildTagProfile, isNoiseTag, knowledgeAxis } from './lib/knowledge.js';
 import {
   analyzeVirtualSession,
   divisionFit,
@@ -229,6 +229,10 @@ function readSettings() {
       tagShare: raw.tag_share === undefined ? null : Number(raw.tag_share),
       // 训练计划里是否隐藏标签（题单不显示算法方向，自己判断）
       hideTags: raw.hide_tags === '1',
+      // 每天打卡提醒的时间（'HH:MM'，null = 关闭）
+      remindAt: raw.remind_at ?? null,
+      // 上一次提醒是哪天（'YYYY-MM-DD'），避免同一天反复弹
+      remindLast: raw.remind_last ?? null,
       updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
   };
 }
@@ -243,7 +247,7 @@ const PLAN_VERSION = 2;
  * 故意不包含「做过的题」和「题库总数」——你做掉一道题、题库里多了新题，
  * 都不该把整份计划打乱重排。
  */
-function planSignature({ weekly, settings, model }) {
+function planSignature({ weekly, settings, model, bandShift = 0 }) {
   return JSON.stringify({
     v: PLAN_VERSION,
     weekly: Number.isFinite(weekly) && weekly > 0 ? Math.round(weekly) : 10,
@@ -251,7 +255,56 @@ function planSignature({ weekly, settings, model }) {
     tagShare: settings.tagShare ?? null,
     modelTrainedAt: model?.trainedAt ?? null,
     modelActive: Boolean(model && modelModule.isModelUseful(model)),
+    bandShift: Math.round(bandShift) || 0,
   });
+}
+
+/** 每完成这么多题，就重新看一次最近的表现。 */
+const ADJUST_ROUND = 20;
+/** 一轮一轮挪，最多上下各挪 150 分，免得越跑越偏。 */
+const ADJUST_LIMIT = 150;
+
+/**
+ * 难度自适应：每完成一轮（20 题），按最近这一轮的表现把练习区间挪 50 分。
+ *
+ * 判据只看「首次通过前提交了几次」——这个数据在 submissions 里是现成的：
+ *   - 平均 ≤1 次：基本是独立做出来的，往上挪 50
+ *   - 平均 ≥3 次：卡得比较久，往下挪 50
+ *   - 中间：不动
+ *
+ * 没做满一轮就什么都不改。挪动和理由都写进 plan_adjust，计划说明里会念出来。
+ * 注意：这个只在「重新生成计划」时生效，不会动你手上这份计划。
+ */
+function evaluateBandAdjustment(handleKey, target, previousSnapshot, solved) {
+  const state = db.getPlanAdjust(handleKey, target);
+  if (!previousSnapshot) return { ...state, changed: false };
+
+  // 口径是「一共新做出来多少道题」，不是「当前计划里打了几个勾」。
+  // 因为重新生成计划以后，做过的题会离开计划，按计划算的话第二轮永远凑不满。
+  const solvedCount = solved.size;
+  const finished = Math.max(0, solvedCount - state.evaluatedDone);
+  if (finished < ADJUST_ROUND) return { ...state, changed: false };
+
+  const recent = [...solved.values()]
+    .map((row) => ({ at: row?.at ?? 0, attempts: row?.attempts ?? 0 }))
+    .sort((a, b) => b.at - a.at)
+    .slice(0, ADJUST_ROUND);
+  const avgAttempts = recent.reduce((sum, row) => sum + row.attempts, 0) / recent.length;
+
+  let delta = 0;
+  let how = '难度刚好，先不动';
+  if (avgAttempts <= 1) {
+    delta = 50;
+    how = '基本是独立做出来的';
+  } else if (avgAttempts >= 3) {
+    delta = -50;
+    how = '卡得比较久';
+  }
+
+  const shift = Math.max(-ADJUST_LIMIT, Math.min(ADJUST_LIMIT, state.shift + delta));
+  const reason = `最近这一轮 ${recent.length} 题平均提交 ${avgAttempts.toFixed(1)} 次（${how}）`;
+  db.savePlanAdjust(handleKey, target, shift, solvedCount, reason);
+  return { shift, evaluatedDone: solvedCount, reason, delta, changed: true, avgAttempts };
 }
 
 async function handlePlan(url) {
@@ -281,9 +334,19 @@ async function handlePlan(url) {
   // 也看不出自己做到哪了。现在只有设置变了、或者点了「重新生成计划」才重挑。
   const settings = readSettings();
   const targetRounded = Math.round(target);
-  const signature = planSignature({ weekly, settings, model });
-  const saved = force ? null : db.getPlanSnapshot(handleKey, targetRounded);
-  const reusable = saved && saved.signature === signature ? saved : null;
+  const adjustState = db.getPlanAdjust(handleKey, targetRounded);
+  const signature = planSignature({ weekly, settings, model, bandShift: adjustState.shift });
+  // 旧快照不管强不强制都要读出来：一个是看能不能沿用，另一个是评估「你上一份做到哪了」。
+  // （点「重新生成计划」时 force=true，但那时候恰恰最需要这份旧快照。）
+  const previous = db.getPlanSnapshot(handleKey, targetRounded);
+  const reusable = !force && previous && previous.signature === signature ? previous : null;
+
+  // 要重挑的时候（第一次、换了设置、点了重新生成），顺便看要不要按表现挪区间。
+  // 评估用的是重挑之前那份计划：你把它做到什么程度了，才算得出来。
+  const adjust = reusable
+    ? { ...adjustState, changed: false }
+    : evaluateBandAdjustment(handleKey, targetRounded, previous, solved);
+  const finalSignature = planSignature({ weekly, settings, model, bandShift: adjust.shift });
   const preferred = new Map();
   if (reusable) {
     let order = 0;
@@ -309,13 +372,15 @@ async function handlePlan(url) {
       blocked: new Set(db.blockedKeys(handleKey)),
       // 上一份计划里的题：优先保下来，做过的也留在原位
       preferred: preferred.size ? preferred : null,
+      // 按最近一轮的表现整体挪过的练习区间
+      bandShift: adjust.shift,
     });
 
   if (!reusable) {
     plan.generatedAt = db.savePlanSnapshot(
       handleKey,
       targetRounded,
-      signature,
+      finalSignature,
       plan.stageList.map((stage) => ({
         index: stage.index,
         keys: stage.problems.map((problem) => `${problem.contestId}-${problem.index}`),
@@ -325,10 +390,36 @@ async function handlePlan(url) {
     plan.generatedAt = reusable.createdAt;
   }
   plan.reused = Boolean(reusable);
+
+  // 每周记一次各方向水平，用来画成长曲线。这东西只能往后攒，早几周的数据补不回来。
+  try {
+    db.saveGrowthSnapshot(
+      handleKey,
+      weekStartKey(Math.floor(Date.now() / 1000)),
+      (plan.axes ?? []).map((row) => ({
+        axis: row.axis,
+        representative: row.representative,
+        count: row.count,
+      })),
+    );
+  } catch {
+    /* 快照记不上不该影响出计划 */
+  }
   if (reusable) {
     plan.notes.unshift(
       `这份计划是 ${new Date(plan.generatedAt).toLocaleDateString('zh-CN')} 定下来的：做过的题会留在原位、自动打勾，不会被换成别的题。` +
         '想重新挑一批，点右上角的「重新生成计划」。',
+    );
+  }
+  // 区间挪过就在说明里讲清楚：上一轮多少分到多少分，为什么挪
+  if (adjust.changed && adjust.delta) {
+    const band = plan.stageList[0]?.band ?? null;
+    // 上一轮的区间 = 这一轮的区间往回退掉这次的增量（不是退掉累计的 shift）
+    const before = band ? [band[0] - adjust.delta, band[1] - adjust.delta] : null;
+    plan.notes.unshift(
+      before
+        ? `练习区间按你的表现调整了：上一轮练 ${before[0]}~${before[1]} 分，${adjust.reason}，这一轮改成 ${band[0]}~${band[1]} 分。`
+        : `练习区间按你的表现调整了：${adjust.reason}。`,
     );
   }
 
@@ -336,6 +427,23 @@ async function handlePlan(url) {
 
   // ---- 手动换过的题，按记录换回去 ----
   applyPlanSwaps(plan, handleKey, targetRounded);
+  // ---- 手动「放到最后」的题，挪到本阶段末尾 ----
+  applyPlanDefer(plan, handleKey, targetRounded);
+
+  // ---- 给每道题补上「方向」和「年份」----
+  // 题单筛选要用：方向来自 tag 归类，年份来自比赛开始时间。
+  const contestDateMap = new Map(db.getContests().map((contest) => [contest.id, contest.startTime]));
+  for (const stage of plan.stageList ?? []) {
+    stage.problems = stage.problems.map((problem) => {
+      const axes = [...new Set((problem.tags ?? []).map((tag) => knowledgeAxis(tag)).filter(Boolean))];
+      const startTime = contestDateMap.get(problem.contestId);
+      return {
+        ...problem,
+        axes,
+        year: startTime ? new Date(startTime * 1000).getFullYear() : null,
+      };
+    });
+  }
 
   // ---- 自动打勾 ----
   // 提交记录里已经通过的题，直接在题单里打上勾；手动取消过的题（progress 里有
@@ -349,6 +457,21 @@ async function handlePlan(url) {
     }
   }
   const doneList = [...new Set([...done, ...autoDone])];
+
+  // ---- 手动塞进某天的补题 ----
+  // 这些不参与配额，只挂在某一天上；日程当天和「今天」卡片会一起列出来。
+  const extraRows = db.listScheduleExtras(handleKey);
+  const extrasByDate = {};
+  if (extraRows.length) {
+    const extraProblems = db.getProblemsByKeys(
+      extraRows.map((row) => `${row.contestId}-${row.index}`),
+    );
+    for (const row of extraRows) {
+      const problem = extraProblems.get(`${row.contestId}-${row.index}`);
+      if (!problem) continue;
+      (extrasByDate[row.date] ??= []).push({ ...toClientProblem(problem), extra: true });
+    }
+  }
 
   return {
     status: 200,
@@ -364,9 +487,234 @@ async function handlePlan(url) {
       doneAuto: autoDone,
       doneManual: done,
       swapCount: db.listPlanSwaps(handleKey, targetRounded).size,
+      extras: extrasByDate,
       plan,
     },
   };
+}
+
+/** 某天所在自然周的周一（本地时间）。报告按周看，周一开始。 */
+function weekStartKey(seconds) {
+  const date = new Date(seconds * 1000);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+const median = (numbers) => {
+  if (!numbers.length) return 0;
+  const sorted = [...numbers].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+/**
+ * 某个账号的「各方向 75 分位」。多账号对比要用。
+ *
+ * 口径和训练计划里的一致：忽略比当前 rating 低一段的签到题，
+ * 否则两个人做过多少签到题会直接影响对比结果。
+ */
+function axisProfileOf(handleKey) {
+  const user = db.getUser(handleKey);
+  const problems = db.getAllProblems();
+  const { solved } = deriveProgress(db.getSubmissions(handleKey));
+  const solvedProblems = problems.filter(
+    (problem) => problem.rating && solved.has(`${problem.contestId}-${problem.index}`),
+  );
+
+  const current = user?.rating && user.rating > 0 ? user.rating : 800;
+  const floorGap = readSettings().floorGap;
+  const floorDistance = Number.isFinite(floorGap) && floorGap >= 0 ? floorGap : 400;
+  const analysisFloor =
+    floorDistance === 0 ? 800 : Math.max(800, Math.round((current - floorDistance) / 100) * 100);
+
+  const tagProfile = buildTagProfile(solvedProblems, { floor: analysisFloor });
+  return {
+    user,
+    solvedCount: solved.size,
+    axes: buildKnowledgeProfile(solvedProblems, tagProfile, { floor: analysisFloor }),
+  };
+}
+
+/**
+ * 训练强度 × 比赛结果。
+ *
+ * 两件事：
+ * 1. 按周统计做题量和平均难度（近 N 周），做一条曲线；
+ * 2. 每场 rated 比赛，回头看它前两周做了多少题、平均多难，和这场涨跌分放一起。
+ *
+ * 「赛前两周没有训练记录」这种情况会明确写出来，不用猜。
+ */
+function buildGrowthReport(handleKey, weeks) {
+  const submissions = db.getSubmissions(handleKey);
+  const { solved } = deriveProgress(submissions);
+  const problemMap = new Map(db.getAllProblems().map((problem) => [`${problem.contestId}-${problem.index}`, problem]));
+
+  const solvedRows = [...solved.entries()].map(([key, info]) => ({
+    key,
+    at: info?.at ?? 0,
+    rating: problemMap.get(key)?.rating ?? null,
+  }));
+
+  // 按周归集：这周首次通过了多少题、平均难度多少
+  const buckets = new Map();
+  for (const row of solvedRows) {
+    if (!row.at) continue;
+    const week = weekStartKey(row.at);
+    const bucket = buckets.get(week) ?? { solved: 0, ratingSum: 0, ratingCount: 0 };
+    bucket.solved += 1;
+    if (row.rating) {
+      bucket.ratingSum += row.rating;
+      bucket.ratingCount += 1;
+    }
+    buckets.set(week, bucket);
+  }
+
+  const now = new Date();
+  const series = [];
+  for (let back = weeks - 1; back >= 0; back -= 1) {
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - back * 7);
+    const week = weekStartKey(Math.floor(date.getTime() / 1000));
+    const bucket = buckets.get(week) ?? { solved: 0, ratingSum: 0, ratingCount: 0 };
+    series.push({
+      week,
+      solved: bucket.solved,
+      avgRating: bucket.ratingCount ? Math.round(bucket.ratingSum / bucket.ratingCount) : null,
+    });
+  }
+
+  // 比赛：涨跌分用「这次赛后分 − 上场赛后分」算，两场之间没有别的比赛，所以是准的
+  const history = db.getRatingHistory(handleKey);
+  const windowSeconds = 14 * 86400;
+  const oldestWeek = series[0]?.week ?? '';
+  const weeklyMedian = median(series.filter((row) => row.solved > 0).map((row) => row.solved));
+
+  const contests = [];
+  let previousRating = null;
+  for (const entry of history) {
+    const delta = previousRating == null || entry.rating == null ? null : entry.rating - previousRating;
+    if (entry.rating != null) previousRating = entry.rating;
+    const at = entry.at ?? 0;
+    const before = solvedRows.filter((row) => row.at > at - windowSeconds && row.at <= at);
+    const ratedBefore = before.filter((row) => row.rating);
+    const avgRatingBefore = ratedBefore.length
+      ? Math.round(ratedBefore.reduce((sum, row) => sum + row.rating, 0) / ratedBefore.length)
+      : null;
+
+    // 比的是「两周的量」：平时的周中位数 ×2 才是这两周的期望值，
+    // 直接拿两周的量和一周的中位数比，几乎人人都成了「练得多」。
+    const expected = weeklyMedian * 2;
+    let tag;
+    if (!before.length) tag = '赛前两周没有训练记录';
+    else if (expected && before.length >= expected * 1.5) tag = '赛前练得比平时多';
+    else if (expected && before.length <= expected * 0.5) tag = '赛前练得比平时少';
+    else tag = '赛前训练量和平时差不多';
+
+    contests.push({
+      contestId: entry.contestId,
+      name: entry.name,
+      at,
+      rating: entry.rating,
+      delta,
+      solvedBefore: before.length,
+      avgRatingBefore,
+      tag,
+      week: weekStartKey(at),
+    });
+  }
+  // 只留曲线覆盖范围内的比赛
+  const recentContests = contests.filter((contest) => contest.week >= oldestWeek);
+
+  // 方向成长：每周一份快照，攒够两份才能看变化
+  const snapshots = db.listGrowthSnapshots(handleKey, 12);
+  const axisTrend = [];
+  if (snapshots.length >= 2) {
+    const first = snapshots[0];
+    const last = snapshots[snapshots.length - 1];
+    const before = new Map((first.axes ?? []).map((row) => [row.axis, row.representative]));
+    for (const row of last.axes ?? []) {
+      const was = before.get(row.axis);
+      if (was == null || row.representative == null || row.count === 0) continue;
+      axisTrend.push({
+        axis: row.axis,
+        before: was,
+        now: row.representative,
+        change: row.representative - was,
+      });
+    }
+    axisTrend.sort((a, b) => b.change - a.change);
+  }
+
+  return {
+    weeks: series,
+    contests: recentContests,
+    axisTrend,
+    axisSnapshots: snapshots.length,
+    summary: {
+      weeks: series.length,
+      solved: series.reduce((sum, row) => sum + row.solved, 0),
+      avgRating: (() => {
+        const rated = series.filter((row) => row.avgRating);
+        return rated.length ? Math.round(rated.reduce((sum, row) => sum + row.avgRating, 0) / rated.length) : null;
+      })(),
+      contests: recentContests.length,
+      delta: recentContests.reduce((sum, row) => sum + (row.delta ?? 0), 0),
+      weeklyMedian,
+    },
+  };
+}
+
+/**
+ * 补题队列：提交过但没通过的题。
+ *
+ * 数据来自 submissions，所以「补完自动出队」不用额外记账——做出来了它就不在
+ * 「没通过」里了。这里只额外排掉两种：手动点过「已补」的、以及被屏蔽的。
+ *
+ * 排序默认按搁置时间（最久没碰的排前面），也可以按难度排。
+ */
+function buildReviewQueue(handleKey, sort) {
+  const submissions = db.getSubmissions(handleKey);
+  const { solved, attempted } = deriveProgress(submissions);
+
+  // 每道没通过的题，最后一次提交是什么时候
+  const lastAt = new Map();
+  for (const row of submissions) {
+    const key = `${row.contestId}-${row.index}`;
+    if (!attempted.has(key)) continue;
+    const at = row.createdAt ?? 0;
+    if ((lastAt.get(key) ?? 0) < at) lastAt.set(key, at);
+  }
+
+  const skip = db.listReviewDone(handleKey);
+  const blocked = new Set(db.blockedKeys(handleKey));
+  const keys = [...attempted.keys()].filter((key) => !skip.has(key) && !blocked.has(key));
+  const problems = db.getProblemsByKeys(keys);
+  const now = Math.floor(Date.now() / 1000);
+
+  const items = keys.map((key) => {
+    const problem = problems.get(key);
+    const at = lastAt.get(key) ?? null;
+    const contestId = Number(key.slice(0, key.indexOf('-')));
+    const index = key.slice(key.indexOf('-') + 1);
+    return {
+      contestId,
+      index,
+      name: problem?.name ?? '（题库里没有这道题，先同步一次题库）',
+      rating: problem?.rating ?? null,
+      tags: problem?.tags ?? [],
+      // gym 的题目路径和普通题库不一样，统一走同一个函数
+      url: problemUrl(contestId, index),
+      attempts: attempted.get(key) ?? 0,
+      lastAt: at,
+      idleDays: at ? Math.max(0, Math.round((now - at) / 86400)) : null,
+    };
+  });
+
+  if (sort === 'rating') items.sort((a, b) => (a.rating ?? 9999) - (b.rating ?? 9999));
+  else if (sort === 'rating-desc') items.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
+  else items.sort((a, b) => (a.lastAt ?? 0) - (b.lastAt ?? 0));
+  return items;
 }
 
 /**
@@ -405,7 +753,8 @@ function applyPlanSwaps(plan, handleKey, target) {
  * 换一道题：同方向、难度最接近、你还没做过、也不在现有计划里。
  *
  * 题目星级/难度差优先，其次挑通过人数多的（更接近「标准题」而不是偏题怪题）。
- * 找不到就放宽难度范围再找一次，还是没有就返回 404 让界面说清楚。
+ * 难度差硬卡在 100 分以内：放太宽就不是「换一道差不多的」了，
+ * 那种情况下更该屏蔽这道题，而不是让推荐算法硬凑。
  */
 function pickReplacement({ from, exclude, handleKey }) {
   const blocked = new Set(db.blockedKeys(handleKey));
@@ -420,16 +769,37 @@ function pickReplacement({ from, exclude, handleKey }) {
   });
   if (!candidates.length) return null;
 
-  const rank = (limit) =>
+  return (
     candidates
-      .filter((problem) => Math.abs(problem.rating - from.rating) <= limit)
+      .filter((problem) => Math.abs(problem.rating - from.rating) <= 100)
       .sort((a, b) => {
         const diff = Math.abs(a.rating - from.rating) - Math.abs(b.rating - from.rating);
         if (diff !== 0) return diff;
         return (b.solvedCount ?? 0) - (a.solvedCount ?? 0);
-      });
+      })[0] ?? null
+  );
+}
 
-  return rank(100)[0] ?? rank(200)[0] ?? rank(400)[0] ?? null;
+/**
+ * 把「放到本轮最后」的题挪到它所在阶段的末尾。
+ *
+ * 只调这一阶段内的顺序，不动配额、不动别的题；顺序变了日程安排也就跟着变，
+ * 所以这不是「只改显示」。
+ */
+function applyPlanDefer(plan, handleKey, target) {
+  const deferred = db.listPlanDefer(handleKey, target);
+  if (!deferred.size) return plan;
+  for (const stage of plan.stageList ?? []) {
+    const kept = [];
+    const moved = [];
+    for (const problem of stage.problems) {
+      const key = `${problem.contestId}-${problem.index}`;
+      if (deferred.has(key)) moved.push({ ...problem, deferred: true });
+      else kept.push(problem);
+    }
+    stage.problems = [...kept, ...moved];
+  }
+  return plan;
 }
 
 function decorateContest(contest) {
@@ -679,6 +1049,18 @@ async function route(req, res, url) {
       }
       // 训练计划里是否隐藏标签
       if (body.hideTags !== undefined) patch.hide_tags = body.hideTags ? '1' : '';
+      // 打卡提醒时间：'HH:MM'，空串表示关闭
+      if (body.remindAt !== undefined) {
+        const value = String(body.remindAt ?? '').trim();
+        if (value && !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+          return sendError(res, 400, '提醒时间要写成 09:30 这样');
+        }
+        patch.remind_at = value;
+      }
+      // 记「今天已经提醒过」，防止同一天重复弹
+      if (body.remindLast !== undefined) {
+        patch.remind_last = String(body.remindLast ?? '').slice(0, 10);
+      }
       db.saveSettings(patch);
       return sendJson(res, 200, { settings: readSettings() });
     } catch (error) {
@@ -958,10 +1340,32 @@ async function route(req, res, url) {
 
       const toKey = `${picked.contestId}-${picked.index}`;
       db.setPlanSwap(handleKey, target, fromKey, toKey);
+      // 换到第 3 次就别再换了：多半是这道题不适合你，建议直接屏蔽
+      const swapped = db.bumpSwapCount(handleKey, fromKey);
       return sendJson(res, 200, {
         fromKey,
         problem: { ...toClientProblem(picked), swappedFrom: fromKey },
+        swappedTimes: swapped,
+        hint:
+          swapped >= 3
+            ? `这道题已经换过 ${swapped} 次了。要不直接屏蔽它？后面不再给你推荐这道题。`
+            : null,
       });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 放到本轮最后 / 取消
+  if (pathname === '/api/plan/defer' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      const target = Math.round(Number(body.target));
+      const key = String(body.key ?? '');
+      if (!handleKey || !Number.isFinite(target) || !key) return sendError(res, 400, '参数不完整');
+      db.setPlanDefer(handleKey, target, key, Boolean(body.deferred));
+      return sendJson(res, 200, { ok: true, deferred: db.listPlanDefer(handleKey, target).size });
     } catch (error) {
       return sendError(res, 400, error.message);
     }
@@ -978,6 +1382,145 @@ async function route(req, res, url) {
       else if (body.fromKey) db.clearPlanSwap(handleKey, target, String(body.fromKey));
       else return sendError(res, 400, '参数不完整');
       return sendJson(res, 200, { ok: true, swapCount: db.listPlanSwaps(handleKey, target).size });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 补题队列：提交过但没通过的题
+  if (pathname === '/api/review-queue' && req.method === 'GET') {
+    const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
+    if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
+    const sort = url.searchParams.get('sort') ?? 'stale';
+    const items = buildReviewQueue(handleKey, sort);
+    return sendJson(res, 200, { total: items.length, sort, items });
+  }
+
+  // 成长报告：每周做题量/难度 + 比赛前后对照
+  if (pathname === '/api/growth' && req.method === 'GET') {
+    const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
+    if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
+    const weeks = Math.max(4, Math.min(52, Number(url.searchParams.get('weeks') || 26)));
+    return sendJson(res, 200, buildGrowthReport(handleKey, weeks));
+  }
+
+  // 用过的账号列表（多账号切换用）
+  if (pathname === '/api/handles' && req.method === 'GET') {
+    return sendJson(res, 200, { handles: db.listKnownHandles() });
+  }
+
+  // 两个账号对比：各方向 75 分位、每周做题量、同一道题谁先做出来
+  if (pathname === '/api/compare' && req.method === 'GET') {
+    const baseKey = db.normalizeHandle(url.searchParams.get('handle'));
+    const otherKey = db.normalizeHandle(url.searchParams.get('other'));
+    if (!baseKey || !otherKey) return sendError(res, 400, '需要两个账号');
+    if (baseKey === otherKey) return sendError(res, 400, '选另一个账号来对比');
+
+    const base = axisProfileOf(baseKey);
+    const other = axisProfileOf(otherKey);
+    const baseSolved = deriveProgress(db.getSubmissions(baseKey)).solved;
+    const otherSolved = deriveProgress(db.getSubmissions(otherKey)).solved;
+
+    // 方向差异
+    const axes = base.axes.map((row, index) => {
+      const peer = other.axes[index];
+      const left = row.count ? row.representative : null;
+      const right = peer?.count ? peer.representative : null;
+      return {
+        axis: row.axis,
+        base: left,
+        other: right,
+        diff: left != null && right != null ? left - right : null,
+      };
+    });
+
+    // 同一道题谁先做出来（只列两边都做过的）
+    const problemMap = new Map(db.getAllProblems().map((problem) => [`${problem.contestId}-${problem.index}`, problem]));
+    const shared = [];
+    for (const [key, info] of baseSolved) {
+      const peer = otherSolved.get(key);
+      if (!peer) continue;
+      const problem = problemMap.get(key);
+      shared.push({
+        contestId: problem?.contestId ?? Number(key.slice(0, key.indexOf('-'))),
+        index: problem?.index ?? key.slice(key.indexOf('-') + 1),
+        name: problem?.name ?? '（题库里没有这道题）',
+        rating: problem?.rating ?? null,
+        baseAt: info?.at ?? null,
+        otherAt: peer?.at ?? null,
+        first: (info?.at ?? 0) < (peer?.at ?? 0) ? 'base' : 'other',
+      });
+    }
+    shared.sort((a, b) => Math.max(b.baseAt ?? 0, b.otherAt ?? 0) - Math.max(a.baseAt ?? 0, a.otherAt ?? 0));
+
+    return sendJson(res, 200, {
+      base: {
+        handle: baseKey,
+        display: base.user?.displayHandle ?? baseKey,
+        rating: base.user?.rating ?? null,
+        maxRating: base.user?.maxRating ?? null,
+        solvedCount: base.solvedCount,
+        weekly: buildGrowthReport(baseKey, 26).weeks,
+      },
+      other: {
+        handle: otherKey,
+        display: other.user?.displayHandle ?? otherKey,
+        rating: other.user?.rating ?? null,
+        maxRating: other.user?.maxRating ?? null,
+        solvedCount: other.solvedCount,
+        weekly: buildGrowthReport(otherKey, 26).weeks,
+      },
+      axes,
+      shared: shared.slice(0, 40),
+      sharedCount: shared.length,
+    });
+  }
+
+  // 队列里标「已补 / 不再提示」，或者撤销这个标记
+  if (pathname === '/api/review-queue/done' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      const contestId = Number(body.contestId);
+      if (!handleKey || !Number.isFinite(contestId) || !body.index) {
+        return sendError(res, 400, '参数不完整');
+      }
+      db.setReviewDone(handleKey, contestId, String(body.index), Boolean(body.done));
+      return sendJson(res, 200, { ok: true, total: buildReviewQueue(handleKey, 'stale').length });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 把一道补题塞进某一天（默认今天）
+  if (pathname === '/api/schedule/extra' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      const date = String(body.date ?? '');
+      const contestId = Number(body.contestId);
+      if (!handleKey || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(contestId) || !body.index) {
+        return sendError(res, 400, '参数不完整');
+      }
+      db.addScheduleExtra(handleKey, date, contestId, String(body.index));
+      return sendJson(res, 200, { ok: true });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 从某一天里拿掉额外安排的题
+  if (pathname === '/api/schedule/extra' && req.method === 'DELETE') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      const date = String(body.date ?? '');
+      const contestId = Number(body.contestId);
+      if (!handleKey || !date || !Number.isFinite(contestId) || !body.index) {
+        return sendError(res, 400, '参数不完整');
+      }
+      db.removeScheduleExtra(handleKey, date, contestId, String(body.index));
+      return sendJson(res, 200, { ok: true });
     } catch (error) {
       return sendError(res, 400, error.message);
     }

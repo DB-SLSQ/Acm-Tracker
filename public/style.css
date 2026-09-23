@@ -1743,6 +1743,23 @@ input[type="number"]:focus {
 }
 
 /* 由提交记录自动打勾的标记 */
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.deferred-tag {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--warn, #d9a441) 20%, transparent);
+  color: var(--warn, #d9a441);
+  vertical-align: middle;
+}
+
 .auto-done {
   display: inline-block;
   margin-left: 7px;

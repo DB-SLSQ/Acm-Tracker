@@ -20,6 +20,8 @@
           <button type="button" class="qq-pill" id="qq-toggle" title="点击显示群二维码">
             <span class="qq-badge">群</span>交流群 1124017564
           </button>
+          <!-- 多账号：切换只改当前用哪个账号，数据按账号分开存 -->
+          <select class="handle-switch" id="handle-switch" title="切换账号"></select>
           <div class="theme-switch" id="theme-switch">
             <button type="button" class="theme-btn" data-theme-value="dark">暗色</button>
             <button type="button" class="theme-btn" data-theme-value="light">亮色</button>
@@ -39,6 +41,8 @@
           <a href="#panel-heatmap">活动记录</a>
           <a href="#panel-platforms">平台数据</a>
           <a href="#panel-records">做题记录</a>
+          <a href="#panel-review">补题队列</a>
+          <a href="#panel-growth">成长</a>
           <a href="#panel-tags">能力画像</a>
           <a href="#panel-settings">设置</a>
           <span class="subnav-spacer"></span>
@@ -103,6 +107,23 @@
         <div class="panel-head">
           <h2>训练计划</h2>
           <p id="plan-summary"></p>
+        </div>
+        <!-- 题单筛选与导出：题多了以后光靠眼翻不现实 -->
+        <div class="plan-filter" id="plan-filter">
+          <input id="plan-filter-keyword" type="text" placeholder="搜题号或题名，例如 1690 或 Segment" />
+          <select id="plan-filter-axis">
+            <option value="">全部方向</option>
+          </select>
+          <select id="plan-filter-year">
+            <option value="">全部年份</option>
+          </select>
+          <input id="plan-filter-min" type="number" min="800" max="4000" step="50" placeholder="最低分" />
+          <input id="plan-filter-max" type="number" min="800" max="4000" step="50" placeholder="最高分" />
+          <button type="button" class="btn" id="plan-filter-reset">重置</button>
+          <span class="plan-filter-count" id="plan-filter-count"></span>
+          <span class="plan-filter-spacer"></span>
+          <button type="button" class="btn" id="plan-export-md" title="导出成 Markdown 表格，可以直接粘到群里">导出 MD</button>
+          <button type="button" class="btn" id="plan-export-csv">导出 CSV</button>
         </div>
         <div class="plan-stages" id="plan-stages"></div>
         <ul class="notes" id="plan-notes"></ul>
@@ -204,6 +225,47 @@
         </div>
       </section>
 
+      <section class="panel hidden" id="panel-review">
+        <div class="panel-head">
+          <h2>补题队列</h2>
+          <p id="review-summary"></p>
+        </div>
+        <div class="review-toolbar" id="review-toolbar">
+          <button type="button" class="btn active" data-review-sort="stale">搁置最久的排前面</button>
+          <button type="button" class="btn" data-review-sort="rating">难度从低到高</button>
+          <button type="button" class="btn" data-review-sort="rating-desc">难度从高到低</button>
+        </div>
+        <div class="record-list" id="review-list"></div>
+      </section>
+
+      <section class="panel hidden" id="panel-growth">
+        <div class="panel-head">
+          <h2>成长</h2>
+          <p id="growth-summary"></p>
+        </div>
+        <div class="growth-chart" id="growth-chart"></div>
+        <div class="panel-head sub">
+          <h2>训练强度 × 比赛结果</h2>
+          <p>每场 rated 比赛，回头看它前两周做了多少题、平均什么难度。看久了就知道自己哪种节奏涨分。</p>
+        </div>
+        <div id="growth-contests"></div>
+        <div class="panel-head sub">
+          <h2>方向成长</h2>
+          <p id="growth-axes-hint"></p>
+        </div>
+        <div id="growth-axes"></div>
+
+        <div class="panel-head sub">
+          <h2>和另一个账号比</h2>
+          <p id="compare-hint">把两个账号叠在一起看：各方向 75 分位差多少、同一道题谁先做出来。</p>
+        </div>
+        <div class="review-toolbar">
+          <select id="compare-handle"><option value="">选一个账号…</option></select>
+          <button type="button" class="btn" id="compare-clear">清除对比</button>
+        </div>
+        <div id="compare-result"></div>
+      </section>
+
       <section class="panel hidden" id="panel-tags">
         <div class="panel-head">
           <h2>能力画像</h2>
@@ -265,6 +327,21 @@
           <input type="checkbox" id="hide-tags" />
           <span>隐藏题目里的算法标签</span>
         </label>
+
+        <h3 class="settings-title">打卡提醒</h3>
+        <p class="subtle">
+          到点当天还有没打勾的题，就让系统弹一条通知。只在你开着程序的时候生效，
+          不联网、不发任何数据；做完了或者已经提醒过就不会再打扰。
+        </p>
+        <div class="platform-row">
+          <div class="sched-field">
+            <label for="remind-at">每天提醒时间</label>
+            <input id="remind-at" type="time" />
+          </div>
+          <button class="btn primary" id="remind-save">保存提醒</button>
+          <button class="btn" id="remind-off">关闭提醒</button>
+        </div>
+        <p class="hint" id="remind-hint">默认关闭。</p>
 
         <h3 class="settings-title">推题模型</h3>
         <p class="subtle">
