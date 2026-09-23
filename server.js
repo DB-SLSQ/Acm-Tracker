@@ -312,7 +312,7 @@ async function handlePlan(url) {
     });
 
   if (!reusable) {
-    db.savePlanSnapshot(
+    plan.generatedAt = db.savePlanSnapshot(
       handleKey,
       targetRounded,
       signature,
@@ -321,8 +321,9 @@ async function handlePlan(url) {
         keys: stage.problems.map((problem) => `${problem.contestId}-${problem.index}`),
       })),
     );
+  } else {
+    plan.generatedAt = reusable.createdAt;
   }
-  plan.generatedAt = reusable?.createdAt ?? Date.now();
   plan.reused = Boolean(reusable);
   if (reusable) {
     plan.notes.unshift(

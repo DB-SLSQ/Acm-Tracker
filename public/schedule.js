@@ -131,6 +131,64 @@ export function buildSchedule({
   };
 }
 
+/**
+ * 「今天」这张卡片要用的数据。
+ *
+ * 日程锚在「计划定下来的那天」而不是今天：同一份计划里每一天做哪几题是固定的，
+ * 勾掉一题不会让后面的题往前顶。锚在今天的话，勾完一道题，整条日程就往前挪一格，
+ * 今天这张卡片永远显示 0/2，进度条也就没意义了。
+ *
+ * 「落后几天」按**今天之前**该做完的题算（不含今天），
+ * 否则每天早上一起床就凭空落后一整天。落后的题数除以平均每天题量换成天数：
+ * 欠 6 题看不出要多久补完，「落后 3 天」一眼就能判断今天要不要加把劲。
+ */
+export function todayOverview({
+  problems = [],
+  weekly = 10,
+  restDays = [],
+  dayOff = {},
+  startDate = new Date(),
+  today = new Date(),
+  doneKeys = new Set(),
+} = {}) {
+  const keyOf = (problem) => `${problem.contestId}-${problem.index}`;
+  const timeline = buildSchedule({ problems, weekly, restDays, dayOff, startDate });
+  const todayKey = dateKey(today);
+  const todayDay = timeline.byDate.get(todayKey) ?? null;
+  const todayProblems = todayDay?.problems ?? [];
+
+  // 今天之前该做完的题（今天这一天的量不算进来，不然每天开局就落后）
+  let dueCount = 0;
+  for (const day of timeline.days) {
+    if (day.date >= todayKey) break;
+    dueCount += day.problems.length;
+  }
+  const doneCount = problems.filter((problem) => doneKeys.has(keyOf(problem))).length;
+  const perDay = timeline.perActiveDay || Math.max(1, weekly / 7);
+  const nextDay = timeline.days.find((day) => day.date > todayKey) ?? null;
+
+  return {
+    startDate: timeline.startDate,
+    endDate: timeline.endDate,
+    todayKey,
+    todayProblems,
+    todayDone: todayProblems.filter((problem) => doneKeys.has(keyOf(problem))).length,
+    dueCount,
+    doneCount,
+    totalProblems: problems.length,
+    // 正数=落后，负数=超前（把后面几天的题提前做了）
+    behindDays: perDay > 0 ? (dueCount - doneCount) / perDay : 0,
+    perDay,
+    // 距计划原定的结束日还有几个日历天
+    daysLeft: Math.round((parseDateKey(timeline.endDate) - startOfDay(today)) / 86400000),
+    restDay: timeline.restDates.find((item) => item.date === todayKey) ?? null,
+    nextDay,
+    inRange:
+      problems.length > 0 &&
+      (Boolean(todayDay) || timeline.restDates.some((item) => item.date === todayKey)),
+  };
+}
+
 /** 生成某个月的日历矩阵（按周分组，每行 7 天），用于月视图渲染。 */
 export function monthMatrix(year, month) {
   const first = new Date(year, month, 1);

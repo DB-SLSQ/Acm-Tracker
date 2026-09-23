@@ -1,4 +1,12 @@
-import { buildSchedule, dateKey, heatmapWeeks, monthMatrix, parseDateKey, WEEKDAY_LABELS } from './schedule.js';
+import {
+  buildSchedule,
+  dateKey,
+  heatmapWeeks,
+  monthMatrix,
+  parseDateKey,
+  todayOverview,
+  WEEKDAY_LABELS,
+} from './schedule.js';
 
 const state = {
   handle: '',
@@ -19,6 +27,9 @@ const state = {
   dayOff: {},
   planProblems: [],
   schedule: null,
+  // 计划定下来的那天。日程和「今天」卡片都以它为锚点，
+  // 这样每天的题是固定的，勾掉一题不会让后面的题往前顶。
+  planStart: null,
   calCursor: null,
   selectedDate: null,
   // 热力图
@@ -402,6 +413,8 @@ async function generatePlan(force = false, { scroll = true } = {}) {
     state.planData = data.plan;
     state.done = new Set(data.done ?? []);
     state.doneAuto = new Set(data.doneAuto ?? []);
+    // 计划是钉住的，服务端会告诉我们它是哪天定下来的；日程从这里开始排
+    state.planStart = new Date(data.plan.generatedAt ?? Date.now());
     // 把各阶段的题目拍平成一条有序列表，按天排布要用
     state.planProblems = data.plan.stageList.flatMap((stage) =>
       stage.problems.map((problem) => ({ ...problem, stage: stage.index })),
@@ -610,18 +623,20 @@ function renderTags(weakTags) {
     .join('');
 }
 
-$('plan-stages').addEventListener('change', async (event) => {
-  const checkbox = event.target.closest('input[type="checkbox"]');
-  if (!checkbox) return;
-
-  const contestId = Number(checkbox.dataset.contest);
-  const index = checkbox.dataset.index;
+/**
+ * 勾选 / 取消一道题。训练计划里的勾和「今天」卡片里的勾走同一条路。
+ *
+ * 勾完立刻重画计划摘要和今天卡片（进度条马上跟着变），但**不重排日程**：
+ * 日程是按计划定下来的那天排的，勾掉一题不该让别的题往前挪位置。
+ */
+async function markProblemDone(contestId, index, done) {
   const key = `${contestId}-${index}`;
-  const done = checkbox.checked;
-  const row = checkbox.closest('tr');
-  row.classList.toggle('done', done);
   if (done) state.done.add(key);
   else state.done.delete(key);
+  // 手动动过之后就不再算「提交记录里自动通过的」，把那个徽章去掉
+  state.doneAuto.delete(key);
+  if (state.planData) renderPlan(state.planData);
+  renderTodayCard();
 
   try {
     await fetch('/api/progress', {
@@ -632,6 +647,18 @@ $('plan-stages').addEventListener('change', async (event) => {
   } catch {
     setStatus('进度保存失败，本地勾选仍在');
   }
+}
+
+$('plan-stages').addEventListener('change', (event) => {
+  const checkbox = event.target.closest('input[type="checkbox"]');
+  if (!checkbox) return;
+  markProblemDone(Number(checkbox.dataset.contest), checkbox.dataset.index, checkbox.checked);
+});
+
+$('today-card').addEventListener('change', (event) => {
+  const checkbox = event.target.closest('input[type="checkbox"]');
+  if (!checkbox) return;
+  markProblemDone(Number(checkbox.dataset.contest), checkbox.dataset.index, checkbox.checked);
 });
 
 $('handle-input').addEventListener('keydown', (event) => {
@@ -1322,14 +1349,135 @@ function formatMonthDay(key) {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${WEEKDAY_LABELS[date.getDay()]}`;
 }
 
+/** 落后天数：整数就不带小数点，「0.5」这种半天的差距也写出来。 */
+function formatDays(value) {
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+/** 「今天」卡片里的一行题，勾选用的属性和训练计划里的一致。 */
+function todayRow(problem) {
+  const key = `${problem.contestId}-${problem.index}`;
+  const isDone = state.done.has(key);
+  const isAuto = state.doneAuto.has(key);
+  const tags = state.hideTags ? '' : tagSpans(problem.tags, 3);
+  return `<div class="today-row ${isDone ? 'done' : ''}">
+    <input type="checkbox" ${isDone ? 'checked' : ''}
+           data-contest="${problem.contestId}" data-index="${problem.index}" />
+    <span class="problem-code">${problem.contestId}${problem.index}</span>
+    <span class="today-name">
+      <a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>
+      ${isAuto ? '<span class="auto-done" title="提交记录里已经通过了这道题，自动打勾">已通过</span>' : ''}
+      ${state.luoguKeys.has(key) ? '<span class="solved-elsewhere">洛谷做过</span>' : ''}
+      ${tags ? `<span class="today-tags">${tags}</span>` : ''}
+    </span>
+    <span class="today-stage">第 ${problem.stage ?? 1} 阶段</span>
+    ${ratingBadge(problem.rating)}
+  </div>`;
+}
+
+/**
+ * 「今天」这张卡片：今天做哪几题、做到哪了、距计划结束还有几天、已经落后几天。
+ *
+ * 数字都在 todayOverview() 里算（那里写了为什么这么算），这里只管摆放。
+ * 卡片里的勾和训练计划里的勾是同一个动作，勾完进度条立刻变。
+ */
+function renderTodayCard() {
+  const box = $('today-card');
+  if (!box) return;
+  box.classList.remove('hidden');
+
+  if (!state.planData || !state.schedule) {
+    box.innerHTML =
+      '<div class="today-head"><span class="today-title">今天</span></div>' +
+      '<p class="subtle">还没有训练计划。在下面的「设定目标」里填好目标分数、点「生成训练计划」，这里就会显示今天该做哪几题。</p>';
+    return;
+  }
+
+  const now = new Date();
+  const overview = todayOverview({
+    problems: state.planProblems,
+    weekly: state.weekly,
+    restDays: state.restDays,
+    dayOff: state.dayOff,
+    startDate: state.planStart ?? now,
+    today: now,
+    doneKeys: state.done,
+  });
+
+  const total = overview.todayProblems.length;
+  const doneToday = overview.todayDone;
+  const allDone = overview.totalProblems > 0 && overview.doneCount >= overview.totalProblems;
+  const behind = overview.behindDays;
+
+  const head =
+    '<div class="today-head">' +
+    `<div class="today-when"><span class="today-title">今天</span>` +
+    `<span class="today-date">${formatMonthDay(overview.todayKey)}</span></div>` +
+    (total
+      ? `<div class="today-progress">
+           <div class="today-bar${doneToday === total ? ' full' : ''}">
+             <span style="width:${Math.round((doneToday / total) * 100)}%"></span>
+           </div>
+           <span class="today-count"><b>${doneToday}</b>/${total} 题</span>
+         </div>`
+      : '') +
+    '</div>';
+
+  const nextText = overview.nextDay
+    ? `，下一批在 ${formatMonthDay(overview.nextDay.date)}（${overview.nextDay.problems.length} 题）`
+    : '';
+  let body;
+  if (total) {
+    body = `<div class="today-list">${overview.todayProblems.map(todayRow).join('')}</div>`;
+  } else if (overview.restDay) {
+    body = `<p class="subtle">今天休息${
+      overview.restDay.reason ? `（${escapeHtml(overview.restDay.reason)}）` : ''
+    }${nextText}。</p>`;
+  } else if (allDone) {
+    body = '<p class="subtle">计划里的题都做完了。想再来一轮，就在「设定目标」里点「重新生成计划」。</p>';
+  } else if (!overview.inRange) {
+    body = '<p class="subtle">计划的排期已经走完了，但还有题没做完。点「重新生成计划」可以重新排一份。</p>';
+  } else {
+    body = '<p class="subtle">今天没有安排题目。</p>';
+  }
+
+  const deadline =
+    overview.daysLeft > 0
+      ? `距计划结束 <b>${overview.daysLeft}</b> 天`
+      : overview.daysLeft === 0
+        ? '今天是计划的最后一天'
+        : `计划已到期 <b>${-overview.daysLeft}</b> 天`;
+
+  const behindText = allDone
+    ? '计划里的题都做完了'
+    : behind >= 0.5
+      ? `落后 <b>${formatDays(behind)}</b> 天（累计欠 ${overview.dueCount - overview.doneCount} 题）`
+      : behind <= -0.5
+        ? `超前 <b>${formatDays(-behind)}</b> 天`
+        : '跟得上计划';
+  const behindClass = behind >= 0.5 && !allDone ? 'warn' : 'ok';
+
+  box.innerHTML =
+    head +
+    body +
+    `<div class="today-foot">
+       <span>${deadline}</span>
+       <span class="today-sep">·</span>
+       <span class="today-behind ${behindClass}">${behindText}</span>
+     </div>`;
+}
+
 function rebuildSchedule() {
   if (!state.planProblems.length) return;
+  // 从「计划定下来的那天」开始排，而不是从今天开始：
+  // 每天的题固定下来，日历不会因为今天勾了一道题就整条往前挪。
   state.schedule = buildSchedule({
     problems: state.planProblems,
     weekly: state.weekly,
     restDays: state.restDays,
     dayOff: state.dayOff,
-    startDate: new Date(),
+    startDate: state.planStart ?? new Date(),
   });
   if (!state.calCursor) {
     const now = new Date();
@@ -1337,6 +1485,7 @@ function rebuildSchedule() {
   }
   if (!state.selectedDate) state.selectedDate = dateKey(new Date());
   renderSchedule();
+  renderTodayCard();
 }
 
 function renderSchedule() {
@@ -1348,7 +1497,8 @@ function renderSchedule() {
   }
 
   $('schedule-summary').textContent =
-    `从今天（${formatMonthDay(schedule.startDate)}）开始，到 ${formatMonthDay(schedule.endDate)} 做完 ${schedule.totalProblems} 题；` +
+    `从 ${formatMonthDay(schedule.startDate)} 开始，到 ${formatMonthDay(schedule.endDate)} 做完 ${schedule.totalProblems} 题；` +
+    `今天安排 ${schedule.byDate.get(dateKey(new Date()))?.problems.length ?? 0} 题。` +
     `平均每个做题日 ${schedule.perActiveDay} 题，中间有 ${schedule.restDates.length} 天不安排任务。`;
 
   $('rest-picker').innerHTML = WEEKDAY_LABELS.map((label, index) => {
@@ -1440,15 +1590,22 @@ function renderDayDetail() {
     const stageOf = day.problems[0]?.stage ?? 1;
     const rows = day.problems
       .map(
-        (problem) => `
-      <tr>
+        (problem) => {
+          const key = `${problem.contestId}-${problem.index}`;
+          // 日程锚在计划开始那天，所以过去的日子会出现在日历上；
+          // 做过的题在这里也标出来，免得以为自己漏了。
+          const isDone = state.done.has(key);
+          return `
+      <tr class="${isDone ? 'done' : ''}">
         <td class="problem-code">${problem.contestId}${problem.index}</td>
         <td><a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>
-            ${state.luoguKeys.has(`${problem.contestId}-${problem.index}`) ? '<span class="solved-elsewhere">洛谷做过</span>' : ''}
+            ${isDone ? '<span class="auto-done">已通过</span>' : ''}
+            ${state.luoguKeys.has(key) ? '<span class="solved-elsewhere">洛谷做过</span>' : ''}
             ${state.hideTags ? '' : `<div class="problem-tags">${tagSpans(problem.tags, 3)}</div>`}</td>
         <td style="width:70px">${ratingBadge(problem.rating)}</td>
         <td style="width:86px" class="problem-tags">第 ${problem.stage ?? stageOf} 阶段</td>
-      </tr>`,
+      </tr>`;
+        },
       )
       .join('');
     $('day-detail').innerHTML = header + `<table class="problem-table">${rows}</table>`;
@@ -1475,7 +1632,9 @@ function renderDayDetail() {
 }
 
 function renderUpcoming() {
-  const upcoming = state.schedule.days.slice(0, 10);
+  // 过去的日子不用再列了，从今天往后看
+  const todayKey = dateKey(new Date());
+  const upcoming = state.schedule.days.filter((day) => day.date >= todayKey).slice(0, 10);
   if (!upcoming.length) {
     $('upcoming-list').innerHTML = '';
     return;
@@ -1921,6 +2080,7 @@ bindPlatformSync({
     // 计划和日程都要重画：这个开关管的是「所有训练相关的界面」
     if (state.planData) renderPlan(state.planData);
     if (state.schedule) renderSchedule();
+    renderTodayCard();
   });
 
   // ---------- 设置：训练推题模型 ----------
@@ -2061,6 +2221,8 @@ async function restoreSession() {
 }
 
 bindAppearance();
+// 冷启动时先把「今天」卡片摆出来；还没生成计划的话它会提示去生成
+renderTodayCard();
 restoreSession();
 // 启动时把上次的训练结果读出来。原来只在点「开始训练」之后才刷新，
 // 重启程序后「推题模型」那栏又会显示成「还没有训练过」。

@@ -1753,3 +1753,168 @@ input[type="number"]:focus {
   color: var(--accent);
   vertical-align: middle;
 }
+
+/* ============ 「今天」卡片 ============
+   「当前水平」下面这一块只回答一个问题：今天该做哪几题、做到哪了。
+   进度条和数字放在同一行右侧，扫一眼就知道今天还差几题。 */
+.today-card {
+  margin-top: 18px;
+  padding: 14px 16px 12px;
+  background: var(--card-gradient);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+}
+
+.today-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.today-when {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.today-title {
+  font-size: 15.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.today-date {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.today-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.today-bar {
+  width: 168px;
+  height: 8px;
+  border-radius: 5px;
+  /* 用文字色的透明度当底槽：四套主题下都能看见这条槽，
+     只填 0% 的时候也不会像一根莫名其妙的分隔线。 */
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  overflow: hidden;
+}
+
+.today-bar span {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 5px;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.today-bar.full span {
+  background: var(--ok);
+}
+
+.today-count {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.today-count b {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.today-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: 9px;
+}
+
+.today-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 2px;
+  font-size: 13.5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.today-row:last-child {
+  border-bottom: none;
+}
+
+.today-row input[type='checkbox'] {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.today-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.today-tags {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.today-stage {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.today-row .rating-badge {
+  flex: none;
+}
+
+.today-row.done {
+  opacity: 0.45;
+}
+
+.today-row.done .problem-name {
+  text-decoration: line-through;
+}
+
+.today-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.today-foot b {
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.today-sep {
+  color: var(--text-faint);
+}
+
+.today-behind.warn {
+  color: var(--warn-text);
+}
+
+.today-behind.warn b {
+  color: var(--warn-text);
+}
