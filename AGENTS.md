@@ -56,10 +56,18 @@ npm.cmd run sync       # 手动刷新题库
 ## 发布流程
 
 1. 改 `package.json` 的 `version`
-2. `npm.cmd run build`，产物在 `dist\ACM Trainer Setup x.y.z.exe`
-3. 写更新说明（放 `outputs/release-notes-vX.Y.Z.md`，风格参考旧的那几份：说清改了什么、为什么）
-4. `git push origin main` + `git push origin vX.Y.Z`
-5. GitHub 上建 Release：标签选对应 tag，标题写版本号，附件传 exe
+2. 写更新说明（放 `outputs/release-notes-vX.Y.Z.md`，风格参考旧的那几份：说清改了什么、为什么）
+3. 提交并 `git push origin main`
+4. 打 tag 推上去：`git push origin vX.Y.Z`
+
+**推完 tag 剩下的交给 GitHub Actions**（`.github/workflows/release.yml`）：它会自动
+`npm ci` + `npm run build`，然后把 exe 作为附件建成 Release，正文取自
+`outputs/release-notes-<tag>.md`。不用在本机打包，也不用本机存写权限的令牌
+——本机那个 GitHub 令牌只有读权限，传不了 Release 附件。
+
+要在本机出安装包（自己装着玩）再 `npm.cmd run build`，产物在 `dist\ACM Trainer Setup x.y.z.exe`。
+注意仓库根目录不能有名字坏掉的文件夹（之前几次命令写错环境变量造出来的乱码目录
+会让 electron-builder 直接报 lstat ENOENT），`.dev\clean-junk-dirs.mjs` 会清掉它们。
 
 ## 踩过的坑（别再踩）
 

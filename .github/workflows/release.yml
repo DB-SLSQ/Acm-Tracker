@@ -1,0 +1,72 @@
+# 打 tag（v0.1.5 这种）就自动打包并建 Release。
+#
+# 为什么放 GitHub 的机器上构建：本机推代码走 SSH 有写权限，但传 Release 附件要 API 令牌，
+# 而本机存的那个令牌只有读权限。用 runner 自带的 GITHUB_TOKEN 就没这个问题，
+# 也不需要把任何密钥放在本机。
+#
+# 更新说明放在 outputs/release-notes-<tag>.md，会被当成 Release 正文；
+# 没找到就用一句占位提示，发布后自己补也行。
+name: 发布
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # 也可以在 Actions 页面手动跑一次，填个已经存在的 tag
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag，例如 v0.1.5'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 打包
+        run: npm run build
+
+      - name: 准备附件和更新说明
+        shell: pwsh
+        run: |
+          $tag = '${{ github.event.inputs.tag || github.ref_name }}'
+          $exe = Get-ChildItem 'dist/ACM Trainer Setup *.exe' | Select-Object -First 1
+          if (-not $exe) { throw '没找到安装包，先看上面的打包日志' }
+          # 前几版的附件名都是点号形式，这里跟着保持一致
+          $asset = 'dist/' + ($exe.BaseName -replace ' ', '.') + '.exe'
+          Copy-Item $exe.FullName $asset
+          "ASSET=$asset" >> $env:GITHUB_ENV
+          "TITLE=$($tag -replace '^v','')" >> $env:GITHUB_ENV
+          $notes = "outputs/release-notes-$tag.md"
+          $body = if (Test-Path $notes) {
+            Get-Content $notes -Raw
+          } else {
+            "这一版改了：`n`n（仓库里没有 outputs/release-notes-$tag.md，说明手动补一下）"
+          }
+          Set-Content -Path "$env:RUNNER_TEMP/body.md" -Value $body -Encoding utf8
+          "安装包 $asset，说明 $notes"
+
+      - name: 建 Release 并传安装包
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ env.TITLE }}
+          body_path: ${{ runner.temp }}/body.md
+          files: ${{ env.ASSET }}
+          draft: false
+          prerelease: false
