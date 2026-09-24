@@ -54,7 +54,9 @@ jobs:
           Get-Item 'node_modules/electron/dist/electron.exe' | Select-Object FullName, @{n='MB';e={[math]::Round($_.Length/1MB)}}
 
       - name: 打包
-        run: npm run build
+        # --publish never：electron-builder 看到当前是 tag 会自己试着发布，
+        # 它要 GH_TOKEN；这里只需要它把 exe 打出来，发布交给下一步。
+        run: npm run build -- --publish never
 
       - name: 准备附件和更新说明
         shell: pwsh
