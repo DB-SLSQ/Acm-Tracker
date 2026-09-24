@@ -36,7 +36,22 @@ jobs:
           cache: npm
 
       - name: 安装依赖
-        run: npm ci
+        run: npm ci --foreground-scripts
+
+      # runner 上跑 npm ci 时 electron 的 postinstall 有时候不出活（本地不会），
+      # 结果是 node_modules/electron/dist 不存在，electron-builder 直接报
+      # 「The specified electronDist does not exist」。这里兜一下。
+      - name: 确认 Electron 二进制到位
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'node_modules/electron/dist/electron.exe')) {
+            Write-Host '缺少 node_modules/electron/dist，手动跑一次 electron 的安装脚本'
+            node node_modules/electron/install.js
+          }
+          if (-not (Test-Path 'node_modules/electron/dist/electron.exe')) {
+            throw 'Electron 二进制没下来，打包没法继续'
+          }
+          Get-Item 'node_modules/electron/dist/electron.exe' | Select-Object FullName, @{n='MB';e={[math]::Round($_.Length/1MB)}}
 
       - name: 打包
         run: npm run build
