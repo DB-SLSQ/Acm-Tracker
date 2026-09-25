@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
 import { dirname } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -22,6 +22,18 @@ import * as modelModule from './lib/model.js';
 // 同一个账号多久之内不重复抓取（毫秒）。手动同步也走这个限制，防止连点。
 const SYNC_COOLDOWN_MS = 20_000;
 const recentSyncs = new Map();
+
+// 题库一旦同步进库就基本不动，但生成计划时要按「方向 × 难度档」反复筛，
+// 每次请求都从 SQLite 读一万多条再建 Map 很浪费（实测计划生成里这部分占大头）。
+// 这里缓存一份，题库刷新/删除时清掉。
+let problemsCache = null;
+const allProblems = () => {
+  if (!problemsCache) problemsCache = db.getAllProblems();
+  return problemsCache;
+};
+const dropProblemsCache = () => {
+  problemsCache = null;
+};
 
 // 后台训练任务：一次只能跑一个，进度靠这个对象回传，前端轮询。
 const training = {
@@ -106,6 +118,7 @@ async function ensureProblems({ force = false } = {}) {
   }
   const data = await cf.getProblemset();
   const inserted = db.replaceProblems(data);
+  dropProblemsCache();
   const now = Date.now();
   db.metaSet('problems_updated_at', now);
   return { count: inserted, updatedAt: now, refreshed: true };
@@ -185,6 +198,18 @@ function buildUserSummary(handleKey) {
 export const THEMES = ['dark', 'light', 'gray', 'eye'];
 export const PALETTES = ['green', 'blue', 'pink', 'orange', 'purple'];
 
+/** 版本号比较：a > b 返回正数。只按点分段比数字，够用且不引入依赖。 */
+function compareVersions(a, b) {
+  const left = String(a).split('.').map(Number);
+  const right = String(b).split('.').map(Number);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const x = Number.isFinite(left[index]) ? left[index] : 0;
+    const y = Number.isFinite(right[index]) ? right[index] : 0;
+    if (x !== y) return x - y;
+  }
+  return 0;
+}
+
 const parseJson = (value, fallback) => {
   if (!value) return fallback;
   try {
@@ -233,6 +258,11 @@ function readSettings() {
       remindAt: raw.remind_at ?? null,
       // 上一次提醒是哪天（'YYYY-MM-DD'），避免同一天反复弹
       remindLast: raw.remind_last ?? null,
+      // 自定义背景图：图片文件存在数据目录里，这里只记一个版本号（换图时 +1，用来刷缓存）
+      bgImage: raw.bg_image ? Number(raw.bg_image) : null,
+      // 背景图的显示强度（0~1）和模糊像素
+      bgOpacity: raw.bg_opacity === undefined ? null : Number(raw.bg_opacity),
+      bgBlur: raw.bg_blur === undefined ? null : Number(raw.bg_blur),
       updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
   };
 }
@@ -364,7 +394,7 @@ async function handlePlan(url) {
     user,
     solved,
     attempted,
-    problems: db.getAllProblems(),
+    problems: allProblems(),
       target: targetRounded,
       weekly: Number.isFinite(weekly) && weekly > 0 ? Math.round(weekly) : 10,
       floorGap: settings.floorGap,
@@ -378,7 +408,8 @@ async function handlePlan(url) {
       // 上一份计划里的题：优先保下来，做过的也留在原位
       preferred: preferred.size ? preferred : null,
       // 按最近一轮的表现整体挪过的练习区间
-      bandShift: adjust.shift,
+      // 再加上「做题手感」反馈：秒了的多就往上挪，看题解的多就往下挪（最多 ±50）
+      bandShift: adjust.shift + db.feedbackShift(handleKey),
     });
 
   if (!reusable) {
@@ -478,6 +509,29 @@ async function handlePlan(url) {
     }
   }
 
+  // ---- 「今天补一个方向」临时加的题 ----
+  const extraTasksByDate = {};
+  const extraToday = new Date().toLocaleDateString('sv-SE');
+  for (const row of db.listAllExtraTasks(handleKey, extraToday)) {
+    const problem = db.getProblemsByKeys([row.key]).get(row.key);
+    if (!problem) continue;
+    (extraTasksByDate[row.date] ??= []).push({ ...toClientProblem(problem), extra: true });
+  }
+
+  // ---- 赛前热身包 ----
+  const inPlanKeys = new Set(
+    (plan.stageList ?? []).flatMap((stage) =>
+      stage.problems.map((problem) => `${problem.contestId}-${problem.index}`),
+    ),
+  );
+  const warmup = pickWarmup({
+    handleKey,
+    solved,
+    blocked: new Set(db.blockedKeys(handleKey)),
+    inPlan: inPlanKeys,
+    current: user?.rating && user.rating > 0 ? user.rating : 800,
+  });
+
   return {
     status: 200,
     body: {
@@ -493,6 +547,15 @@ async function handlePlan(url) {
       doneManual: done,
       swapCount: db.listPlanSwaps(handleKey, targetRounded).size,
       extras: extrasByDate,
+      // 今天补一个方向临时加的题（按天分组）
+      extraTasks: extraTasksByDate,
+      // 做题手感反馈：界面上给每道题标「秒了/刚好/卡住/看题解」，并显示它把区间挪了多少
+      feedback: db.listProblemFeedback(handleKey, 200),
+      feedbackShift: db.feedbackShift(handleKey),
+      // 24 小时内有比赛的话，给一套热身题
+      warmup,
+      // 复盘卡：最近 20 题 vs 再往前 20 题
+      retro: buildRetroCard(handleKey),
       plan,
     },
   };
@@ -522,7 +585,7 @@ const median = (numbers) => {
  */
 function axisProfileOf(handleKey) {
   const user = db.getUser(handleKey);
-  const problems = db.getAllProblems();
+  const problems = allProblems();
   const { solved } = deriveProgress(db.getSubmissions(handleKey));
   const solvedProblems = problems.filter(
     (problem) => problem.rating && solved.has(`${problem.contestId}-${problem.index}`),
@@ -554,7 +617,7 @@ function axisProfileOf(handleKey) {
 function buildGrowthReport(handleKey, weeks) {
   const submissions = db.getSubmissions(handleKey);
   const { solved } = deriveProgress(submissions);
-  const problemMap = new Map(db.getAllProblems().map((problem) => [`${problem.contestId}-${problem.index}`, problem]));
+  const problemMap = new Map(allProblems().map((problem) => [`${problem.contestId}-${problem.index}`, problem]));
 
   const solvedRows = [...solved.entries()].map(([key, info]) => ({
     key,
@@ -764,7 +827,7 @@ function applyPlanSwaps(plan, handleKey, target) {
 function pickReplacement({ from, exclude, handleKey }) {
   const blocked = new Set(db.blockedKeys(handleKey));
   const fromAxes = new Set((from.tags ?? []).map((tag) => knowledgeAxis(tag)).filter(Boolean));
-  const candidates = db.getAllProblems().filter((problem) => {
+  const candidates = allProblems().filter((problem) => {
     if (problem.rating == null || from.rating == null) return false;
     const key = `${problem.contestId}-${problem.index}`;
     if (key === `${from.contestId}-${from.index}`) return false;
@@ -805,6 +868,106 @@ function applyPlanDefer(plan, handleKey, target) {
     stage.problems = [...kept, ...moved];
   }
   return plan;
+}
+
+/**
+ * 「今天补一个方向」：在用户当前水平附近挑几道指定方向的题。
+ * 难度取 [当前-200, 当前+300]，跳过做过的、屏蔽的、计划里已经有的。
+ */
+function pickAxisExtras({ handleKey, axis, count = 3, exclude = new Set() }) {
+  const user = db.getUser(handleKey);
+  const current = user?.rating && user.rating > 0 ? user.rating : 800;
+  const { solved } = deriveProgress(db.getSubmissions(handleKey));
+  const blocked = new Set(db.blockedKeys(handleKey));
+
+  return allProblems()
+    .filter((problem) => {
+      if (problem.type !== 'PROGRAMMING' || problem.rating == null) return false;
+      if (problem.rating < current - 200 || problem.rating > current + 300) return false;
+      const key = `${problem.contestId}-${problem.index}`;
+      if (solved.has(key) || blocked.has(key) || exclude.has(key)) return false;
+      return (problem.tags ?? []).some((tag) => knowledgeAxis(tag) === axis);
+    })
+    .sort((a, b) => (b.solvedCount ?? 0) - (a.solvedCount ?? 0))
+    .slice(0, count);
+}
+
+/**
+ * 复盘卡：最近 20 道通过的题，和再往前 20 道比。
+ * 看的是三件事：平均难度有没有上去、一次通过的比例、这 20 题压在哪些方向。
+ */
+function buildRetroCard(handleKey) {
+  const { solved } = deriveProgress(db.getSubmissions(handleKey));
+  const problemMap = new Map(
+    allProblems().map((problem) => [`${problem.contestId}-${problem.index}`, problem]),
+  );
+  const rows = [...solved.entries()]
+    .map(([key, info]) => ({ at: info.at, attempts: info.attempts, problem: problemMap.get(key) }))
+    .filter((row) => row.problem?.rating)
+    .sort((a, b) => b.at - a.at);
+
+  const summarize = (list) => {
+    if (!list.length) return null;
+    const avgRating = Math.round(
+      list.reduce((sum, row) => sum + row.problem.rating, 0) / list.length,
+    );
+    const oneShot = Math.round(
+      (list.filter((row) => (row.attempts ?? 0) === 0).length / list.length) * 100,
+    );
+    const axes = {};
+    for (const row of list) {
+      for (const tag of row.problem.tags ?? []) {
+        const axis = knowledgeAxis(tag);
+        if (axis) {
+          axes[axis] = (axes[axis] ?? 0) + 1;
+          break;
+        }
+      }
+    }
+    const topAxes = Object.entries(axes)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([axis, count]) => ({ axis, count }));
+    return { count: list.length, avgRating, oneShot, topAxes };
+  };
+
+  const current = summarize(rows.slice(0, 20));
+  const previous = summarize(rows.slice(20, 40));
+  return {
+    current,
+    previous,
+    delta: current && previous ? current.avgRating - previous.avgRating : null,
+    oneShotDelta: current && previous ? current.oneShot - previous.oneShot : null,
+  };
+}
+
+/**
+ * 赛前热身包：24 小时内有 rated 比赛时，挑 1~2 道比当前水平低一点的题。
+ * 比赛当天做新知识点没什么意义，热身一下手感更实在。
+ */
+function pickWarmup({ handleKey, solved, blocked, inPlan, current }) {
+  const now = Math.floor(Date.now() / 1000);
+  const soon = db
+    .getContests()
+    .filter((contest) => contest.type === 'CF' && contest.startTime > now && contest.startTime - now < 24 * 3600)
+    .sort((a, b) => a.startTime - b.startTime)[0];
+  if (!soon) return null;
+
+  const picked = allProblems()
+    .filter((problem) => {
+      if (problem.type !== 'PROGRAMMING' || problem.rating == null) return false;
+      if (problem.rating > current - 50 || problem.rating < current - 300) return false;
+      const key = `${problem.contestId}-${problem.index}`;
+      return !solved.has(key) && !blocked.has(key) && !inPlan.has(key);
+    })
+    .sort((a, b) => (b.solvedCount ?? 0) - (a.solvedCount ?? 0))
+    .slice(0, 2);
+  if (!picked.length) return null;
+
+  return {
+    contest: { id: soon.id, name: soon.name, startTime: soon.startTime },
+    problems: picked.map(toClientProblem),
+  };
 }
 
 function decorateContest(contest) {
@@ -873,7 +1036,7 @@ async function handleVirtual(url) {
 
   const submissions = db.getSubmissions(handleKey);
   const { solved } = deriveProgress(submissions);
-  const problems = db.getAllProblems();
+  const problems = allProblems();
   const rated = problems.filter(
     (problem) => problem.type === 'PROGRAMMING' && problem.rating != null,
   );
@@ -975,7 +1138,31 @@ async function route(req, res, url) {
   const { pathname } = url;
 
   if (pathname === '/api/health') {
-    return sendJson(res, 200, { ok: true, version: VERSION, problems: db.countProblems() });
+    // 自检页要用这些：题库是什么时候同步的、模型练没练过、计划快照存了几份、库多大
+    const model = modelModule.parseModel(db.metaGet(modelModule.MODEL_KEY));
+    let dbSize = 0;
+    try {
+      dbSize = statSync(join(db.DATA_DIR, 'trainer.db')).size;
+    } catch {
+      dbSize = 0;
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      version: VERSION,
+      problems: db.countProblems(),
+      problemsUpdatedAt: Number(db.metaGet('problems_updated_at') || 0) || null,
+      contests: db.countContests(),
+      model: model
+        ? {
+            trainedAt: model.trainedAt ?? null,
+            samples: model.samples ?? null,
+            auc: model.auc ?? null,
+            baselineAuc: model.baselineAuc ?? null,
+            active: modelModule.isModelUseful(model),
+          }
+        : null,
+      dbSize,
+    });
   }
 
   if (pathname === '/api/settings' && req.method === 'GET') {
@@ -1052,6 +1239,21 @@ async function route(req, res, url) {
         }
         patch.tag_share = String(Math.round(value));
       }
+      // 背景图的显示强度（百分数）和模糊（像素）
+      if (body.bgOpacity !== undefined) {
+        const value = Number(body.bgOpacity);
+        if (!Number.isFinite(value) || value < 0 || value > 1) {
+          return sendError(res, 400, '背景强度请在 0 到 1 之间');
+        }
+        patch.bg_opacity = String(Math.round(value * 100) / 100);
+      }
+      if (body.bgBlur !== undefined) {
+        const value = Number(body.bgBlur);
+        if (!Number.isFinite(value) || value < 0 || value > 24) {
+          return sendError(res, 400, '背景模糊请在 0 到 24 之间');
+        }
+        patch.bg_blur = String(Math.round(value));
+      }
       // 训练计划里是否隐藏标签
       if (body.hideTags !== undefined) patch.hide_tags = body.hideTags ? '1' : '';
       // 打卡提醒时间：'HH:MM'，空串表示关闭
@@ -1070,6 +1272,231 @@ async function route(req, res, url) {
       return sendJson(res, 200, { settings: readSettings() });
     } catch (error) {
       return sendError(res, 400, error.message);
+    }
+  }
+
+  // ---------- 自定义背景图 ----------
+  // 图片存在数据目录里（background.png/jpg/…），设置里只记一个版本号用来刷缓存。
+  // 浏览器拿不到本地文件路径，所以由界面把图片 POST 上来，服务端落盘。
+  if (pathname === '/api/background') {
+    const exts = ['png', 'jpg', 'webp', 'gif'];
+    const findExisting = () => {
+      for (const ext of exts) {
+        const file = join(db.DATA_DIR, `background.${ext}`);
+        if (existsSync(file)) return { file, ext };
+      }
+      return null;
+    };
+
+    if (req.method === 'GET') {
+      const found = findExisting();
+      if (!found) return sendError(res, 404, '还没有设置背景图');
+      const type =
+        found.ext === 'jpg'
+          ? 'image/jpeg'
+          : found.ext === 'webp'
+            ? 'image/webp'
+            : found.ext === 'gif'
+              ? 'image/gif'
+              : 'image/png';
+      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'public, max-age=86400' });
+      createReadStream(found.file).pipe(res);
+      return;
+    }
+
+    if (req.method === 'POST') {
+      try {
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size > 12 * 1024 * 1024) {
+            return sendError(res, 413, '图片太大了，最多 12 MB');
+          }
+          chunks.push(chunk);
+        }
+        const body = Buffer.concat(chunks);
+        if (!body.length) return sendError(res, 400, '没有收到图片数据');
+
+        const contentType = String(req.headers['content-type'] ?? '');
+        const ext = contentType.includes('jpeg') || contentType.includes('jpg')
+          ? 'jpg'
+          : contentType.includes('webp')
+            ? 'webp'
+            : contentType.includes('gif')
+              ? 'gif'
+              : 'png';
+
+        for (const other of exts) {
+          rmSync(join(db.DATA_DIR, `background.${other}`), { force: true });
+        }
+        writeFileSync(join(db.DATA_DIR, `background.${ext}`), body);
+        const version = Date.now();
+        db.saveSettings({ bg_image: String(version) });
+        return sendJson(res, 200, { ok: true, version, size: body.length, ext });
+      } catch (error) {
+        return sendError(res, 400, `保存背景图失败：${error.message}`);
+      }
+    }
+
+    if (req.method === 'DELETE') {
+      for (const other of exts) {
+        rmSync(join(db.DATA_DIR, `background.${other}`), { force: true });
+      }
+      db.saveSettings({ bg_image: '' });
+      return sendJson(res, 200, { ok: true });
+    }
+  }
+
+  // ---------- 做题手感反馈：自己标一下这道题是秒的还是啃出来的 ----------
+  if (pathname === '/api/feedback') {
+    const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
+    if (req.method === 'GET') {
+      if (!handleKey) return sendError(res, 400, '缺少 handle');
+      return sendJson(res, 200, {
+        feedback: db.listProblemFeedback(handleKey, 200),
+        shift: db.feedbackShift(handleKey),
+      });
+    }
+    if (req.method === 'POST') {
+      try {
+        const body = await readJsonBody(req);
+        const key = db.normalizeHandle(body.handle);
+        if (!key || !body.index || !Number.isFinite(Number(body.contestId))) {
+          return sendError(res, 400, '参数不完整');
+        }
+        const allowed = ['too_easy', 'ok', 'hard', 'read_editorial'];
+        const feel = allowed.includes(body.feel) ? body.feel : null;
+        if (!feel) return sendError(res, 400, 'feel 只能是 too_easy / ok / hard / read_editorial');
+        db.setProblemFeedback(key, Number(body.contestId), String(body.index), feel);
+        return sendJson(res, 200, { ok: true, shift: db.feedbackShift(key) });
+      } catch (error) {
+        return sendError(res, 400, error.message);
+      }
+    }
+  }
+
+  // ---------- 今天补一个方向：临时往日程里塞几道某方向的题 ----------
+  if (pathname === '/api/plan/extra') {
+    const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
+    if (!handleKey) return sendError(res, 400, '缺少 handle');
+    if (req.method === 'GET') {
+      const date = url.searchParams.get('date');
+      if (!date) return sendError(res, 400, '缺少 date');
+      return sendJson(res, 200, { keys: db.listExtraTasks(handleKey, date) });
+    }
+    if (req.method === 'POST') {
+      try {
+        const body = await readJsonBody(req);
+        const action = String(body.action ?? 'add');
+        const date = String(body.date ?? '').slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return sendError(res, 400, 'date 格式不对');
+        if (action === 'clear') {
+          db.clearExtraTasks(handleKey, date);
+          return sendJson(res, 200, { ok: true, keys: [] });
+        }
+        const axis = String(body.axis ?? '');
+        if (!axis) return sendError(res, 400, '缺少方向');
+        const exclude = new Set(
+          (Array.isArray(body.exclude) ? body.exclude : []).map(String).filter(Boolean).slice(0, 800),
+        );
+        const picked = pickAxisExtras({ handleKey, axis, count: 3, exclude });
+        if (!picked.length) return sendError(res, 404, `「${axis}」这个方向暂时没有合适的题`);
+        db.addExtraTasks(
+          handleKey,
+          date,
+          picked.map((problem) => `${problem.contestId}-${problem.index}`),
+        );
+        return sendJson(res, 200, {
+          ok: true,
+          problems: picked.map(toClientProblem),
+          keys: db.listExtraTasks(handleKey, date),
+        });
+      } catch (error) {
+        return sendError(res, 400, error.message);
+      }
+    }
+  }
+
+  // ---------- 复盘卡：最近 20 题的表现，和上一轮比 ----------
+  if (pathname === '/api/retro' && req.method === 'GET') {
+    const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
+    if (!handleKey) return sendError(res, 400, '缺少 handle');
+    try {
+      return sendJson(res, 200, buildRetroCard(handleKey));
+    } catch (error) {
+      return sendError(res, 500, `复盘算不出来：${error.message}`);
+    }
+  }
+
+  // ---------- 数据安全：备份 / 导出 / 导入，以及检查更新 ----------
+  if (pathname === '/api/backup') {
+    const dir = join(db.DATA_DIR, 'backups');
+    if (req.method === 'GET') {
+      mkdirSync(dir, { recursive: true });
+      const files = readdirSync(dir)
+        .filter((name) => name.endsWith('.db'))
+        .map((name) => ({ name, size: statSync(join(dir, name)).size }))
+        .sort((a, b) => b.name.localeCompare(a.name));
+      return sendJson(res, 200, { dir, files });
+    }
+    if (req.method === 'POST') {
+      try {
+        mkdirSync(dir, { recursive: true });
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+        const target = join(dir, `trainer-${stamp}.db`);
+        // 用 SQLite 自带的 VACUUM INTO 备份：会把 WAL 里没落盘的内容一起写进去，
+        // 直接复制文件有可能拿到写了一半的库。
+        db.db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+        return sendJson(res, 200, {
+          ok: true,
+          name: `trainer-${stamp}.db`,
+          size: statSync(target).size,
+          dir,
+        });
+      } catch (error) {
+        return sendError(res, 500, `备份失败：${error.message}`);
+      }
+    }
+  }
+
+  // 导出/导入训练数据（设置、勾选进度、屏蔽表、虚拟赛记录）：换电脑时把 JSON 搬过去
+  if (pathname === '/api/export' && req.method === 'GET') {
+    return sendJson(res, 200, db.exportTrainingData());
+  }
+
+  if (pathname === '/api/import' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req, 30_000_000);
+      return sendJson(res, 200, { ok: true, ...db.importTrainingData(body) });
+    } catch (error) {
+      return sendError(res, 400, `导入失败：${error.message}`);
+    }
+  }
+
+  // 检查更新：直接问 GitHub 最新 Release 是什么，比自己记版本号省事（零依赖）
+  if (pathname === '/api/update-check' && req.method === 'GET') {
+    try {
+      const response = await fetch(
+        'https://api.github.com/repos/DB-SLSQ/Acm-Tracker/releases/latest',
+        { headers: { 'User-Agent': 'acm-trainer', Accept: 'application/vnd.github+json' } },
+      );
+      if (!response.ok) return sendError(res, 502, `GitHub 返回 ${response.status}`);
+      const release = await response.json();
+      const latest = String(release.tag_name ?? '').replace(/^v/, '');
+      const asset = (release.assets ?? []).find((item) =>
+        String(item.name ?? '').toLowerCase().endsWith('.exe'),
+      );
+      return sendJson(res, 200, {
+        current: VERSION,
+        latest,
+        newer: compareVersions(latest, VERSION) > 0,
+        url: asset?.browser_download_url ?? release.html_url,
+        notes: String(release.body ?? '').slice(0, 4000),
+        publishedAt: release.published_at ?? null,
+      });
+    } catch (error) {
+      return sendError(res, 502, `检查更新失败：${error.message}`);
     }
   }
 
@@ -1453,7 +1880,7 @@ async function route(req, res, url) {
     });
 
     // 同一道题谁先做出来（只列两边都做过的）
-    const problemMap = new Map(db.getAllProblems().map((problem) => [`${problem.contestId}-${problem.index}`, problem]));
+    const problemMap = new Map(allProblems().map((problem) => [`${problem.contestId}-${problem.index}`, problem]));
     const shared = [];
     for (const [key, info] of baseSolved) {
       const peer = otherSolved.get(key);

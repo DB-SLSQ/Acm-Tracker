@@ -36,10 +36,22 @@ const state = {
   activity: null,
   heatmapYear: new Date().getFullYear(),
   heatmapMetric: 'solved',
-  // 被收起的面板
-  collapsed: {},
   // 被整个隐藏的模块
   hiddenModules: [],
+  // 当前打开的页面（左边菜单点了就切）和已经拿到数据的页面
+  view: 'panel-overview',
+  readyView: new Set(),
+  // 自定义背景图：文件存在服务端，这里只记一个版本号 + 透明度/模糊
+  bgImage: null,
+  bgOpacity: 0.35,
+  bgBlur: 0,
+  // 列表密度：紧凑模式
+  compact: false,
+  // 做题手感反馈：key -> feel；以及最近一次拉回来的复盘/热身数据
+  feedback: new Map(),
+  warmup: null,
+  retro: null,
+  extraTasks: {},
   // 其他平台
   nowcoderUid: null,
   // 打卡提醒
@@ -278,10 +290,52 @@ function countdownText(startSeconds, durationSeconds) {
   return '已结束';
 }
 
-function showHint(message, isError = false) {
+/**
+ * 提示信息。以前只写进「账号」页那一行小字里——换成左边菜单分页之后，
+ * 你在别的页面上就完全看不到错误了，所以现在同步弹一个浮层提示。
+ */
+function showHint(message, isError = false, action = null) {
   const el = $('handle-hint');
-  el.textContent = message;
-  el.classList.toggle('error', isError);
+  if (el) {
+    el.textContent = message;
+    el.classList.toggle('error', isError);
+  }
+  toast(message, { error: isError, action });
+}
+
+/** 右下角浮层提示；带 action 时给一个按钮（比如「重试」）。 */
+function toast(message, { error = false, action = null, timeout = 6000 } = {}) {
+  const box = $('toast-box');
+  if (!box) return;
+  const item = document.createElement('div');
+  item.className = `toast${error ? ' error' : ''}`;
+  const text = document.createElement('span');
+  text.textContent = message;
+  item.appendChild(text);
+  if (action) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'toast-action';
+    button.textContent = action.label;
+    button.addEventListener('click', () => {
+      item.remove();
+      action.run();
+    });
+    item.appendChild(button);
+  }
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'toast-close';
+  close.textContent = '✕';
+  close.title = '关掉';
+  close.addEventListener('click', () => item.remove());
+  item.appendChild(close);
+  box.appendChild(item);
+  if (timeout) {
+    setTimeout(() => item.remove(), timeout);
+  }
+  // 最多留 3 条，多了把最旧的挤掉
+  while (box.children.length > 3) box.firstElementChild.remove();
 }
 
 function renderStats(user) {
@@ -381,8 +435,8 @@ async function loadUser(force = false) {
       state.target = suggested;
     }
 
-    $('panel-overview').classList.remove('hidden');
-    $('panel-target').classList.remove('hidden');
+    markViewReady('panel-overview');
+    markViewReady('panel-target');
     setStatus(`已同步 ${user.displayHandle} 的数据`);
     showHint('数据抓好了，接着设定目标 rating 就行。');
     loadCalendar();
@@ -428,6 +482,13 @@ async function generatePlan(force = false, { scroll = true } = {}) {
     state.planData = data.plan;
     state.done = new Set(data.done ?? []);
     state.doneAuto = new Set(data.doneAuto ?? []);
+    // 手感反馈、热身包、复盘卡、临时加题：都跟着计划一起回来
+    state.feedback = new Map((data.feedback ?? []).map((row) => [`${row.contestId}-${row.index}`, row.feel]));
+    state.warmup = data.warmup ?? null;
+    state.retro = data.retro ?? null;
+    state.extraTasks = data.extraTasks ?? {};
+    state.feedbackShiftValue = data.feedbackShift ?? 0;
+    renderWarmup();
     // 计划是钉住的，服务端会告诉我们它是哪天定下来的；日程从这里开始排
     state.planStart = new Date(data.plan.generatedAt ?? Date.now());
     // 手动排进某天的补题（补题队列 → 排进今天）
@@ -439,9 +500,8 @@ async function generatePlan(force = false, { scroll = true } = {}) {
     renderPlan(data.plan);
     renderAxes(data.plan.axes ?? []);
     renderTags(data.plan.weakTags);
-    $('panel-plan').classList.remove('hidden');
-    $('panel-tags').classList.remove('hidden');
-    $('subnav').classList.remove('hidden');
+    markViewReady('panel-plan');
+    markViewReady('panel-tags');
     setStatus('计划已生成');
     if (scroll) $('panel-plan').scrollIntoView({ behavior: 'smooth', block: 'start' });
     rebuildSchedule();
@@ -450,8 +510,12 @@ async function generatePlan(force = false, { scroll = true } = {}) {
     loadReview();
     loadGrowth();
   } catch (error) {
-    setStatus('生成失败');
-    showHint(error.message, true);
+    setStatus(`生成失败：${error.message}`);
+    // 失败给一个「重试」按钮，网络抖一下不用自己再找按钮
+    showHint(`生成训练计划失败：${error.message}`, true, {
+      label: '重试',
+      run: () => generatePlan(force, { scroll }),
+    });
   } finally {
     button.disabled = false;
     button.textContent = '重新生成计划';
@@ -691,6 +755,43 @@ $('today-card').addEventListener('change', (event) => {
   markProblemDone(Number(checkbox.dataset.contest), checkbox.dataset.index, checkbox.checked);
 });
 
+// 今日卡片里除了打勾，还有三个动作：标手感、复制题单、补一个方向
+$('today-card').addEventListener('click', async (event) => {
+  const feel = event.target.closest('[data-feel]');
+  if (feel) {
+    const key = feel.dataset.feelKey;
+    const dash = key.indexOf('-');
+    sendFeedback(Number(key.slice(0, dash)), key.slice(dash + 1), feel.dataset.feel);
+    return;
+  }
+  if (event.target.closest('#copy-today')) {
+    copyTodayList();
+    return;
+  }
+  const add = event.target.closest('#extra-add');
+  if (add) {
+    const axis = $('extra-axis')?.value;
+    if (!axis || !state.handle) return;
+    add.disabled = true;
+    add.textContent = '正在挑题…';
+    try {
+      const result = await postJson('/api/plan/extra', {
+        handle: state.handle,
+        axis,
+        date: dateKey(new Date()),
+        exclude: state.planProblems.map((problem) => `${problem.contestId}-${problem.index}`),
+      });
+      toast(`已给今天加了 ${result.problems.length} 道「${axis}」的题。`);
+      await generatePlan(false, { scroll: false });
+    } catch (error) {
+      toast(`加题失败：${error.message}`, { error: true });
+    } finally {
+      add.disabled = false;
+      add.textContent = '今天补一个方向';
+    }
+  }
+});
+
 $('handle-input').addEventListener('keydown', (event) => {
   if (event.key === 'Enter') loadUser();
 });
@@ -742,7 +843,7 @@ async function loadGrowth() {
   try {
     state.growth = await getJson(`/api/growth?handle=${encodeURIComponent(state.handle)}&weeks=26`);
     renderGrowth();
-    $('panel-growth').classList.remove('hidden');
+    markViewReady('panel-growth');
     loadHandles();
   } catch {
     /* 读不到就先不显示 */
@@ -1065,7 +1166,7 @@ async function loadReview() {
     state.review = data.items ?? [];
     renderReviewQueue();
     // 队列拿到数据以后这块面板才显示出来（和「做题记录」一样的做法）
-    $('panel-review').classList.remove('hidden');
+    markViewReady('panel-review');
   } catch {
     /* 读不到就先不显示 */
   }
@@ -1179,9 +1280,9 @@ async function loadSolved({ append = false } = {}) {
     state.solved = append ? [...state.solved, ...data.solved] : data.solved;
     state.solvedTotal = data.total;
     renderSolved();
-    $('panel-records').classList.remove('hidden');
+    markViewReady('panel-records');
   } catch (error) {
-    $('panel-records').classList.remove('hidden');
+    markViewReady('panel-records');
     $('solved-summary').textContent = `读取做题记录失败：${error.message}`;
   }
 }
@@ -1381,7 +1482,7 @@ renderQuickPicks();
 let countdownInterval = null;
 
 async function loadCalendar() {
-  $('panel-calendar').classList.remove('hidden');
+  markViewReady('panel-calendar');
   try {
     const query = state.handle ? `?handle=${encodeURIComponent(state.handle)}` : '';
     renderCalendar(await getJson(`/api/calendar${query}`));
@@ -1445,7 +1546,7 @@ async function loadVirtual({ reviewId = 0 } = {}) {
     );
     renderVirtual(data);
   } catch (error) {
-    $('panel-virtual').classList.remove('hidden');
+    markViewReady('panel-virtual');
     $('virtual-summary').textContent = `虚拟参赛加载失败：${error.message}`;
   }
 }
@@ -1453,7 +1554,7 @@ async function loadVirtual({ reviewId = 0 } = {}) {
 function renderVirtual(data) {
   state.virtual = data;
   const running = data.running ?? null;
-  $('panel-virtual').classList.remove('hidden');
+  markViewReady('panel-virtual');
 
   $('virtual-summary').textContent = running
     ? '虚拟赛进行中。做完一题就去 Codeforces 提交，提交记录会自动同步回来做复盘。'
@@ -1717,9 +1818,9 @@ async function loadActivity() {
     );
     state.activity = activity;
     renderHeatmap();
-    $('panel-heatmap').classList.remove('hidden');
+    markViewReady('panel-heatmap');
   } catch (error) {
-    $('panel-heatmap').classList.remove('hidden');
+    markViewReady('panel-heatmap');
     $('heatmap-summary').textContent = `活动记录加载失败：${error.message}`;
   }
 }
@@ -1852,6 +1953,7 @@ function todayRow(problem) {
     </span>
     <span class="today-stage">第 ${problem.stage ?? 1} 阶段</span>
     ${ratingBadge(problem.rating)}
+    ${feedbackButtons(key)}
   </div>`;
 }
 
@@ -1899,6 +2001,7 @@ function renderTodayCard() {
              <span style="width:${Math.round((doneToday / total) * 100)}%"></span>
            </div>
            <span class="today-count"><b>${doneToday}</b>/${total} 题</span>
+           <button type="button" class="btn small" id="copy-today">复制题单</button>
          </div>`
       : '') +
     '</div>';
@@ -1953,11 +2056,20 @@ function renderTodayCard() {
     head +
     body +
     extrasLine +
+    (total
+      ? `<div class="today-extra">
+           <select id="extra-axis" title="选一个方向，临时加三道题进今天">${(state.planData.axes ?? [])
+             .map((row) => `<option value="${escapeHtml(row.axis)}">${escapeHtml(row.axis)}</option>`)
+             .join('')}</select>
+           <button type="button" class="btn small" id="extra-add">今天补一个方向</button>
+         </div>`
+      : '') +
     `<div class="today-foot">
        <span>${deadline}</span>
        <span class="today-sep">·</span>
        <span class="today-behind ${behindClass}">${behindText}</span>
-     </div>`;
+     </div>` +
+    (retroLine(state.retro) ? `<p class="subtle today-retro">${escapeHtml(retroLine(state.retro))}</p>` : '');
 }
 
 function rebuildSchedule() {
@@ -1981,7 +2093,7 @@ function rebuildSchedule() {
 }
 
 function renderSchedule() {
-  $('panel-schedule').classList.remove('hidden');
+  markViewReady('panel-schedule');
   const schedule = state.schedule;
   if (!schedule) {
     $('schedule-summary').textContent = '先生成训练计划，再来排日程。';
@@ -2283,83 +2395,162 @@ document.addEventListener('click', (event) => {
   pop.classList.add('hidden');
 });
 
-// ---------- 面板展开 / 收起 ----------
-
-// 第一个面板是输账号的入口，始终保持展开
-const COLLAPSIBLE_PANELS = [
-  'panel-overview',
-  'panel-target',
-  'panel-plan',
-  'panel-schedule',
-  'panel-calendar',
-  'panel-virtual',
-  'panel-heatmap',
-  'panel-platforms',
-  'panel-records',
-  'panel-review',
-  'panel-growth',
-  'panel-tags',
+// ---------- 左边的主菜单 + 页面切换 ----------
+//
+// 以前是一整页从上滑到底，现在是「左边点菜单、右边换页面」：
+// 每个 section.panel 就是一个页面，同时只显示一个。
+// 顺序按「每天真正会看的先后」排：先看今天要做什么，再看数据，最后是资料类的。
+const NAV_ITEMS = [
+  { id: 'panel-handle', label: '账号', icon: '👤' },
+  { id: 'panel-overview', label: '当前水平', icon: '📊' },
+  { id: 'panel-target', label: '目标设置', icon: '🎯', group: '训练' },
+  { id: 'panel-plan', label: '训练计划', icon: '📋' },
+  { id: 'panel-schedule', label: '训练日程', icon: '🗓' },
+  { id: 'panel-review', label: '补题队列', icon: '🧾' },
+  { id: 'panel-tags', label: '能力画像', icon: '🧭', group: '数据' },
+  { id: 'panel-growth', label: '成长', icon: '🌱' },
+  { id: 'panel-records', label: '做题记录', icon: '📝' },
+  { id: 'panel-heatmap', label: '活动记录', icon: '🔥' },
+  { id: 'panel-calendar', label: '比赛日历', icon: '🏁', group: '其他' },
+  { id: 'panel-virtual', label: '虚拟参赛', icon: '⏱' },
+  { id: 'panel-platforms', label: '平台数据', icon: '🔔' },
+  { id: 'panel-settings', label: '设置', icon: '⚙️' },
 ];
 
-function setupPanelToggles() {
-  for (const id of COLLAPSIBLE_PANELS) {
-    const panel = $(id);
-    if (!panel || panel.querySelector('.panel-toggle')) continue;
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'panel-toggle';
-    button.dataset.panel = id;
-    button.title = '收起或展开这一块';
-    panel.appendChild(button);
+const VIEW_IDS = NAV_ITEMS.map((item) => item.id);
+
+// ---------- 自定义背景图 ----------
+// 图片本身由服务端存在数据目录里（浏览器读不到本地路径），这边只负责上传、
+// 铺到页面上、以及「显示强度 / 模糊」两个参数。
+
+/** 把设置里的背景参数写到 :root 的 CSS 变量上。 */
+function applyBackground() {
+  const root = document.documentElement;
+  root.style.setProperty(
+    '--bg-image',
+    state.bgImage ? `url('/api/background?v=${state.bgImage}')` : 'none',
+  );
+  root.style.setProperty('--bg-image-opacity', String(state.bgOpacity));
+  root.style.setProperty('--bg-image-blur', `${state.bgBlur}px`);
+  document.body.classList.toggle('has-bg', Boolean(state.bgImage));
+}
+
+/** 设置面板里那块背景图控件的绑定。 */
+function bindBackgroundInputs() {
+  const file = $('bg-file');
+  const opacity = $('bg-opacity');
+  const blur = $('bg-blur');
+  const hint = $('bg-hint');
+  if (!file) return;
+
+  opacity.value = String(Math.round(state.bgOpacity * 100));
+  blur.value = String(state.bgBlur);
+  if (state.bgImage) hint.textContent = '当前用的就是你自己选的背景图。';
+
+  file.addEventListener('change', async () => {
+    const picked = file.files?.[0];
+    if (!picked) return;
+    if (picked.size > 12 * 1024 * 1024) {
+      hint.textContent = '这张图超过 12 MB，换一张小点的吧。';
+      hint.classList.add('error');
+      return;
+    }
+    hint.classList.remove('error');
+    hint.textContent = '正在保存背景图…';
+    try {
+      const response = await fetch('/api/background', {
+        method: 'POST',
+        headers: { 'Content-Type': picked.type || 'application/octet-stream' },
+        body: picked,
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? '保存失败');
+      state.bgImage = body.version;
+      applyBackground();
+      hint.textContent = `背景图已保存（${picked.name}）。`;
+      file.value = '';
+    } catch (error) {
+      hint.classList.add('error');
+      hint.textContent = `保存背景图失败：${error.message}`;
+    }
+  });
+
+  // 拖动时只改外观，松手才写进设置——不然每拖一下都发一次请求
+  opacity.addEventListener('input', () => {
+    state.bgOpacity = Math.min(1, Math.max(0.05, Number(opacity.value) / 100));
+    applyBackground();
+  });
+  blur.addEventListener('input', () => {
+    state.bgBlur = Math.min(24, Math.max(0, Number(blur.value)));
+    applyBackground();
+  });
+  const remember = () => saveSettings({ bgOpacity: state.bgOpacity, bgBlur: state.bgBlur });
+  opacity.addEventListener('change', remember);
+  blur.addEventListener('change', remember);
+
+  $('bg-clear')?.addEventListener('click', async () => {
+    try {
+      await fetch('/api/background', { method: 'DELETE' });
+    } catch {
+      /* 删不掉也让界面先回到默认 */
+    }
+    state.bgImage = null;
+    applyBackground();
+    hint.textContent = '已恢复默认背景。';
+    hint.classList.remove('error');
+  });
+}
+
+/** 画左边那列菜单。group 变了就插一个小标题，把功能分成几段。 */
+function renderSideNav() {
+  const nav = $('side-nav');
+  if (!nav) return;
+  let html = '';
+  let group = null;
+  for (const item of NAV_ITEMS) {
+    if (item.group && item.group !== group) {
+      group = item.group;
+      html += `<div class="side-group">${escapeHtml(group)}</div>`;
+    }
+    html += `<button type="button" class="side-item" data-view="${item.id}">
+      <span class="ico">${item.icon}</span><span>${escapeHtml(item.label)}</span>
+    </button>`;
+  }
+  nav.innerHTML = html;
+}
+
+/** 切到某个页面：把其它页面藏起来，菜单高亮跟上，地址栏的 hash 也同步。 */
+function showView(id, { save = true } = {}) {
+  if (!VIEW_IDS.includes(id)) return;
+  state.view = id;
+  for (const viewId of VIEW_IDS) {
+    const panel = $(viewId);
+    if (panel) panel.classList.toggle('hidden', viewId !== id);
+  }
+  for (const button of document.querySelectorAll('#side-nav .side-item')) {
+    button.classList.toggle('active', button.dataset.view === id);
+  }
+  $('main')?.scrollTo?.({ top: 0 });
+  window.scrollTo({ top: 0 });
+  if (save) {
+    history.replaceState(null, '', `#/${id.replace('panel-', '')}`);
   }
 }
 
-function applyCollapsed() {
-  for (const id of COLLAPSIBLE_PANELS) {
-    const panel = $(id);
-    if (panel) panel.classList.toggle('collapsed', Boolean(state.collapsed[id]));
-  }
+/** 某个页面拿到数据了：如果它正开着就重画一下（顺带把菜单项放出来）。 */
+function markViewReady(id) {
+  state.readyView.add(id);
+  if (state.view === id) showView(id, { save: false });
 }
 
-function setCollapsed(id, collapsed, { save = true } = {}) {
-  if (collapsed) state.collapsed[id] = true;
-  else delete state.collapsed[id];
-  const panel = $(id);
-  if (panel) panel.classList.toggle('collapsed', collapsed);
-  if (save) saveSettings({ collapsed: state.collapsed });
-}
-
-document.addEventListener('click', (event) => {
-  const button = event.target.closest('.panel-toggle');
-  if (button) {
-    setCollapsed(button.dataset.panel, !state.collapsed[button.dataset.panel]);
-    return;
-  }
-  // 已经收起的面板，点它任意位置都展开——误触之后不用去找按钮
-  const collapsed = event.target.closest('section.panel.collapsed');
-  if (collapsed && COLLAPSIBLE_PANELS.includes(collapsed.id)) {
-    setCollapsed(collapsed.id, false);
-  }
+$('side-nav').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-view]');
+  if (button) showView(button.dataset.view);
 });
 
-// 从导航点进去时，如果那块是收起的就先展开，否则跳过去什么都看不到
-$('subnav').addEventListener('click', (event) => {
-  const link = event.target.closest('a[href^="#panel-"]');
-  if (!link) return;
-  const id = link.getAttribute('href').slice(1);
-  if (state.collapsed[id]) setCollapsed(id, false);
-});
-
-$('expand-all').addEventListener('click', () => {
-  state.collapsed = {};
-  applyCollapsed();
-  saveSettings({ collapsed: {} });
-});
-
-$('collapse-all').addEventListener('click', () => {
-  state.collapsed = Object.fromEntries(COLLAPSIBLE_PANELS.map((id) => [id, true]));
-  applyCollapsed();
-  saveSettings({ collapsed: state.collapsed });
+window.addEventListener('hashchange', () => {
+  const id = `panel-${location.hash.replace(/^#\/?/, '')}`;
+  if (VIEW_IDS.includes(id) && id !== state.view) showView(id, { save: false });
 });
 
 // ---------- 设置：模块显示 ----------
@@ -2393,12 +2584,13 @@ function applyModuleVisibility() {
   for (const { id } of MODULE_META) {
     const hidden = state.hiddenModules.includes(id);
     $(id)?.classList.toggle('module-hidden', hidden);
-    const link = document.querySelector(`.subnav a[href="#${id}"]`);
-    if (link) link.classList.toggle('module-hidden', hidden);
-    // 模块整个藏起来了，它的收起状态就没意义了
-    if (hidden) delete state.collapsed[id];
+    // 左边菜单里对应那一项也一起藏掉
+    document
+      .querySelector(`#side-nav .side-item[data-view="${id}"]`)
+      ?.classList.toggle('module-hidden', hidden);
   }
-  applyCollapsed();
+  // 当前正开着的那页被关掉了，就退回「当前水平」
+  if (state.hiddenModules.includes(state.view)) showView('panel-overview', { save: false });
 }
 
 $('module-list').addEventListener('change', (event) => {
@@ -2465,13 +2657,12 @@ const LUOGU_SHORT = {
 /** 平台数据面板：每同步一个平台就多一张卡片，洛谷额外画难度分布图。 */
 function renderPlatformCards() {
   if (!state.platforms.length) {
-    // 没同步过就别把这个面板摆出来，免得空占一块
-    $('panel-platforms').classList.add('hidden');
+    // 没同步过就别把这个面板摆出来，免得空占一块
     $('platform-charts').innerHTML =
       '<p class="subtle">还没有同步任何平台。到「设置」里填入洛谷或牛客的用户 ID，点同步即可。</p>';
     return;
   }
-  $('panel-platforms').classList.remove('hidden');
+  markViewReady('panel-platforms');
   $('platform-charts').innerHTML = state.platforms
     .map((entry) => {
       const keys = [
@@ -2732,8 +2923,10 @@ async function restoreSession() {
     state.palette = settings.heatmapPalette ?? 'green';
     state.restDays = Array.isArray(settings.restDays) ? settings.restDays : [];
     state.dayOff = settings.dayOff ?? {};
-    state.collapsed = settings.collapsed ?? {};
     state.hiddenModules = Array.isArray(settings.hiddenModules) ? settings.hiddenModules : [];
+    state.bgOpacity = Number.isFinite(settings.bgOpacity) ? settings.bgOpacity : 0.35;
+    state.bgBlur = Number.isFinite(settings.bgBlur) ? settings.bgBlur : 0;
+    state.bgImage = settings.bgImage ?? null;
     if (settings.nowcoderUid) {
       state.nowcoderUid = settings.nowcoderUid;
       $('nowcoder-input').value = settings.nowcoderUid;
@@ -2751,10 +2944,19 @@ async function restoreSession() {
     }
   }
   applyAppearance();
-  setupPanelToggles();
-  applyCollapsed();
+  applyBackground();
+  state.compact = Boolean(settings?.compact);
+  document.body.classList.toggle('compact', state.compact);
+  bindDataTools();
   renderModuleList();
   applyModuleVisibility();
+  renderSideNav();
+  // 地址栏里带着 #/plan 这种就恢复过去，否则从「当前水平」开始
+  const fromHash = `panel-${location.hash.replace(/^#\/?/, '')}`;
+  // 还没填账号就先停在「账号」页，填过的话停在地址栏指向的页面（默认当前水平）
+  const fallback = settings?.handle ? 'panel-overview' : 'panel-handle';
+  showView(VIEW_IDS.includes(fromHash) ? fromHash : fallback, { save: false });
+  bindBackgroundInputs();
   loadPlatforms();
 
   if (!settings?.handle) {
@@ -3056,3 +3258,206 @@ restoreSession();
 // 启动时把上次的训练结果读出来。原来只在点「开始训练」之后才刷新，
 // 重启程序后「推题模型」那栏又会显示成「还没有训练过」。
 refreshTraining();
+
+// ---------- 数据安全：备份 / 导出 / 导入 / 检查更新 ----------
+//
+// 都是本机操作，不联网的只有「检查更新」那一个（要问 GitHub 最新 Release）。
+
+function bindDataTools() {
+  const hint = $('data-hint');
+  const say = (text, error = false) => {
+    hint.textContent = text;
+    hint.classList.toggle('error', error);
+  };
+
+  $('backup-btn')?.addEventListener('click', async () => {
+    say('正在备份…');
+    try {
+      const result = await postJson('/api/backup', {});
+      say(`已备份到 ${result.dir}（${result.name}，${Math.round(result.size / 1024)} KB）`);
+    } catch (error) {
+      say(`备份失败：${error.message}`, true);
+    }
+  });
+
+  $('export-btn')?.addEventListener('click', async () => {
+    say('正在导出…');
+    try {
+      const data = await getJson('/api/export');
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `acm-trainer-data-${dateKey(new Date())}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      say('已导出：设置、勾选进度、屏蔽表、虚拟赛记录、做题手感都在里面。');
+    } catch (error) {
+      say(`导出失败：${error.message}`, true);
+    }
+  });
+
+  $('import-btn')?.addEventListener('click', () => $('import-file')?.click());
+  $('import-file')?.addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    say('正在导入…');
+    try {
+      const text = await file.text();
+      const response = await fetch('/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: text,
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? '导入失败');
+      say(
+        `导入完成：进度 ${result.progress} 条、屏蔽 ${result.blocked} 条、虚拟赛 ${result.virtual} 条、手感 ${result.feedback} 条。刷新一下页面生效。`,
+      );
+    } catch (error) {
+      say(`导入失败：${error.message}`, true);
+    } finally {
+      event.target.value = '';
+    }
+  });
+
+  $('update-btn')?.addEventListener('click', async () => {
+    say('正在问 GitHub…');
+    try {
+      const info = await getJson('/api/update-check');
+      if (info.newer) {
+        say(`有新版本 ${info.latest}（当前 ${info.current}）：${info.url}`);
+      } else {
+        say(`已经是最新的（${info.current}）。`);
+      }
+    } catch (error) {
+      say(`检查更新失败：${error.message}`, true);
+    }
+  });
+
+  const compact = $('compact-mode');
+  if (compact) {
+    compact.checked = Boolean(state.compact);
+    document.body.classList.toggle('compact', state.compact);
+    compact.addEventListener('change', () => {
+      state.compact = compact.checked;
+      document.body.classList.toggle('compact', state.compact);
+      saveSettings({ compact: state.compact });
+    });
+  }
+}
+
+// ---------- 今日卡片上的几个小动作 ----------
+
+/** 把今天的题单复制成一段 Markdown，方便贴群里或记到笔记里。 */
+async function copyTodayList() {
+  const today = state.schedule?.days.find((day) => day.date === dateKey(new Date()));
+  const items = today?.problems ?? [];
+  if (!items.length) {
+    toast('今天没有安排题目。');
+    return;
+  }
+  const text = [
+    `【今天要做的题】${formatMonthDay(dateKey(new Date()))}`,
+    ...items.map(
+      (problem, index) =>
+        `${index + 1}. ${problem.contestId}${problem.index} ${problem.name}（${problem.rating ?? '?'} 分）${problem.url}`,
+    ),
+  ].join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`已复制今天的 ${items.length} 道题。`);
+  } catch {
+    toast('浏览器不让复制，手动选一下吧。', { error: true });
+  }
+}
+
+/** 给某道题标一下「这道题对我来说是什么难度」，用来微调后面的练习区间。 */
+async function sendFeedback(contestId, index, feel) {
+  try {
+    await postJson('/api/feedback', { handle: state.handle, contestId, index, feel });
+    state.feedback.set(`${contestId}-${index}`, feel);
+    toast(`已记下：${FEEL_LABELS[feel]}`);
+  } catch (error) {
+    toast(`记录失败：${error.message}`, { error: true });
+  }
+}
+
+const FEEL_LABELS = { too_easy: '秒了', ok: '刚好', hard: '卡住', read_editorial: '看题解' };
+
+/** 今日卡片上排一行「秒了 / 刚好 / 卡住 / 看题解」。 */
+function feedbackButtons(key) {
+  const current = state.feedback.get(key);
+  return `<span class="feel-row">${Object.entries(FEEL_LABELS)
+    .map(
+      ([value, label]) =>
+        `<button type="button" class="feel-btn${current === value ? ' active' : ''}" data-feel="${value}" data-feel-key="${key}">${label}</button>`,
+    )
+    .join('')}</span>`;
+}
+
+/** 赛前热身包：24 小时内有比赛时显示在今日卡片上面。 */
+function renderWarmup() {
+  const box = $('warmup-card');
+  const warmup = state.warmup;
+  if (!box || !warmup?.problems?.length) {
+    box?.classList.add('hidden');
+    return;
+  }
+  const when = new Date(warmup.contest.startTime * 1000).toLocaleString('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  box.className = 'today-card';
+  box.innerHTML = `
+    <div class="today-head">
+      <div class="today-when"><span class="today-title">赛前热身</span>
+        <span class="today-date">${escapeHtml(warmup.contest.name)} · ${when}</span></div>
+    </div>
+    <div class="today-list">${warmup.problems
+      .map(
+        (problem) => `<div class="today-row">
+          <span class="problem-code">${problem.contestId}${problem.index}</span>
+          <span class="today-name"><a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${escapeHtml(problem.name)}</a></span>
+          ${ratingBadge(problem.rating)}
+        </div>`,
+      )
+      .join('')}</div>
+    <p class="subtle" style="margin:10px 0 0">比赛当天别碰新知识点，这两道热热身就行。</p>`;
+}
+
+/** 复盘卡：最近 20 题 vs 再往前 20 题。 */
+function retroLine(retro) {
+  if (!retro?.current) return null;
+  const { current, previous, delta, oneShotDelta } = retro;
+  const parts = [`最近 20 题平均 ${current.avgRating} 分，一次过 ${current.oneShot}%`];
+  if (previous && delta != null) {
+    const trend = delta > 0 ? `比上一轮高 ${delta} 分` : delta < 0 ? `比上一轮低 ${-delta} 分` : '和上一轮持平';
+    const smooth = oneShotDelta > 0 ? '，一次过变多了' : oneShotDelta < 0 ? '，一次过变少了' : '';
+    parts.push(`${trend}${smooth}`);
+  }
+  if (current.topAxes?.length) {
+    parts.push(`主要练了 ${current.topAxes.map((row) => `${row.axis} ${row.count}`).join('、')}`);
+  }
+  return parts.join('；');
+}
+
+/** 把成长曲线那张 SVG 存成文件（不引入作图库，直接序列化）。 */
+function exportChartSvg() {
+  const svg = document.querySelector('#growth-chart svg');
+  if (!svg) {
+    toast('成长曲线还没画出来，先去「成长」页看一眼。', { error: true });
+    return;
+  }
+  const clone = svg.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  const blob = new Blob([clone.outerHTML], { type: 'image/svg+xml' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `acm-trainer-growth-${dateKey(new Date())}.svg`;
+  link.click();
+  URL.revokeObjectURL(url);
+}

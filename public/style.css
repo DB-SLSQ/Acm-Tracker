@@ -1974,3 +1974,340 @@ input[type="number"]:focus {
   flex: 1 1 240px;
   max-width: 340px;
 }
+
+/* ============ 侧边栏 + 主视图 =
+   以前是一整页从上滑到底，现在左边菜单切换页面：同时只显示一个 section.panel。
+   背景图铺在最后面（body::before 是图，body::after 是压暗的那层纱）。 */
+
+body::before,
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+body::before {
+  z-index: -2;
+  background-image: var(--bg-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: var(--bg-image-opacity, 0.35);
+  filter: blur(var(--bg-image-blur, 0px));
+}
+
+/* 图片上面压一层背景色，保证文字始终读得清（强度越高纱越淡） */
+body.has-bg::after {
+  z-index: -1;
+  background: var(--bg);
+  /* 强度直接理解成「图片占多少」：强度 0.35 → 纱只剩 0.9-0.35=0.55 */
+  opacity: calc(0.9 - var(--bg-image-opacity, 0.35));
+}
+
+.app {
+  display: flex;
+  align-items: stretch;
+  min-height: 100vh;
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  width: 240px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 12px 14px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-topbar);
+  backdrop-filter: blur(14px);
+  z-index: 5;
+}
+
+.side-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.side-brand .brand-mark {
+  font-size: 20px;
+  color: var(--accent);
+}
+
+.side-brand h1 {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 0.3px;
+}
+
+.side-brand .brand-sub {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.side-nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+
+.side-group {
+  margin: 12px 8px 4px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--text-faint);
+}
+
+.side-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 9px;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.side-item .ico {
+  width: 18px;
+  text-align: center;
+  font-size: 15px;
+  flex: none;
+}
+
+.side-item:hover {
+  background: var(--bg-raise);
+  color: var(--text);
+}
+
+.side-item.active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.side-item.module-hidden,
+.side-group.module-hidden {
+  display: none;
+}
+
+.side-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.side-foot .handle-switch,
+.side-foot .qq-pill {
+  width: 100%;
+  justify-content: center;
+}
+
+.side-foot .theme-switch {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.side-foot .theme-btn {
+  padding: 4px 9px;
+  font-size: 12px;
+}
+
+.side-foot .topbar-status {
+  text-align: center;
+  font-size: 12px;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  padding: 26px 32px 30px;
+}
+
+.main > .panel {
+  max-width: 1120px;
+}
+
+.footer {
+  max-width: 1120px;
+  margin: 34px 0 0;
+}
+
+/* 背景图相关的两个滑杆和文件选择框 */
+input[type='range'] {
+  width: 150px;
+  accent-color: var(--accent);
+}
+
+input[type='file'] {
+  color: var(--text-dim);
+  font-size: 13px;
+  max-width: 260px;
+}
+
+input[type='file']::file-selector-button {
+  margin-right: 10px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raise);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ============ 浮层提示 ============ */
+.toast-box {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 420px;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: var(--bg-overlay);
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.5;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  animation: toast-in 0.18s ease-out;
+}
+
+.toast.error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.toast-action {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.toast-close {
+  flex: none;
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ============ 今日卡片上的手感按钮 / 补方向 / 复盘 ============ */
+.btn.small {
+  padding: 5px 10px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.feel-row {
+  flex: none;
+  display: flex;
+  gap: 4px;
+}
+
+.feel-btn {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.feel-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.feel-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.today-extra {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.today-extra select {
+  min-width: 150px;
+}
+
+.today-retro {
+  margin: 8px 0 0;
+}
+
+/* 紧凑模式：题单多看几行 */
+body.compact .problem-table td {
+  padding: 4px 8px;
+}
+
+body.compact .problem-table {
+  font-size: 12.5px;
+}
+
+body.compact .today-row {
+  padding: 4px 2px;
+}
+
+body.compact .panel-head h2 {
+  font-size: 17px;
+}

@@ -7,19 +7,18 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="topbar-inner">
-        <div class="brand">
+    <div class="app">
+      <!-- 左边是主菜单：点哪一项，右边就切到哪个页面（不再是一整页往下滑） -->
+      <aside class="sidebar" id="sidebar">
+        <div class="side-brand">
           <span class="brand-mark">▲</span>
           <div>
             <h1>ACM 训练台</h1>
             <p class="brand-sub">给一个人的 Codeforces 训练计划</p>
           </div>
         </div>
-        <div class="toolbar">
-          <button type="button" class="qq-pill" id="qq-toggle" title="点击显示群二维码">
-            <span class="qq-badge">群</span>交流群 1124017564
-          </button>
+        <nav class="side-nav" id="side-nav"></nav>
+        <div class="side-foot">
           <!-- 多账号：切换只改当前用哪个账号，数据按账号分开存 -->
           <select class="handle-switch" id="handle-switch" title="切换账号"></select>
           <div class="theme-switch" id="theme-switch">
@@ -28,31 +27,14 @@
             <button type="button" class="theme-btn" data-theme-value="gray">灰色</button>
             <button type="button" class="theme-btn" data-theme-value="eye">护眼</button>
           </div>
+          <button type="button" class="qq-pill" id="qq-toggle" title="点击显示群二维码">
+            <span class="qq-badge">群</span>交流群 1124017564
+          </button>
           <div class="topbar-status" id="status">未连接</div>
         </div>
-      </div>
-      <nav class="subnav" id="subnav">
-        <div class="subnav-inner">
-          <a href="#panel-overview">当前水平</a>
-          <a href="#panel-plan">训练计划</a>
-          <a href="#panel-schedule">训练日程</a>
-          <a href="#panel-calendar">比赛日历</a>
-          <a href="#panel-virtual">虚拟参赛</a>
-          <a href="#panel-heatmap">活动记录</a>
-          <a href="#panel-platforms">平台数据</a>
-          <a href="#panel-records">做题记录</a>
-          <a href="#panel-review">补题队列</a>
-          <a href="#panel-growth">成长</a>
-          <a href="#panel-tags">能力画像</a>
-          <a href="#panel-settings">设置</a>
-          <span class="subnav-spacer"></span>
-          <button type="button" class="subnav-btn" id="expand-all">展开全部</button>
-          <button type="button" class="subnav-btn" id="collapse-all">收起全部</button>
-        </div>
-      </nav>
-    </header>
+      </aside>
 
-    <main>
+      <main class="main" id="main">
       <section class="panel" id="panel-handle">
         <div class="panel-head">
           <h2>第一步：输入你的 Codeforces 用户名</h2>
@@ -80,6 +62,7 @@
         </div>
         <div class="stats" id="stats"></div>
         <div class="chart" id="rating-chart"></div>
+        <div id="warmup-card" class="hidden"></div>
         <div class="today-card hidden" id="today-card"></div>
       </section>
 
@@ -300,6 +283,28 @@
         <p class="subtle">不需要的模块可以直接关掉，连标题都不显示。</p>
         <div class="module-list" id="module-list"></div>
 
+        <h3 class="settings-title">背景图片</h3>
+        <p class="subtle">
+          挑一张自己的图当整个训练台的背景。图片存在本机数据目录里，不会上传到任何地方；
+          显示强度和模糊随时能调，觉得花就点「恢复默认背景」。
+        </p>
+        <div class="platform-row">
+          <div class="sched-field">
+            <label for="bg-file">选择图片（PNG / JPG / WebP，最大 12 MB）</label>
+            <input id="bg-file" type="file" accept="image/*" />
+          </div>
+          <div class="sched-field">
+            <label for="bg-opacity">显示强度</label>
+            <input id="bg-opacity" type="range" min="5" max="100" step="5" value="35" />
+          </div>
+          <div class="sched-field">
+            <label for="bg-blur">模糊</label>
+            <input id="bg-blur" type="range" min="0" max="24" step="1" value="0" />
+          </div>
+          <button class="btn" id="bg-clear">恢复默认背景</button>
+        </div>
+        <p class="hint" id="bg-hint">还没设置背景图。</p>
+
         <h3 class="settings-title">水平评估</h3>
         <p class="subtle">
           算「你在这个专题上做到什么难度」时，忽略掉比当前 rating 低一段的题。
@@ -407,7 +412,16 @@
           洛谷 ID 在个人主页地址栏里：luogu.com.cn/user/<b>数字</b>
         </p>
       </section>
+
+      <footer class="footer">
+        <span>数据来源：Codeforces 官方公开 API</span>
+        <span>
+          所有数据都保存在你自己的电脑上 · <a href="/selftest.html">计划自检</a> ·
+          <span id="app-version">读取中…</span>
+        </span>
+      </footer>
     </main>
+    </div>
 
     <div class="timer-bar hidden" id="timer-bar">
       <div class="timer-info">
@@ -421,14 +435,6 @@
       </div>
     </div>
 
-    <footer class="footer">
-      <span>数据来源：Codeforces 官方公开 API</span>
-      <span>
-        所有数据都保存在你自己的电脑上 · <a href="/selftest.html">计划自检</a> ·
-        <span id="app-version">读取中…</span>
-      </span>
-    </footer>
-
     <div class="qr-pop hidden" id="qq-pop">
       <img src="/qq-group-qr.png" alt="QQ 群 1124017564 二维码" />
       <div>
@@ -438,6 +444,31 @@
       </div>
     </div>
 
+    <!-- 浮层提示：报错、成功、以及需要你点一下的动作（比如重试） -->
+    <div class="toast-box" id="toast-box"></div>
+
     <script type="module" src="/app.js"></script>
   </body>
 </html>
+        <h3 class="settings-title">数据安全</h3>
+        <p class="subtle">
+          题库和训练记录都在本机。这里可以一键备份数据库、导出/导入训练数据（换电脑时用），
+          顺便检查有没有新版本。
+        </p>
+        <div class="platform-row">
+          <button class="btn primary" id="backup-btn">备份数据库</button>
+          <button class="btn" id="export-btn">导出训练数据</button>
+          <button class="btn" id="import-btn">导入训练数据</button>
+          <input id="import-file" type="file" accept="application/json,.json" class="hidden" />
+          <button class="btn" id="update-btn">检查更新</button>
+        </div>
+        <p class="hint" id="data-hint">备份会存到数据目录的 backups 里，随时可以翻出来。</p>
+
+        <h3 class="settings-title">列表密度</h3>
+        <p class="subtle">题单太长的时候可以切紧凑一点，一次多看几行。</p>
+        <label class="tag-hide-toggle" title="紧凑模式">
+          <input type="checkbox" id="compact-mode" />
+          <span>紧凑模式（行距更小、字号略小）</span>
+        </label>
+
+        <h3 class="settings-title">背景图片</h3>

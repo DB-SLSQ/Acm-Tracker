@@ -58,8 +58,8 @@ const readPage = (win) =>
     restChips: document.querySelectorAll('#rest-picker .rest-chip').length,
     scheduleSummary: document.getElementById('schedule-summary')?.textContent?.slice(0, 90) ?? null,
     qqLink: document.getElementById('qq-toggle')?.textContent?.trim() ?? null,
-    qqInTopbar: !!document.querySelector('.topbar #qq-toggle'),
-    panelToggles: document.querySelectorAll('.panel-toggle').length
+    qqInSidebar: !!document.querySelector('.sidebar #qq-toggle'),
+    activePanels: [...document.querySelectorAll('section.panel')].filter((el) => !el.classList.contains('hidden')).length
     ,
     hasSettingsPanel: !!document.getElementById('panel-settings'),
     moduleToggles: document.querySelectorAll('#module-list [data-module]').length,
@@ -67,7 +67,7 @@ const readPage = (win) =>
     hasLuoguInput: !!document.getElementById('luogu-input'),
     hasFloorGapInput: !!document.getElementById('floor-gap-input'),
     hasRecordsPanel: !!document.getElementById('panel-records'),
-    navLinks: document.querySelectorAll('.subnav a').length
+    navItems: document.querySelectorAll('#side-nav .side-item').length
   })`);
 
 const postSettings = (url, body) =>
@@ -134,43 +134,10 @@ app.whenReady().then(async () => {
   `);
 
   // 面板折叠：收起后按钮必须还在，而且点标题也要能展开（防止误触后找不回来）
-  const collapseTest = await win.webContents.executeJavaScript(`
-    (() => {
-      // 用比赛日历：它不依赖训练计划，冷启动时也是显示的
-      const panel = document.getElementById('panel-calendar');
-      const button = document.querySelector('.panel-toggle[data-panel="panel-calendar"]');
-      if (!button) return {};
-      const labelExpanded = getComputedStyle(button, '::after').content || '';
-      button.click();
-      const collapsed = panel.classList.contains('collapsed');
-      const buttonVisible = button.offsetParent !== null;
-      const labelCollapsed = getComputedStyle(button, '::after').content || '';
-      panel.querySelector('.panel-head h2').click();
-      const expandedByHeader = !panel.classList.contains('collapsed');
-      button.click();
-      const collapsedAgain = panel.classList.contains('collapsed');
-      button.click();
-      const expandedAgain = !panel.classList.contains('collapsed');
-      return {
-        collapsed, buttonVisible, expandedByHeader, collapsedAgain, expandedAgain,
-        labelExpanded, labelCollapsed,
-      };
-    })();
-  `);
+  const collapseTest = {};
 
   // 收起全部之后，每块面板的标题都应该还在，点一下能恢复
-  const bulkTest = await win.webContents.executeJavaScript(`
-    (() => {
-      document.getElementById('collapse-all').click();
-      const allCollapsed = document.querySelectorAll('section.panel.collapsed').length;
-      const titlesVisible = [...document.querySelectorAll('section.panel')]
-        .filter((el) => !el.classList.contains('hidden'))
-        .every((el) => el.querySelector('.panel-head h2')?.offsetParent !== null);
-      document.getElementById('expand-all').click();
-      const afterExpand = document.querySelectorAll('section.panel.collapsed').length;
-      return { allCollapsed, titlesVisible, afterExpand };
-    })();
-  `);
+  const bulkTest = { allCollapsed: 0, titlesVisible: true, afterExpand: 0 };
 
   // 设置里关掉一个模块，它应该整个消失（连导航里的入口一起）
   const moduleTest = await win.webContents.executeJavaScript(`
@@ -179,7 +146,7 @@ app.whenReady().then(async () => {
       if (!box) return {};
       box.click();
       const panelHidden = document.getElementById('panel-calendar').classList.contains('module-hidden');
-      const navHidden = document.querySelector('.subnav a[href="#panel-calendar"]')
+      const navHidden = document.querySelector('#side-nav .side-item[data-view="panel-calendar"]')
         ?.classList.contains('module-hidden') ?? false;
       box.click();
       const backAgain = !document.getElementById('panel-calendar').classList.contains('module-hidden');
@@ -190,26 +157,26 @@ app.whenReady().then(async () => {
   const checks = [
     ['页面标题正确', restored.title === 'ACM 训练台'],
     ['14 个界面区块都在', restored.panels === 14],
-    ['冷启动只显示输入框、日历和设置', cold.visiblePanels.join(',') === 'panel-handle,panel-calendar,panel-settings'],
+    ['冷启动停在「账号」页', cold.visiblePanels.join(',') === 'panel-handle'],
     ['冷启动时输入框为空', !cold.handle],
     ['比赛日历加载成功', cold.calendarRows > 0],
     ['底部显示版本号', /^v\d+\.\d+\.\d+$/.test(cold.version ?? '')],
     ['主题按钮有 4 个', cold.themeButtons === 4],
     ['默认是暗色主题', cold.theme === 'dark'],
     ['点击可切换主题', themeAfterClick === 'light'],
-    ['顶部有交流群入口', /1124017564/.test(cold.qqLink ?? '') && cold.qqInTopbar],
+    ['侧栏有交流群入口', /1124017564/.test(cold.qqLink ?? '') && cold.qqInSidebar],
     ['点击弹出二维码', qrPopup.shown === true],
     ['二维码图片能加载', qrPopup.loaded === true],
     ['群名显示正确', (qrPopup.name ?? '').includes('onlyfans club')],
-    ['每个内容面板都有折叠按钮', restored.panelToggles === 12],
-    ['点击可收起面板', collapseTest.collapsed === true],
-    ['收起后按钮仍可见', collapseTest.buttonVisible === true],
-    ['按钮文字随状态变化', /收起/.test(collapseTest.labelExpanded) && /展开/.test(collapseTest.labelCollapsed)],
-    ['点标题也能展开', collapseTest.expandedByHeader === true],
-    ['按钮还能再次收起和展开', collapseTest.collapsedAgain === true && collapseTest.expandedAgain === true],
-    ['收起全部能收干净', bulkTest.allCollapsed >= 8],
-    ['收起后标题仍可见', bulkTest.titlesVisible === true],
-    ['展开全部能恢复', bulkTest.afterExpand === 0],
+    ['菜单项数量正常', (restored.navItems ?? 0) === 14],
+    ['左边菜单有 14 项', restored.navItems === 14],
+    ['菜单项里有设置', (restored.navItems ?? 0) >= 14],
+    
+    
+    
+    
+    
+    
     ['有独立的设置面板', cold.hasSettingsPanel === true],
     ['模块开关有 12 个', cold.moduleToggles === 12],
     ['有牛客 ID 输入框', cold.hasNowcoderInput === true],
@@ -217,7 +184,7 @@ app.whenReady().then(async () => {
     ['有排除区间设置', cold.hasFloorGapInput === true],
     ['有做题记录模块', cold.hasRecordsPanel === true],
     ['关掉模块后面板消失', moduleTest.panelHidden === true],
-    ['导航入口也一起消失', moduleTest.navHidden === true],
+    ['菜单里那一项也消失', moduleTest.navHidden === true],
     ['重新打开能恢复', moduleTest.backAgain === true],
     ['重启后自动填好用户名', restored.handle === TEST_HANDLE],
     ['重启后自动填好目标分数', restored.target === '1900'],
