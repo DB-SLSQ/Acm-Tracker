@@ -978,6 +978,8 @@ function renderCompare() {
     .join('');
 
   const sharedRows = data.shared
+    // 题库里查不到的题（没难度没标签）不显示，只在下面那行提示里报个数
+    .filter((row) => row.rating != null)
     .slice(0, 20)
     .map(
       (row) => `<tr>
@@ -1259,9 +1261,14 @@ $('review-list').addEventListener('click', async (event) => {
 /** 做过的题：按首次通过时间从近到远，每次加载 100 道。 */
 function renderSolved() {
   const list = state.solved ?? [];
+  // 题库里查不到的题（gym、很早的比赛）没有难度和标签，刷训练记录没意义：
+  // 列表里不显示，只在上面标一句有多少道，避免看着像数据丢了。
+  const visible = list.filter((item) => item.rating != null);
+  const missing = list.length - visible.length;
   $('solved-summary').textContent =
-    `一共通过 ${state.solvedTotal} 道题，下面是最近的 ${list.length} 道（按通过时间从近到远）。`;
-  $('solved-list').innerHTML = list
+    `一共通过 ${state.solvedTotal} 道题，下面是最近的 ${visible.length} 道（按通过时间从近到远）。` +
+    (missing ? `另有 ${missing} 道题在题库里查不到（没有难度标签），已隐藏。` : '');
+  $('solved-list').innerHTML = visible
     .map(
       (item) => `<div class="record-row">
         <span class="record-time">${new Date(item.firstAcAt * 1000).toLocaleDateString('zh-CN')}</span>
@@ -2409,7 +2416,6 @@ document.addEventListener('click', (event) => {
 // 每个 section.panel 就是一个页面，同时只显示一个。
 // 顺序按「每天真正会看的先后」排：先看今天要做什么，再看数据，最后是资料类的。
 const NAV_ITEMS = [
-  { id: 'panel-handle', label: '账号', icon: '👤' },
   { id: 'panel-overview', label: '当前水平', icon: '📊' },
   { id: 'panel-target', label: '目标设置', icon: '🎯', group: '训练' },
   { id: 'panel-plan', label: '训练计划', icon: '📋' },
@@ -2962,8 +2968,8 @@ async function restoreSession() {
   // 地址栏里带着 #/plan 这种就恢复过去，否则从「当前水平」开始
   const fromHash = `panel-${location.hash.replace(/^#\/?/, '')}`;
   // 还没填账号就先停在「账号」页，填过的话停在地址栏指向的页面（默认当前水平）
-  const fallback = settings?.handle ? 'panel-overview' : 'panel-handle';
-  showView(VIEW_IDS.includes(fromHash) ? fromHash : fallback, { save: false });
+  // 账号和当前水平合并成一页了，冷启动也停在这一页
+  showView(VIEW_IDS.includes(fromHash) ? fromHash : 'panel-overview', { save: false });
   bindBackgroundInputs();
   loadPlatforms();
 

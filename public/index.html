@@ -35,30 +35,24 @@
       </aside>
 
       <main class="main" id="main">
-      <section class="panel" id="panel-handle">
+      <section class="panel" id="panel-overview">
         <div class="panel-head">
-          <h2>第一步：输入你的 Codeforces 用户名</h2>
-          <p>只会读取公开数据（rating、提交记录），不需要密码，也不需要登录。</p>
+          <h2>账号与当前水平</h2>
+          <p id="overview-handle"></p>
         </div>
+        <!-- 账号和当前水平合并在一页：进来先填用户名，填完同一页直接看水平 -->
         <div class="row">
           <input
             id="handle-input"
             type="text"
-            placeholder="例如 tourist"
+            placeholder="你的 Codeforces 用户名，例如 tourist"
             autocomplete="off"
             spellcheck="false"
           />
           <button class="btn primary" id="load-btn">加载我的数据</button>
-        </div>
-        <p class="hint" id="handle-hint">
-          第一次加载需要下载全站题库（约 1 万道题），可能要等十几秒，之后就很快了。
-        </p>
-      </section>
-
-      <section class="panel hidden" id="panel-overview">
-        <div class="panel-head">
-          <h2>当前水平</h2>
-          <p id="overview-handle"></p>
+          <span class="hint" id="handle-hint">
+            只读公开数据（rating、提交记录），不需要密码。第一次要下载全站题库，等十几秒。
+          </span>
         </div>
         <div class="stats" id="stats"></div>
         <div class="chart" id="rating-chart"></div>
@@ -227,17 +221,32 @@
           <h2>成长</h2>
           <p id="growth-summary"></p>
         </div>
-        <div class="growth-chart" id="growth-chart"></div>
-        <div class="panel-head sub">
-          <h2>训练强度 × 比赛结果</h2>
-          <p>每场 rated 比赛，回头看它前两周做了多少题、平均什么难度。看久了就知道自己哪种节奏涨分。</p>
+        <!-- 成长页改成网格：每块一个主题，标题下面直接写「这张图怎么看」 -->
+        <div class="growth-grid">
+          <div class="growth-card wide">
+            <h3>每周做了多少题</h3>
+            <p class="growth-note">
+              柱子 = 那一周首次通过的题数，柱子的颜色 = 当周平均难度（越亮越难）；
+              上面的小圆点 = 那周打的 rated 比赛，圆点旁的数字是这场涨跌多少分。
+            </p>
+            <div class="growth-chart" id="growth-chart"></div>
+          </div>
+
+          <div class="growth-card">
+            <h3>每场比赛：赛前两周练了多少</h3>
+            <p class="growth-note">
+              拿每场 rated 比赛往前推 14 天，看那段时间做了多少题、平均什么难度，
+              再和这场的涨跌分并排放在一起——练得多的时候是不是更稳，一眼能看出来。
+            </p>
+            <div id="growth-contests"></div>
+          </div>
+
+          <div class="growth-card">
+            <h3>各方向 75 分位的周变化</h3>
+            <p class="growth-note" id="growth-axes-hint"></p>
+            <div id="growth-axes"></div>
+          </div>
         </div>
-        <div id="growth-contests"></div>
-        <div class="panel-head sub">
-          <h2>方向成长</h2>
-          <p id="growth-axes-hint"></p>
-        </div>
-        <div id="growth-axes"></div>
 
         <div class="panel-head sub">
           <h2>和另一个账号比</h2>
@@ -416,10 +425,9 @@
 
       <footer class="footer">
         <span>数据来源：Codeforces 官方公开 API</span>
-        <span>
-          所有数据都保存在你自己的电脑上 · <a href="/selftest.html">计划自检</a> ·
-          <span id="app-version">读取中…</span>
-        </span>
+      <span>
+        所有数据都保存在你自己的电脑上 · <span id="app-version">读取中…</span>
+      </span>
       </footer>
     </main>
     </div>
@@ -462,6 +470,7 @@
           <button class="btn" id="import-btn">导入训练数据</button>
           <input id="import-file" type="file" accept="application/json,.json" class="hidden" />
           <button class="btn" id="update-btn">检查更新</button>
+          <a class="btn" href="/selftest.html">计划自检</a>
         </div>
         <p class="hint" id="data-hint">备份会存到数据目录的 backups 里，随时可以翻出来。</p>
 

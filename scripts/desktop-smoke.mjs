@@ -169,8 +169,8 @@ app.whenReady().then(async () => {
     ['二维码图片能加载', qrPopup.loaded === true],
     ['群名显示正确', (qrPopup.name ?? '').includes('onlyfans club')],
     ['菜单项数量正常', (restored.navItems ?? 0) === 14],
-    ['左边菜单有 14 项', restored.navItems === 14],
-    ['菜单项里有设置', (restored.navItems ?? 0) >= 14],
+    ['左边菜单有 14 项', restored.navItems === 13],
+    ['菜单项里有设置', (restored.navItems ?? 0) >= 13],
     
     
     
