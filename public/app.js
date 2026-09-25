@@ -546,7 +546,10 @@ function renderPlan(plan) {
     `按每周 ${plan.weekly} 题估算，全程约 ${plan.totalNeeded} 题、${plan.weeks} 周，分 ${plan.stages} 个阶段推进。` +
     progressLine;
 
-  $('plan-stages').innerHTML = plan.stageList
+  // 「按天看」时整块换成按天分组的折叠列表，其它（摘要、说明）不变
+  $('plan-stages').innerHTML = planByDay
+    ? planByDayHtml()
+    : plan.stageList
     .map((stage) => {
       const visible = stage.problems.filter(matchesPlanFilter);
       const rows = visible
@@ -3495,4 +3498,44 @@ document.addEventListener('keydown', (event) => {
   rows.forEach((row) => row.classList.remove('cursor'));
   rows[next].classList.add('cursor');
   rows[next].scrollIntoView({ block: 'nearest' });
+});
+
+// ---------- 计划页：按天看 ----------
+// 默认按「阶段」看（一长条）；点「按天看」就把整份计划按日程分组，
+// 一天一个可折叠的小块，符合「今天要做哪几题」的使用习惯。
+let planByDay = false;
+
+function planByDayHtml() {
+  const days = (state.schedule?.days ?? []).filter((day) => day.problems.length);
+  if (!days.length) {
+    return '<p class="subtle">日程还没排出来，先生成计划。</p>';
+  }
+  const today = dateKey(new Date());
+  return days
+    .map((day) => {
+      const ratings = day.problems.map((problem) => problem.rating ?? 0);
+      const spread = ratings.length > 1 ? Math.max(...ratings) - Math.min(...ratings) : 0;
+      const done = day.problems.filter((problem) =>
+        state.done.has(`${problem.contestId}-${problem.index}`),
+      ).length;
+      const span = spread >= 100 ? ` · 跨度 ${spread}` : '';
+      const flag = day.date === today ? ' class="day-group today"' : ' class="day-group"';
+      return `<details${flag}${day.date === today ? ' open' : ''}>
+        <summary>
+          <span class="day-date">${formatMonthDay(day.date)}</span>
+          <span class="day-meta">${day.problems.length} 题 · ${ratings.join(' / ')} 分${span} · 已完成 ${done}/${day.problems.length}</span>
+        </summary>
+        <table class="problem-table">${day.problems
+          .map((problem) => problemRow(problem, problem.rating))
+          .join('')}</table>
+      </details>`;
+    })
+    .join('');
+}
+
+$('plan-day-toggle').addEventListener('click', () => {
+  planByDay = !planByDay;
+  $('plan-day-toggle').textContent = planByDay ? '按阶段看' : '按天看';
+  $('plan-day-toggle').classList.toggle('primary', planByDay);
+  if (state.planData) renderPlan(state.planData);
 });

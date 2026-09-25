@@ -2317,3 +2317,50 @@ body.compact .panel-head h2 {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
+
+/* 按天看的折叠块 */
+.day-group {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-raise);
+  overflow: hidden;
+}
+
+.day-group.today {
+  border-color: var(--card-border);
+  background: var(--card-gradient);
+}
+
+.day-group summary {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.day-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.day-group summary::before {
+  content: '▸';
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.day-group[open] summary::before {
+  content: '▾';
+}
+
+.day-date {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.day-meta {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
