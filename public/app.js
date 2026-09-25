@@ -1103,7 +1103,12 @@ function renderGrowth() {
 
   $('growth-chart').innerHTML = `
     <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">${bars}${compareLine}${markers}</svg>
-    <p class="subtle">柱子是一周做通过的题数（颜色按当周平均难度），上面的小圆点是比赛，写着这场涨跌多少分${compareNote}。</p>`;
+    <p class="subtle">柱子是一周做通过的题数（颜色按当周平均难度），上面的小圆点是比赛，写着这场涨跌多少分${compareNote}。</p>
+    <div class="reco-actions"><button type="button" class="btn small" id="export-growth">导出图片（SVG）</button></div>`;
+  $('export-growth')?.addEventListener('click', exportChartSvg);
+  if (data.conclusion) {
+    $('growth-summary').textContent += ` ${data.conclusion}`;
+  }
 
   if (!contests.length) {
     $('growth-contests').innerHTML = '<p class="subtle">最近这段时间没有 rated 比赛记录。</p>';
@@ -3461,3 +3466,33 @@ function exportChartSvg() {
   link.click();
   URL.revokeObjectURL(url);
 }
+
+// ---------- 键盘操作 ----------
+// 计划表很长，鼠标点checkbox 累；↑/↓ 移动高亮行，空格打勾。
+document.addEventListener('keydown', (event) => {
+  if (event.target.matches('input, textarea, select')) return;
+  if (!['ArrowUp', 'ArrowDown', ' '].includes(event.key)) return;
+  const rows = [...document.querySelectorAll('#plan-stages tr[data-key]')];
+  if (!rows.length) return;
+  const current = rows.findIndex((row) => row.classList.contains('cursor'));
+
+  if (event.key === ' ') {
+    event.preventDefault();
+    const row = current < 0 ? rows[0] : rows[current];
+    row.querySelector('input[type="checkbox"]')?.click();
+    if (current < 0) {
+      rows[0].classList.add('cursor');
+      rows[0].scrollIntoView({ block: 'nearest' });
+    }
+    return;
+  }
+
+  event.preventDefault();
+  const next =
+    event.key === 'ArrowDown'
+      ? Math.min(rows.length - 1, current + 1)
+      : Math.max(0, current < 0 ? 0 : current - 1);
+  rows.forEach((row) => row.classList.remove('cursor'));
+  rows[next].classList.add('cursor');
+  rows[next].scrollIntoView({ block: 'nearest' });
+});

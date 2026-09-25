@@ -2311,3 +2311,9 @@ body.compact .today-row {
 body.compact .panel-head h2 {
   font-size: 17px;
 }
+
+/* 键盘操作时高亮当前那一行 */
+.problem-table tr.cursor {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}

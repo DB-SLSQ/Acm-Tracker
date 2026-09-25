@@ -352,6 +352,33 @@
           `差距 ${gap} 分，应该有 ${Math.round((gap / 100) * 60)} 题以上`,
         );
 
+        // 数据体检：题库新不新、模型值不值得留、库多大
+        try {
+          const health = await (await fetch('/api/health')).json();
+          const syncedAt = health.problemsUpdatedAt
+            ? new Date(health.problemsUpdatedAt).toLocaleDateString('zh-CN')
+            : '未知';
+          add(
+            `题库 ${health.problems} 道，上次同步 ${syncedAt}`,
+            health.problems > 3000 && (!health.problemsUpdatedAt || Date.now() - health.problemsUpdatedAt < 30 * 86400000),
+            '题库太旧的话，推荐里会缺少新比赛的题，到设置里点一次「同步题库」',
+          );
+          add(
+            health.model
+              ? `推题模型：AUC ${health.model.auc ?? '—'}（基线 ${health.model.baselineAuc ?? '—'}），${health.model.active ? '已启用' : '没赢过基线，按规则走'}`
+              : '还没训练过推题模型（不训练也完全能用内置规则）',
+            true,
+            health.model?.trainedAt ? `训练于 ${new Date(health.model.trainedAt).toLocaleDateString('zh-CN')}` : '',
+          );
+          add(
+            `数据库 ${(health.dbSize / 1048576).toFixed(1)} MB`,
+            health.dbSize > 0,
+            '数据都在本机，建议偶尔在设置里点一次「备份数据库」',
+          );
+        } catch (error) {
+          add('数据体检读取失败', false, error.message);
+        }
+
         const passed = checks.filter((item) => item.ok).length;
         const failed = checks.length - passed;
         $('status').textContent = `跑完了：${checks.length} 项检查，通过 ${passed} 项。`;

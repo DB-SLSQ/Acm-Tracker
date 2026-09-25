@@ -714,9 +714,29 @@ function buildGrowthReport(handleKey, weeks) {
     axisTrend.sort((a, b) => b.change - a.change);
   }
 
+  // 一句话结论：把「赛前练得多」和「这一场涨了多少分」放一起看。
+  // 只是描述你这份数据，不做因果断言——比赛难度不同，样本也就几十场。
+  const heavy = recentContests.filter((row) => (row.solvedBefore ?? 0) >= 8);
+  const light = recentContests.filter((row) => (row.solvedBefore ?? 0) < 8);
+  const avgDelta = (list) =>
+    list.length ? Math.round(list.reduce((sum, row) => sum + (row.delta ?? 0), 0) / list.length) : null;
+  let conclusion = null;
+  if (heavy.length >= 3 && light.length >= 3) {
+    const hot = avgDelta(heavy);
+    const cold = avgDelta(light);
+    const gap = hot - cold;
+    conclusion =
+      gap >= 8
+        ? `赛前两周做满 8 题的 ${heavy.length} 场，平均涨 ${hot} 分；练得少的 ${light.length} 场平均 ${cold} 分——练得多的那几场更稳。`
+        : gap <= -8
+          ? `赛前做满 8 题的 ${heavy.length} 场平均 ${hot} 分，练得少的 ${light.length} 场平均 ${cold} 分，反而是练得少的成绩好——多半是那几场难度更低，别急着改训练量。`
+          : `赛前练多练少的平均涨跌差不多（${hot} / ${cold} 分），目前看不出训练量和涨分的直接关系。`;
+  }
+
   return {
     weeks: series,
     contests: recentContests,
+    conclusion,
     axisTrend,
     axisSnapshots: snapshots.length,
     summary: {
