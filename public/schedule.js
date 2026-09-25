@@ -91,13 +91,18 @@ export function buildSchedule({
     const assigned = problems.slice(index, index + quota);
     index += assigned.length;
     const date = parseDateKey(key);
+    // 一天之内按难度从易到难。
+    // 计划那边是按「每天几题」分组发的牌，但实际排期里某天可能多一题、少一题
+    // （休息日、某天没空、每周题量不是 7 的倍数），一跨组边界就会先难后易，
+    // 界面上看着乱。这里统一再排一次，分配结果不变，只是显示顺序。
+    const dayProblems = [...assigned].sort((a, b) => (a.rating ?? 0) - (b.rating ?? 0));
     days.push({
       date: key,
       weekday: date.getDay(),
       label: WEEKDAY_LABELS[date.getDay()],
       quota,
-      problems: assigned,
-      stages: [...new Set(assigned.map((problem) => problem.stage).filter((s) => s != null))],
+      problems: dayProblems,
+      stages: [...new Set(dayProblems.map((problem) => problem.stage).filter((s) => s != null))],
     });
     if (index >= problems.length) break;
   }
