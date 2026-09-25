@@ -293,6 +293,28 @@
         <p class="subtle">不需要的模块可以直接关掉，连标题都不显示。</p>
         <div class="module-list" id="module-list"></div>
 
+        <h3 class="settings-title">数据安全</h3>
+                <p class="subtle">
+                  题库和训练记录都在本机。这里可以一键备份数据库、导出/导入训练数据（换电脑时用），
+                  顺便检查有没有新版本。
+                </p>
+                <div class="platform-row">
+                  <button class="btn primary" id="backup-btn">备份数据库</button>
+                  <button class="btn" id="export-btn">导出训练数据</button>
+                  <button class="btn" id="import-btn">导入训练数据</button>
+                  <input id="import-file" type="file" accept="application/json,.json" class="hidden" />
+                  <button class="btn" id="update-btn">检查更新</button>
+                  <a class="btn" href="/selftest.html">计划自检</a>
+                </div>
+                <p class="hint" id="data-hint">备份会存到数据目录的 backups 里，随时可以翻出来。</p>
+        
+        <h3 class="settings-title">列表密度</h3>
+                <p class="subtle">题单太长的时候可以切紧凑一点，一次多看几行。</p>
+                <label class="tag-hide-toggle" title="紧凑模式">
+                  <input type="checkbox" id="compact-mode" />
+                  <span>紧凑模式（行距更小、字号略小）</span>
+                </label>
+        
         <h3 class="settings-title">背景图片</h3>
         <p class="subtle">
           挑一张自己的图当整个训练台的背景。图片存在本机数据目录里，不会上传到任何地方；
@@ -459,26 +481,3 @@
     <script type="module" src="/app.js"></script>
   </body>
 </html>
-        <h3 class="settings-title">数据安全</h3>
-        <p class="subtle">
-          题库和训练记录都在本机。这里可以一键备份数据库、导出/导入训练数据（换电脑时用），
-          顺便检查有没有新版本。
-        </p>
-        <div class="platform-row">
-          <button class="btn primary" id="backup-btn">备份数据库</button>
-          <button class="btn" id="export-btn">导出训练数据</button>
-          <button class="btn" id="import-btn">导入训练数据</button>
-          <input id="import-file" type="file" accept="application/json,.json" class="hidden" />
-          <button class="btn" id="update-btn">检查更新</button>
-          <a class="btn" href="/selftest.html">计划自检</a>
-        </div>
-        <p class="hint" id="data-hint">备份会存到数据目录的 backups 里，随时可以翻出来。</p>
-
-        <h3 class="settings-title">列表密度</h3>
-        <p class="subtle">题单太长的时候可以切紧凑一点，一次多看几行。</p>
-        <label class="tag-hide-toggle" title="紧凑模式">
-          <input type="checkbox" id="compact-mode" />
-          <span>紧凑模式（行距更小、字号略小）</span>
-        </label>
-
-        <h3 class="settings-title">背景图片</h3>
