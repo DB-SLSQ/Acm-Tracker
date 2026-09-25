@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ACM 训练台 · 计划自检</title>
+    <link rel="stylesheet" href="/style.css" />
+    <style>
+      body {
+        padding: 28px 0 60px;
+      }
+      .wrap {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 0 24px;
+      }
+      h1 {
+        font-size: 24px;
+        margin: 0 0 6px;
+      }
+      .lead {
+        color: var(--text-dim);
+        font-size: 14px;
+        margin: 0 0 22px;
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--bg-raise);
+      }
+      .bar label {
+        font-size: 13px;
+        color: var(--text-dim);
+      }
+      .bar input[type='text'],
+      .bar input[type='number'] {
+        width: 110px;
+      }
+      .summary {
+        margin: 20px 0 8px;
+        font-size: 17px;
+        font-weight: 600;
+      }
+      .summary.ok {
+        color: var(--ok-text, #79d19a);
+      }
+      .summary.bad {
+        color: var(--danger, #ff8b8b);
+      }
+      .check {
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+        padding: 9px 14px;
+        border-bottom: 1px solid var(--border);
+        font-size: 14px;
+      }
+      .check:last-child {
+        border-bottom: none;
+      }
+      .check .mark {
+        flex: none;
+        width: 18px;
+      }
+      .check .detail {
+        color: var(--text-dim);
+        font-size: 13px;
+      }
+      .card {
+        margin-top: 18px;
+        border: 1px solid var(--card-border);
+        border-radius: 12px;
+        background: var(--card-gradient);
+        overflow: hidden;
+      }
+      .card h2 {
+        margin: 0;
+        padding: 12px 16px;
+        font-size: 15px;
+        border-bottom: 1px solid var(--border);
+      }
+      .tiers {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        padding: 14px 16px;
+      }
+      .tier {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: var(--bg-raise);
+      }
+      .tier .name {
+        font-size: 12.5px;
+        color: var(--text-dim);
+      }
+      .tier .rating {
+        font-size: 19px;
+        font-weight: 700;
+      }
+      .tier .count {
+        font-size: 13px;
+        color: var(--text-dim);
+      }
+      .tier .gauge {
+        height: 6px;
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--text) 14%, transparent);
+        margin-top: 8px;
+        overflow: hidden;
+      }
+      .tier .gauge span {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+      }
+      table.days {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13.5px;
+      }
+      table.days td {
+        padding: 7px 16px;
+        border-bottom: 1px solid var(--border);
+      }
+      table.days tr:last-child td {
+        border-bottom: none;
+      }
+      .mono {
+        font-family: ui-monospace, Consolas, monospace;
+        color: var(--text-dim);
+      }
+      .pill {
+        display: inline-block;
+        min-width: 46px;
+        text-align: center;
+        border-radius: 6px;
+        padding: 1px 7px;
+        font-size: 12.5px;
+        background: var(--bg-raise);
+        border: 1px solid var(--border);
+        margin-right: 5px;
+      }
+      .bad-row {
+        background: color-mix(in srgb, var(--danger) 12%, transparent);
+      }
+      .hint {
+        color: var(--text-dim);
+        font-size: 13px;
+        margin: 10px 0 0;
+      }
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>计划自检</h1>
+      <p class="lead"><a href="/">← 回到训练台</a></p>
+      <p class="lead">
+        读本机服务里的训练计划，检查每天的题是不是从易到难、四个难度档是不是均分、
+        方向配额有没有跑偏。点一下就行，不改任何数据。
+      </p>
+
+      <div class="bar">
+        <label>用户名</label>
+        <input id="handle" type="text" placeholder="例如 tourist" autocomplete="off" />
+        <label>目标</label>
+        <input id="target" type="number" min="800" max="4000" step="50" value="1800" />
+        <label>每周题量</label>
+        <input id="weekly" type="number" min="1" max="200" step="1" value="10" />
+        <label><input id="refresh" type="checkbox" /> 重新挑一批（不改动已保存的计划）</label>
+        <button class="btn primary" id="run">开始自检</button>
+      </div>
+      <p class="hint" id="status">还没跑。</p>
+
+      <div id="report"></div>
+    </div>
+
+    <script type="module">
+      import { buildSchedule } from '/schedule.js';
+
+      // 四档相对「这一阶段中心」的偏移，和 lib/plan.js 里的 LADDER_TIER_OFFSETS 一致
+      const TIER_OFFSETS = [-150, 50, 250, 450];
+      const TIER_NAMES = ['练手', '进阶', '提升', '学习'];
+      const $ = (id) => document.getElementById(id);
+      const clean = (value) => (value == null ? '' : value);
+      const median = (list) => {
+        if (!list.length) return 0;
+        const sorted = [...list].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+      };
+
+      const checks = [];
+      const add = (name, ok, detail = '') => checks.push({ name, ok, detail });
+
+      async function loadSettings() {
+        try {
+          const { settings } = await (await fetch('/api/settings')).json();
+          if (settings?.handle) $('handle').value = settings.handle;
+          if (settings?.target) $('target').value = settings.target;
+          if (settings?.weekly) $('weekly').value = settings.weekly;
+        } catch {
+          /* 没读到就让用户自己填 */
+        }
+      }
+
+      function renderTiers(stage, problems) {
+        const targets = TIER_OFFSETS.map((offset) => stage.targetRating + offset);
+        const counts = targets.map(() => 0);
+        for (const problem of problems) {
+          let best = 0;
+          targets.forEach((target, index) => {
+            if (
+              Math.abs(problem.rating - target) < Math.abs(problem.rating - targets[best])
+            ) {
+              best = index;
+            }
+          });
+          counts[best] += 1;
+        }
+        const max = Math.max(1, ...counts);
+        const cells = targets
+          .map(
+            (target, index) => `
+              <div class="tier">
+                <div class="name">${TIER_NAMES[index]} · ${target}</div>
+                <div class="rating">${counts[index]} 题</div>
+                <div class="gauge"><span style="width:${Math.round((counts[index] / max) * 100)}%"></span></div>
+              </div>`,
+          )
+          .join('');
+        const min = Math.min(...counts);
+        return {
+          html: `<div class="tiers">${cells}</div>`,
+          balanced: min > 0 && max / min <= 1.8,
+          detail: targets.map((t, i) => `${t} ${counts[i]} 题`).join(' / '),
+        };
+      }
+
+      function dayRow(day) {
+        const ratings = day.problems.map((problem) => problem.rating);
+        const spread = ratings.length > 1 ? Math.max(...ratings) - Math.min(...ratings) : 0;
+        const ascending = ratings.every((value, index) => index === 0 || value >= ratings[index - 1]);
+        return `<tr class="${ascending && (ratings.length < 2 || spread >= 100) ? '' : 'bad-row'}">
+          <td class="mono">${day.date} ${day.label}</td>
+          <td>${ratings.map((rating) => `<span class="pill">${rating}</span>`).join('')}</td>
+          <td class="mono">跨度 ${spread}</td>
+          <td>${ascending ? '从易到难' : '⚠ 顺序乱了'}</td>
+        </tr>`;
+      }
+
+      async function run() {
+        const handle = $('handle').value.trim();
+        if (!handle) {
+          $('status').textContent = '先填个用户名。';
+          return;
+        }
+        checks.length = 0;
+        $('status').textContent = '正在读计划…';
+        $('report').innerHTML = '';
+        const url =
+          `/api/plan?handle=${encodeURIComponent(handle)}` +
+          `&target=${Number($('target').value)}&weekly=${Number($('weekly').value)}` +
+          ($('refresh').checked ? '&refresh=1' : '');
+
+        let data;
+        try {
+          data = await (await fetch(url)).json();
+        } catch (error) {
+          $('status').textContent = `读计划失败：${error.message}`;
+          return;
+        }
+        if (!data.plan) {
+          $('status').textContent = `读计划失败：${data.error ?? '返回里没有 plan'}`;
+          return;
+        }
+
+        const stages = data.plan.stageList;
+        const problems = stages.flatMap((stage) =>
+          stage.problems.map((problem) => ({ ...problem, stage: stage.index })),
+        );
+        const schedule = buildSchedule({
+          problems,
+          weekly: Number($('weekly').value),
+          startDate: new Date(),
+        });
+        const days = schedule.days.filter((day) => day.problems.length);
+
+        // 1. 每天从易到难
+        const unordered = days.filter((day) => {
+          const ratings = day.problems.map((problem) => problem.rating);
+          return !ratings.every((value, index) => index === 0 || value >= ratings[index - 1]);
+        });
+        add(
+          `${days.length} 个做题日，每天从易到难`,
+          unordered.length === 0,
+          unordered.length ? `有 ${unordered.length} 天乱了：${unordered.slice(0, 3).map((d) => d.date).join('、')}` : '',
+        );
+
+        // 2. 每天跨度（不塌陷）
+        const multi = days.filter((day) => day.problems.length > 1);
+        const spreads = multi.map((day) => {
+          const ratings = day.problems.map((problem) => problem.rating);
+          return Math.max(...ratings) - Math.min(...ratings);
+        });
+        const thin = multi.filter((day) => {
+          const ratings = day.problems.map((problem) => problem.rating);
+          return Math.max(...ratings) - Math.min(...ratings) < 100;
+        });
+        add(
+          `多题日每天跨度 ≥ 100 分（最小 ${Math.min(...spreads)}，中位 ${median(spreads)}）`,
+          thin.length === 0,
+          thin.length ? `有 ${thin.length} 天跨度不足 100 分` : '',
+        );
+
+        // 3. 阶段内四档均分
+        const tierBlocks = [];
+        for (const stage of stages) {
+          const tiers = renderTiers(stage, stage.problems);
+          tierBlocks.push(
+            `<div class="card"><h2>${stage.label} · ${stage.band[0]}~${stage.band[1]} 分 · 四档分布</h2>${tiers.html}</div>`,
+          );
+          add(`${stage.label}四档题量均分`, tiers.balanced, tiers.detail);
+        }
+
+        // 4. 方向配额
+        for (const stage of stages) {
+          const counts = stage.axisPlan.map((row) => row.count);
+          const max = Math.max(...counts);
+          const min = Math.min(...counts);
+          add(
+            `${stage.label}方向配额没有跑偏（${min}~${max}）`,
+            max / Math.max(1, min) <= 2.5,
+            stage.axisPlan.map((row) => `${row.axis} ${row.count}`).join(' · '),
+          );
+        }
+
+        // 5. 题量
+        const gap = data.plan.target - data.plan.current;
+        add(
+          `计划题量 ${problems.length} 题，符合「每 100 分约 60 题」`,
+          problems.length >= Math.round((gap / 100) * 60),
+          `差距 ${gap} 分，应该有 ${Math.round((gap / 100) * 60)} 题以上`,
+        );
+
+        const passed = checks.filter((item) => item.ok).length;
+        const failed = checks.length - passed;
+        $('status').textContent = `跑完了：${checks.length} 项检查，通过 ${passed} 项。`;
+
+        const showDays = [...days.slice(0, 6), null, ...days.slice(-6)].filter((day) => day !== undefined);
+        $('report').innerHTML = `
+          <p class="summary ${failed ? 'bad' : 'ok'}">
+            ${failed ? `有 ${failed} 项没过，看下面标红的` : `全部 ${passed} 项通过`}
+          </p>
+          <div class="card">
+            ${checks
+              .map(
+                (item) => `<div class="check"><span class="mark">${item.ok ? '✅' : '❌'}</span>
+                  <span>${item.name}${item.detail ? `<div class="detail">${item.detail}</div>` : ''}</span></div>`,
+              )
+              .join('')}
+          </div>
+          <div class="card">
+            <h2>每天要做的题（先列前 6 天和后 6 天）</h2>
+            <table class="days">
+              ${showDays
+                .map((day) => (day === null ? '<tr><td colspan="4" class="mono">……</td></tr>' : dayRow(day)))
+                .join('')}
+            </table>
+          </div>
+          ${tierBlocks.join('')}
+        `;
+      }
+
+      $('run').addEventListener('click', run);
+      $('handle').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') run();
+      });
+      loadSettings();
+    </script>
+  </body>
+</html>
