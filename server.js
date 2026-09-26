@@ -25,7 +25,7 @@ import {
   parseContestInfo,
   recommendVirtualContests,
 } from './lib/contests.js';
-import { fetchLuogu, fetchNowcoder, PlatformError } from './lib/platforms.js';
+import { fetchLuogu, fetchLuoguText, fetchNowcoder, PlatformError } from './lib/platforms.js';
 import {
   AtcoderError,
   fetchCatalog as fetchAtcoderCatalog,
@@ -1199,23 +1199,56 @@ async function loadExternalContests(source) {
   return cached;
 }
 
-/** 洛谷赛程：contest/list 加上 _contentOnly=1 会返回一份 JSON。 */
+/**
+ * 从洛谷返回的正文里挖出比赛列表。
+ *
+ * 这个接口**必须带 cookie**：不带的话洛谷会一直 302，fetch 直接报 fetch failed
+ * （实测 2026-09：裸 fetch 必挂，接下 set-cookie 再请求就 200）。所以调用方要走
+ * fetchLuoguText，它负责把服务器下发的 cookie 带上再请求一次。
+ *
+ * 拿回来的其实是 HTML（就算带 _contentOnly=1 也是 HTML，实测三种 Accept 都一样），
+ * 数据嵌在 <script id="lentille-context"> 那段 JSON 里。顺手兼容一下真给 JSON 的情况，
+ * 免得哪天洛谷改了行为整块功能直接空掉。
+ *
+ * 实测字段（2026-09）：id / startTime / endTime / name / method / visibility /
+ * invitationCodeType / rated / host / squad / problemCount。列表按开赛时间**倒序**，
+ * 第一页 20 条就从最近一场往回排，往后翻全是已经打完的比赛，所以只取第一页。
+ */
+function parseLuoguContests(text) {
+  let payload = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    const block = text.match(
+      /<script id="lentille-context" type="application\/json">([\s\S]*?)<\/script>/,
+    );
+    if (block) {
+      try {
+        payload = JSON.parse(block[1]);
+      } catch {
+        throw new Error('洛谷赛程数据解析失败');
+      }
+    }
+  }
+  if (!payload) throw new Error('洛谷页面里没找到赛程数据，可能页面结构变了或者被风控拦了');
+  // 纯 JSON 接口挂在 currentData 下，HTML 里那段挂在 data 下
+  const node = payload.currentData ?? payload.data ?? payload;
+  return Array.isArray(node?.contests?.result) ? node.contests.result : [];
+}
+
+/** 洛谷赛程：contest/list?_contentOnly=1。 */
 async function fetchLuoguContests() {
-  const response = await fetch('https://www.luogu.com.cn/contest/list?_contentOnly=1', {
-    headers: { 'User-Agent': CALENDAR_UA, 'x-luogu-type': 'content-only' },
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const body = await response.json();
-  const rows = body?.currentData?.contests?.result ?? [];
-  // 洛谷只要 rated 的场次：这份数据里 rated 标记的字段名变过（rated / ratedLimit），
-  // 两个都认；万一哪天两个都没了，退回「时长 ≥ 2 小时」当正式赛，别把列表抓空。
+  const html = await fetchLuoguText('https://www.luogu.com.cn/contest/list?_contentOnly=1');
+  const rows = parseLuoguContests(html);
+
+  // 洛谷只要 rated 的场次。rated 是**数字**不是布尔：实测官方 rated 场次是 3、
+  // ICPC 区域赛重现赛是 1、不计分的娱乐赛是 0，所以按数值判断，0 才丢掉。
+  // 万一哪天这个字段整个没了，退回「时长 ≥ 2 小时」当正式赛，别把列表抓空。
   const valid = rows.filter((row) => row?.startTime && row?.endTime && row?.name);
   const hasRatedFlag = valid.some((row) => row.rated !== undefined || row.ratedLimit !== undefined);
   return valid
     .filter((row) => {
-      if (hasRatedFlag) {
-        return row.rated === true || row.rated === 1 || Number(row.ratedLimit ?? 0) > 0;
-      }
+      if (hasRatedFlag) return Number(row.rated ?? row.ratedLimit ?? 0) > 0;
       return Number(row.endTime) - Number(row.startTime) >= 2 * 3600;
     })
     .map((row) => ({

@@ -73,6 +73,11 @@ npm.cmd run sync       # 手动刷新题库
 
 - **Codeforces 接口**：非 gym 比赛的 `contest.standings` 只接受不带任何额外参数的匿名请求，
   加 `from`/`count` 会被直接拒绝。要一页拿全场再自己等距抽样。
+- **洛谷 `contest/list` 必须带 cookie**：不带的话会一直 302，Node 的 `fetch` 直接报
+  `fetch failed`（看着像网络不通，实际是缺 cookie）。走 `lib/platforms.js` 的
+  `fetchLuoguText`，它接下 `set-cookie` 再请求一次。返回的是 HTML，比赛数据嵌在
+  `<script id="lentille-context">` 那段 JSON 的 `data.contests.result` 里；
+  `rated` 是**数字**（官方 rated 场次 3、ICPC 重现赛 1、不计分 0），按数值判断。
 - **洛谷难度是 9 档**（中间有「普及」和「提高」两档），配色对应 `public/app.js` 的 `LUOGU_COLORS`。
 - **推题模型**：训练完必须按时间切分出留出集，和「只看难度差」的基线比；AUC 不低于 0.75
   且明显优于基线才启用，否则继续用内置规则，界面要写明原因。
