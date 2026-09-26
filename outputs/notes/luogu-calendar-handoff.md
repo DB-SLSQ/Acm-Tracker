@@ -5,7 +5,8 @@
 ## 当前状态
 
 - 抓取已修好并验证通过：**带 cookie 请求 + 从页面内嵌 JSON 取数据**。
-- 尚未提交。工作区里同时躺着「洛谷题库」那条线的未提交改动，见下面「现场风险」。
+- 已随 **v0.1.7** 一起发布（提交 `afde08b`、tag `v0.1.7`，GitHub Actions 已生成 Release 与安装包）。
+  这一版同时带上了「洛谷题库 + AtCoder 题混排」那条线，历史遗留的未提交状态已经清干净。
 
 ## 洛谷接口的真实行为（本机实测）
 
@@ -54,23 +55,24 @@ Codeforces 2 场；唯一那条 `rated = 0` 的娱乐赛（LABOI Round 1）被�
 界面截图在 `.dev/shots/calendar-all.png` 和 `.dev/shots/calendar-luogu.png`
 （用 `node_modules\electron\dist\electron.exe .dev\shot-calendar.mjs` 重跑）。
 
-## 现场风险（比抓取本身更要紧）
+截这种「加载之后再滚动/点击」的图时，记得在脚本里关掉后台降频
+（`win.webContents.setBackgroundThrottling(false)`）。窗口是 `show: false` 的时候会被降频，
+滚了页也照样截到顶部，看着像滚动没生效，其实只是没重绘。
 
-**提交 `2e2611b` 是坏的：它引用了没有提交的文件。**
+## 现场风险（已解决，留个教训）
+
+`2e2611b` 当时是坏的：它引用了没有提交的文件。
 
 - `server.js` 里有 `from './lib/atcoder.js'` 和 `from './lib/luogu.js'`，
-  但这两个文件至今没被 `git add` 过（还是 `??` 未跟踪状态）。
+  但这两个文件当时没被 `git add` 过（一直是 `??` 未跟踪状态）。
 - 用 `git archive HEAD` 解出一份干净副本再 `node server.js`，报
   `ERR_MODULE_NOT_FOUND: Cannot find module lib\atcoder.js`。
   也就是说**别人克隆下来跑不起来**，本机能跑只是因为磁盘上有这两个文件。
-- 同一个坑还有一处：`fetchLuoguText` 的 `export` 也在未提交的 `lib/platforms.js` 改动里，
-  日历这次就是靠它。只提交 `server.js` 会把仓库搞得更坏。
+- `fetchLuoguText` 的 `export` 当时也在未提交的 `lib/platforms.js` 改动里。
+  几条线共用同一个 `server.js` 时，提交自己那条很容易把别人写了一半的东西带上去。
 
-结论：提交时要**把两条线一起提交**（`lib/luogu.js`、`lib/atcoder.js`、
-`lib/platforms.js`、`lib/db.js`、`lib/plan.js`、`lib/knowledge.js`、
-`scripts/sync-problems.js`、`README.md` + `server.js`），
-或者先确认洛谷题库那条线做到哪一步、能不能独立落地。
-以后一条线一个提交，别在同一个 `server.js` 上两个人同时改。
+v0.1.7 已经把这些一起提交了。教训是：**一条线一个提交、别在同一个 `server.js` 上并行改**；
+交付前用 `git archive HEAD` 解一份干净副本起来跑一次，十秒钟就能发现这种事。
 
 ## 没做、可以接着做的
 
