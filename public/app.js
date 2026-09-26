@@ -67,6 +67,8 @@ const state = {
   // 补题队列
   review: [],
   reviewSort: 'stale',
+  // 补题队列里被隐藏的题数（题库里查不到的，只报个数）
+  reviewMissing: 0,
   // 成长报告
   growth: null,
   // 多账号
@@ -889,7 +891,7 @@ function renderBlockedList() {
         <span class="record-name">
           <span class="record-code">${problemCodeText(item)}</span>
           <a href="${problemHref(item)}"
-             target="_blank" rel="noreferrer">${escapeHtml(item.name ?? '（题库里没有这道题）')}</a>${platformBadge(item)}
+             target="_blank" rel="noreferrer">${escapeHtml(item.name ?? '（记录时没存下题目名）')}</a>${platformBadge(item)}
         </span>
         <span>${ratingBadge(item.rating)}</span>
         <button type="button" class="btn" data-unblock-contest="${item.contestId}"
@@ -1236,6 +1238,8 @@ async function loadReview() {
       `/api/review-queue?handle=${encodeURIComponent(state.handle)}&sort=${state.reviewSort}`,
     );
     state.review = data.items ?? [];
+    // 题库里查不到的题不列出来（没有难度和标签），只在摘要里报个数
+    state.reviewMissing = data.missing ?? 0;
     renderReviewQueue();
     // 队列拿到数据以后这块面板才显示出来（和「做题记录」一样的做法）
     markViewReady('panel-review');
@@ -1249,9 +1253,13 @@ function renderReviewQueue() {
   const box = $('review-list');
   if (!box) return;
   const items = state.review ?? [];
+  // 题库里查不到的题（gym、很早的比赛）没有难度也没有标签，队列里不显示，只报个数
+  const hidden = state.reviewMissing
+    ? `另有 ${state.reviewMissing} 道题在题库里查不到（没有难度标签），已隐藏。`
+    : '';
   $('review-summary').textContent = items.length
-    ? `提交过但没通过的题有 ${items.length} 道。补出来的会自动出队；暂时不想看就点「已补」。`
-    : '这一队是空的：提交过但没通过的题都处理完了。';
+    ? `提交过但没通过的题有 ${items.length} 道。补出来的会自动出队；暂时不想看就点「已补」。${hidden}`
+    : `这一队是空的：提交过但没通过的题都处理完了。${hidden}`;
 
   box.innerHTML = items
     .map(

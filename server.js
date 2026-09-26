@@ -933,9 +933,13 @@ function buildReviewQueue(handleKey, sort) {
   const blocked = new Set(db.blockedKeys(handleKey));
   const keys = [...attempted.keys()].filter((key) => !skip.has(key) && !blocked.has(key));
   const problems = db.getProblemsByKeys(keys);
+  // 题库里查不到的题（gym、很早的比赛）没有难度也没有标签，排进队列也没法用来练：
+  // 直接不列，只把数量报给界面。以前的写法是显示一行「题库里没有这道题」，那是噪音。
+  const known = keys.filter((key) => problems.has(key));
+  const missing = keys.length - known.length;
   const now = Math.floor(Date.now() / 1000);
 
-  const items = keys.map((key) => {
+  const items = known.map((key) => {
     const problem = problems.get(key);
     const at = lastAt.get(key) ?? null;
     const contestId = Number(key.slice(0, key.indexOf('-')));
@@ -943,15 +947,14 @@ function buildReviewQueue(handleKey, sort) {
     return {
       contestId,
       index,
-      name: problem?.name ?? '（题库里没有这道题，先同步一次题库）',
-      rating: problem?.rating ?? null,
-      tags: problem?.tags ?? [],
+      name: problem.name,
+      rating: problem.rating ?? null,
+      tags: problem.tags ?? [],
       // 来源和链接都要分平台：AtCoder 的题号是 abc300_e，链接也在 atcoder.jp
-      platform: problem?.platform ?? 'codeforces',
-      code: problem ? problemCode(problem) : `${contestId}${index}`,
-      nativeRating: problem?.nativeRating ?? null,
-      // gym 的题目路径和普通题库不一样，统一走同一个函数
-      url: problem ? problemUrl(problem) : problemUrl(contestId, index),
+      platform: problem.platform ?? 'codeforces',
+      code: problemCode(problem),
+      nativeRating: problem.nativeRating ?? null,
+      url: problemUrl(problem),
       attempts: attempted.get(key) ?? 0,
       lastAt: at,
       idleDays: at ? Math.max(0, Math.round((now - at) / 86400)) : null,
@@ -961,7 +964,7 @@ function buildReviewQueue(handleKey, sort) {
   if (sort === 'rating') items.sort((a, b) => (a.rating ?? 9999) - (b.rating ?? 9999));
   else if (sort === 'rating-desc') items.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
   else items.sort((a, b) => (a.lastAt ?? 0) - (b.lastAt ?? 0));
-  return items;
+  return { items, missing };
 }
 
 /**
@@ -2187,8 +2190,8 @@ async function route(req, res, url) {
     const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
     if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
     const sort = url.searchParams.get('sort') ?? 'stale';
-    const items = buildReviewQueue(handleKey, sort);
-    return sendJson(res, 200, { total: items.length, sort, items });
+    const { items, missing } = buildReviewQueue(handleKey, sort);
+    return sendJson(res, 200, { total: items.length, missing, sort, items });
   }
 
   // 成长报告：每周做题量/难度 + 比赛前后对照
@@ -2298,7 +2301,10 @@ async function route(req, res, url) {
         return sendError(res, 400, '参数不完整');
       }
       db.setReviewDone(handleKey, contestId, String(body.index), Boolean(body.done));
-      return sendJson(res, 200, { ok: true, total: buildReviewQueue(handleKey, 'stale').length });
+      return sendJson(res, 200, {
+        ok: true,
+        total: buildReviewQueue(handleKey, 'stale').items.length,
+      });
     } catch (error) {
       return sendError(res, 400, error.message);
     }
