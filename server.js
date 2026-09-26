@@ -8,7 +8,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import * as cf from './lib/cf.js';
 import * as db from './lib/db.js';
-import { buildPlan, deriveProgress, problemUrl, rankFocusTags, toClientProblem } from './lib/plan.js';
+import {
+  ATCODER_SHARE,
+  LUOGU_SHARE,
+  buildPlan,
+  deriveProgress,
+  problemCode,
+  problemUrl,
+  rankFocusTags,
+  toClientProblem,
+} from './lib/plan.js';
 import { buildKnowledgeProfile, buildTagProfile, isNoiseTag, knowledgeAxis } from './lib/knowledge.js';
 import {
   analyzeVirtualSession,
@@ -17,6 +26,18 @@ import {
   recommendVirtualContests,
 } from './lib/contests.js';
 import { fetchLuogu, fetchNowcoder, PlatformError } from './lib/platforms.js';
+import {
+  AtcoderError,
+  fetchCatalog as fetchAtcoderCatalog,
+  fetchSubmissions as fetchAtcoderSubmissions,
+  normalizeUser as normalizeAtcoderUser,
+  toVerdict as toAtcoderVerdict,
+} from './lib/atcoder.js';
+import {
+  REQUEST_BUDGET as LUOGU_REQUEST_BUDGET,
+  LUOGU_POPULAR_LEVELS,
+  fetchCatalog as fetchLuoguCatalog,
+} from './lib/luogu.js';
 import * as modelModule from './lib/model.js';
 
 // 同一个账号多久之内不重复抓取（毫秒）。手动同步也走这个限制，防止连点。
@@ -138,6 +159,67 @@ async function ensureContests({ force = false } = {}) {
 }
 
 /**
+ * AtCoder 题库。三个 JSON 加起来约 3 MB，只有过期（默认 7 天）或者用户手动点
+ * 「同步 AtCoder」时才重新拉；题库本身长得慢，天天抓没意义。
+ */
+const ATCODER_CATALOG_TTL_MS = 7 * 24 * 3600 * 1000;
+
+async function ensureAtcoderCatalog({ force = false, onProgress } = {}) {
+  const count = db.countAtcoderProblems();
+  const updatedAt = Number(db.metaGet('atcoder_problems_updated_at') || 0);
+  if (!force && count > 1000 && isFresh(updatedAt, ATCODER_CATALOG_TTL_MS)) {
+    return { count, updatedAt, refreshed: false };
+  }
+  const rows = await fetchAtcoderCatalog({ onProgress });
+  const inserted = db.replaceAtcoderProblems(rows);
+  dropProblemsCache();
+  const now = Date.now();
+  db.metaSet('atcoder_problems_updated_at', now);
+  return { count: inserted, updatedAt: now, refreshed: true };
+}
+
+/** AtCoder 提交记录多久之内不重复抓（毫秒）。增量抓只要一两个请求，但也别每次刷页面都抓。 */
+const ATCODER_SUBMISSION_TTL_MS = 6 * 3600 * 1000;
+
+/**
+ * 同步 AtCoder 提交记录。第一次会从头翻完整个提交历史，之后按游标只补新的。
+ * 记录入到 submissions 表里，和 CF 共用一个进度口径：
+ * 「做过的题不再推荐」「自动打勾」「补题队列」全都自动生效。
+ */
+async function syncAtcoderSubmissions(handleKey, account, { force = false, onProgress } = {}) {
+  const freshAt = Number(db.metaGet(`atcoder_synced_at:${handleKey}`) || 0);
+  if (!force && isFresh(freshAt, ATCODER_SUBMISSION_TTL_MS)) {
+    return { added: 0, skipped: 0, total: db.countAtcoderSolved(handleKey), cached: true };
+  }
+
+  const cursor = db.getAtcoderSyncCursor(handleKey);
+  const { rows, newest, done } = await fetchAtcoderSubmissions(account, {
+    fromSecond: cursor,
+    onPage: (n) => onProgress?.(`已读取 ${n} 条提交记录…`),
+  });
+
+  // 只留题库里有的题（ABC/ARC/AGC），其他系列的题排不进计划，收了也没用
+  const mapped = rows.map((row) => ({
+    id: row.id,
+    nativeId: String(row.problem_id ?? ''),
+    verdict: toAtcoderVerdict(row.result),
+    createdAt: Number(row.epoch_second ?? 0),
+  }));
+  const { inserted, skipped } = db.appendAtcoderSubmissions(handleKey, mapped);
+  if (newest > cursor) db.setAtcoderSyncCursor(handleKey, newest);
+  // 没翻到头（记录太多，一轮没走完）就先不标记为「刚同步过」，下次接着翻
+  if (done) db.metaSet(`atcoder_synced_at:${handleKey}`, Date.now());
+
+  return {
+    added: inserted,
+    skipped,
+    total: db.countAtcoderSolved(handleKey),
+    cached: false,
+    done,
+  };
+}
+
+/**
  * 拉取提交记录。
  * 有同步游标时只补新记录（往前多取 24 小时容错），首次同步才全量重建。
  */
@@ -185,10 +267,13 @@ function buildUserSummary(handleKey) {
   const user = db.getUser(handleKey);
   if (!user) return null;
   const submissions = db.getSubmissions(handleKey);
-  const { solved, attempted } = deriveProgress(submissions);
+  // 账号卡片上的数字对应的是 Codeforces 这个号：AtCoder 的记录混进去会让
+  // 「已通过 N 题」和旁边那个 CF rating 对不上口径。计划那边用全平台的记录。
+  const cfSubmissions = submissions.filter((row) => row.platform !== 'atcoder');
+  const { solved, attempted } = deriveProgress(cfSubmissions);
   return {
     ...user,
-    submissionCount: submissions.length,
+    submissionCount: cfSubmissions.length,
     solvedCount: solved.size,
     attemptedCount: attempted.size,
     ratingHistory: db.getRatingHistory(handleKey),
@@ -248,6 +333,12 @@ function readSettings() {
     // 其他平台的账号
     nowcoderUid: raw.nowcoder_uid ?? null,
     luoguUid: raw.luogu_uid ?? null,
+    // AtCoder 用户名（Kenkoooo 接口用的就是 AtCoder 上的用户名）
+    atcoderUid: raw.atcoder_uid ?? null,
+    // 训练计划里要不要混 AtCoder 的题。没勾就是全 Codeforces
+    atcoderInPlan: raw.atcoder_in_plan === '1',
+    // 训练计划里要不要混洛谷的题（题库要先抓过）
+    luoguInPlan: raw.luogu_in_plan === '1',
       // 评估水平时忽略「比当前 rating 低多少分」以内的题（null = 用默认值）
       floorGap: raw.floor_gap === undefined ? null : Number(raw.floor_gap),
       // 单个标签在题单里的占比上限，存的是百分数（null = 用默认值 40）
@@ -258,11 +349,6 @@ function readSettings() {
       remindAt: raw.remind_at ?? null,
       // 上一次提醒是哪天（'YYYY-MM-DD'），避免同一天反复弹
       remindLast: raw.remind_last ?? null,
-      // 自定义背景图：图片文件存在数据目录里，这里只记一个版本号（换图时 +1，用来刷缓存）
-      bgImage: raw.bg_image ? Number(raw.bg_image) : null,
-      // 背景图的显示强度（0~1）和模糊像素
-      bgOpacity: raw.bg_opacity === undefined ? null : Number(raw.bg_opacity),
-      bgBlur: raw.bg_blur === undefined ? null : Number(raw.bg_blur),
       updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
   };
 }
@@ -274,7 +360,10 @@ function readSettings() {
 // v4：四档改成「按方向 × 按档」显式分名额（以前会被标签上限刷歪，实测 99 题里
 //     48 道挤在最高档，日题单后面就塌成「一天两道 1700」），区间下限也收到
 //     练手档。老计划的题池是歪的，得重挑。
-const PLAN_VERSION = 4;
+// v5：题单里可以混 AtCoder 的题（设置里勾选）。挑题多了一个平台维度，
+//     同一份设置会挑出不同结果，老快照得重挑一次。
+// v6：洛谷题也能进题单（设置里勾选），一天最多一道。挑题又变了一次，老计划重挑。
+const PLAN_VERSION = 6;
 
 /**
  * 计划指纹：这几个东西没变，就沿用上次那份计划。
@@ -288,6 +377,8 @@ function planSignature({ weekly, settings, model, bandShift = 0 }) {
     weekly: Number.isFinite(weekly) && weekly > 0 ? Math.round(weekly) : 10,
     floorGap: settings.floorGap ?? null,
     tagShare: settings.tagShare ?? null,
+    atcoderInPlan: Boolean(settings.atcoderInPlan),
+    luoguInPlan: Boolean(settings.luoguInPlan),
     modelTrainedAt: model?.trainedAt ?? null,
     modelActive: Boolean(model && modelModule.isModelUseful(model)),
     bandShift: Math.round(bandShift) || 0,
@@ -342,6 +433,42 @@ function evaluateBandAdjustment(handleKey, target, previousSnapshot, solved) {
   return { shift, evaluatedDone: solvedCount, reason, delta, changed: true, avgAttempts };
 }
 
+/**
+ * 题目年份偏好要用的「比赛 → 开始时间」表。
+ * CF 的比赛在 contests 表里，AtCoder 的记在 atcoder_contests 里，合成一份给挑题用。
+ */
+function problemContestDates() {
+  return new Map([
+    ...db.getContests().map((contest) => [contest.id, contest.startTime]),
+    ...db.listAtcoderContestDates(),
+  ]);
+}
+
+/**
+ * 只从题库记录里取「来源 / 题号 / 链接」这几项。
+ * 屏蔽表、做题记录这类地方只存了题号，界面要按平台拼对的链接，就靠这几个字段。
+ */
+function pickProblemFields(problem) {
+  if (!problem) return {};
+  const client = toClientProblem(problem);
+  return {
+    platform: client.platform,
+    code: client.code,
+    url: client.url,
+    nativeRating: client.nativeRating,
+  };
+}
+
+/** 屏蔽列表：补上平台、题号、链接，界面才能按来源跳对地方。 */
+function blockedPayload(handleKey) {
+  const rows = db.listBlockedProblems(handleKey);
+  const known = db.getProblemsByKeys(rows.map((row) => `${row.contestId}-${row.index}`));
+  return rows.map((row) => ({
+    ...row,
+    ...pickProblemFields(known.get(`${row.contestId}-${row.index}`)),
+  }));
+}
+
 async function handlePlan(url) {
   const rawHandle = url.searchParams.get('handle');
   const target = Number(url.searchParams.get('target'));
@@ -355,6 +482,22 @@ async function handlePlan(url) {
 
   const problemsState = await ensureProblems();
   await loadUser(rawHandle, { force });
+  const settings = readSettings();
+
+  // 勾了 AtCoder 就先增量同步一次提交记录（6 小时内不重复抓）。
+  // 同步失败不影响出计划：AtCoder 只是加菜，CF 那份计划照常给。
+  let atcoderSync = null;
+  if (settings.atcoderInPlan && settings.atcoderUid) {
+    try {
+      const handleKeyForAtcoder = db.normalizeHandle(rawHandle);
+      atcoderSync = await syncAtcoderSubmissions(handleKeyForAtcoder, settings.atcoderUid, {
+        force,
+      });
+      if (atcoderSync.cached) atcoderSync = null;
+    } catch (error) {
+      atcoderSync = { error: error.message };
+    }
+  }
 
   // 训练过的推题模型（可能没有，或者没通过验证）
   const model = modelModule.parseModel(db.metaGet(modelModule.MODEL_KEY));
@@ -367,7 +510,6 @@ async function handlePlan(url) {
   // ---- 这一版开始，计划会「钉住」----
   // 之前每次刷新都重新挑一遍：你做过的题会被悄悄换掉，计划一直在漂，
   // 也看不出自己做到哪了。现在只有设置变了、或者点了「重新生成计划」才重挑。
-  const settings = readSettings();
   const targetRounded = Math.round(target);
   const adjustState = db.getPlanAdjust(handleKey, targetRounded);
   const signature = planSignature({ weekly, settings, model, bandShift: adjustState.shift });
@@ -402,7 +544,11 @@ async function handlePlan(url) {
       tagShare: normalizeTagShare(settings.tagShare),
       model,
       // 题目年份偏好要用：老题在人气分上占便宜，靠比赛开始时间把新题提上来
-      contestDates: new Map(db.getContests().map((contest) => [contest.id, contest.startTime])),
+      contestDates: problemContestDates(),
+      // 勾了「加入 AtCoder 题」才按比例混进去，没勾就是纯 CF
+      atcoderShare: settings.atcoderInPlan ? ATCODER_SHARE : 0,
+      // 洛谷同理
+      luoguShare: settings.luoguInPlan ? LUOGU_SHARE : 0,
       // 用户手动屏蔽的题，永远不再推荐
       blocked: new Set(db.blockedKeys(handleKey)),
       // 上一份计划里的题：优先保下来，做过的也留在原位
@@ -447,6 +593,13 @@ async function handlePlan(url) {
         '想重新挑一批，点右上角的「重新生成计划」。',
     );
   }
+  // AtCoder 那边抓失败时说清楚：这份计划里的 AtCoder 题是按上一次同步的记录挑的
+  if (atcoderSync?.error) {
+    plan.notes.unshift(
+      `AtCoder 提交记录这次没同步上（${atcoderSync.error}）。计划里的 AtCoder 题按上一次同步的记录挑，` +
+        '可能包含你已经做过的；到设置里点一次「同步 AtCoder」就能补上。',
+    );
+  }
   // 区间挪过就在说明里讲清楚：上一轮多少分到多少分，为什么挪
   if (adjust.changed && adjust.delta) {
     const band = plan.stageList[0]?.band ?? null;
@@ -468,7 +621,7 @@ async function handlePlan(url) {
 
   // ---- 给每道题补上「方向」和「年份」----
   // 题单筛选要用：方向来自 tag 归类，年份来自比赛开始时间。
-  const contestDateMap = new Map(db.getContests().map((contest) => [contest.id, contest.startTime]));
+  const contestDateMap = problemContestDates();
   for (const stage of plan.stageList ?? []) {
     stage.problems = stage.problems.map((problem) => {
       const axes = [...new Set((problem.tags ?? []).map((tag) => knowledgeAxis(tag)).filter(Boolean))];
@@ -791,8 +944,12 @@ function buildReviewQueue(handleKey, sort) {
       name: problem?.name ?? '（题库里没有这道题，先同步一次题库）',
       rating: problem?.rating ?? null,
       tags: problem?.tags ?? [],
+      // 来源和链接都要分平台：AtCoder 的题号是 abc300_e，链接也在 atcoder.jp
+      platform: problem?.platform ?? 'codeforces',
+      code: problem ? problemCode(problem) : `${contestId}${index}`,
+      nativeRating: problem?.nativeRating ?? null,
       // gym 的题目路径和普通题库不一样，统一走同一个函数
-      url: problemUrl(contestId, index),
+      url: problem ? problemUrl(problem) : problemUrl(contestId, index),
       attempts: attempted.get(key) ?? 0,
       lastAt: at,
       idleDays: at ? Math.max(0, Math.round((now - at) / 86400)) : null,
@@ -847,11 +1004,15 @@ function applyPlanSwaps(plan, handleKey, target) {
 function pickReplacement({ from, exclude, handleKey }) {
   const blocked = new Set(db.blockedKeys(handleKey));
   const fromAxes = new Set((from.tags ?? []).map((tag) => knowledgeAxis(tag)).filter(Boolean));
+  const fromAtcoder = from.platform === 'atcoder';
   const candidates = allProblems().filter((problem) => {
     if (problem.rating == null || from.rating == null) return false;
     const key = `${problem.contestId}-${problem.index}`;
     if (key === `${from.contestId}-${from.index}`) return false;
     if (exclude.has(key) || blocked.has(key)) return false;
+    // AtCoder 的题没有算法标签，没法按方向找替代，就按「同一个平台 + 难度接近」换
+    if (fromAtcoder) return problem.platform === 'atcoder';
+    if (problem.platform === 'atcoder') return false;
     const axes = (problem.tags ?? []).map((tag) => knowledgeAxis(tag)).filter(Boolean);
     return axes.some((axis) => fromAxes.has(axis));
   });
@@ -1245,6 +1406,11 @@ async function route(req, res, url) {
       }
       if (body.nowcoderUid !== undefined) patch.nowcoder_uid = String(body.nowcoderUid).trim();
       if (body.luoguUid !== undefined) patch.luogu_uid = String(body.luoguUid).trim();
+      if (body.atcoderUid !== undefined) patch.atcoder_uid = String(body.atcoderUid).trim();
+      // 训练计划里是否混入 AtCoder 题：不勾就是全 CF
+      if (body.atcoderInPlan !== undefined) patch.atcoder_in_plan = body.atcoderInPlan ? '1' : '';
+      // 训练计划里是否混入洛谷题
+      if (body.luoguInPlan !== undefined) patch.luogu_in_plan = body.luoguInPlan ? '1' : '';
       if (body.floorGap !== undefined) {
         const value = Number(body.floorGap);
         if (!Number.isFinite(value) || value < 0 || value > 2000) {
@@ -1258,21 +1424,6 @@ async function route(req, res, url) {
           return sendError(res, 400, '单个标签占比上限请填 10 到 90 之间的数字');
         }
         patch.tag_share = String(Math.round(value));
-      }
-      // 背景图的显示强度（百分数）和模糊（像素）
-      if (body.bgOpacity !== undefined) {
-        const value = Number(body.bgOpacity);
-        if (!Number.isFinite(value) || value < 0 || value > 1) {
-          return sendError(res, 400, '背景强度请在 0 到 1 之间');
-        }
-        patch.bg_opacity = String(Math.round(value * 100) / 100);
-      }
-      if (body.bgBlur !== undefined) {
-        const value = Number(body.bgBlur);
-        if (!Number.isFinite(value) || value < 0 || value > 24) {
-          return sendError(res, 400, '背景模糊请在 0 到 24 之间');
-        }
-        patch.bg_blur = String(Math.round(value));
       }
       // 训练计划里是否隐藏标签
       if (body.hideTags !== undefined) patch.hide_tags = body.hideTags ? '1' : '';
@@ -1292,160 +1443,6 @@ async function route(req, res, url) {
       return sendJson(res, 200, { settings: readSettings() });
     } catch (error) {
       return sendError(res, 400, error.message);
-    }
-  }
-
-  // ---------- 自定义背景图 ----------
-  // 图片存在数据目录里（background.png/jpg/…），设置里只记一个版本号用来刷缓存。
-  // 浏览器拿不到本地文件路径，所以由界面把图片 POST 上来，服务端落盘。
-  if (pathname === '/api/background') {
-    const exts = ['png', 'jpg', 'webp', 'gif'];
-    const findExisting = () => {
-      for (const ext of exts) {
-        const file = join(db.DATA_DIR, `background.${ext}`);
-        if (existsSync(file)) return { file, ext };
-      }
-      return null;
-    };
-
-    if (req.method === 'GET') {
-      const found = findExisting();
-      if (!found) return sendError(res, 404, '还没有设置背景图');
-      const type =
-        found.ext === 'jpg'
-          ? 'image/jpeg'
-          : found.ext === 'webp'
-            ? 'image/webp'
-            : found.ext === 'gif'
-              ? 'image/gif'
-              : 'image/png';
-      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'public, max-age=86400' });
-      createReadStream(found.file).pipe(res);
-      return;
-    }
-
-    if (req.method === 'POST') {
-      try {
-        const chunks = [];
-        let size = 0;
-        for await (const chunk of req) {
-          size += chunk.length;
-          if (size > 12 * 1024 * 1024) {
-            return sendError(res, 413, '图片太大了，最多 12 MB');
-          }
-          chunks.push(chunk);
-        }
-        const body = Buffer.concat(chunks);
-        if (!body.length) return sendError(res, 400, '没有收到图片数据');
-
-        const contentType = String(req.headers['content-type'] ?? '');
-        const ext = contentType.includes('jpeg') || contentType.includes('jpg')
-          ? 'jpg'
-          : contentType.includes('webp')
-            ? 'webp'
-            : contentType.includes('gif')
-              ? 'gif'
-              : 'png';
-
-        for (const other of exts) {
-          rmSync(join(db.DATA_DIR, `background.${other}`), { force: true });
-        }
-        writeFileSync(join(db.DATA_DIR, `background.${ext}`), body);
-        const version = Date.now();
-        db.saveSettings({ bg_image: String(version) });
-        return sendJson(res, 200, { ok: true, version, size: body.length, ext });
-      } catch (error) {
-        return sendError(res, 400, `保存背景图失败：${error.message}`);
-      }
-    }
-
-    if (req.method === 'DELETE') {
-      for (const other of exts) {
-        rmSync(join(db.DATA_DIR, `background.${other}`), { force: true });
-      }
-      db.saveSettings({ bg_image: '' });
-      return sendJson(res, 200, { ok: true });
-    }
-  }
-
-  // ---------- 做题手感反馈：自己标一下这道题是秒的还是啃出来的 ----------
-  if (pathname === '/api/feedback') {
-    const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
-    if (req.method === 'GET') {
-      if (!handleKey) return sendError(res, 400, '缺少 handle');
-      return sendJson(res, 200, {
-        feedback: db.listProblemFeedback(handleKey, 200),
-        shift: db.feedbackShift(handleKey),
-      });
-    }
-    if (req.method === 'POST') {
-      try {
-        const body = await readJsonBody(req);
-        const key = db.normalizeHandle(body.handle);
-        if (!key || !body.index || !Number.isFinite(Number(body.contestId))) {
-          return sendError(res, 400, '参数不完整');
-        }
-        const allowed = ['too_easy', 'ok', 'hard', 'read_editorial'];
-        const feel = allowed.includes(body.feel) ? body.feel : null;
-        if (!feel) return sendError(res, 400, 'feel 只能是 too_easy / ok / hard / read_editorial');
-        db.setProblemFeedback(key, Number(body.contestId), String(body.index), feel);
-        return sendJson(res, 200, { ok: true, shift: db.feedbackShift(key) });
-      } catch (error) {
-        return sendError(res, 400, error.message);
-      }
-    }
-  }
-
-  // ---------- 今天补一个方向：临时往日程里塞几道某方向的题 ----------
-  if (pathname === '/api/plan/extra') {
-    const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
-    if (!handleKey) return sendError(res, 400, '缺少 handle');
-    if (req.method === 'GET') {
-      const date = url.searchParams.get('date');
-      if (!date) return sendError(res, 400, '缺少 date');
-      return sendJson(res, 200, { keys: db.listExtraTasks(handleKey, date) });
-    }
-    if (req.method === 'POST') {
-      try {
-        const body = await readJsonBody(req);
-        const action = String(body.action ?? 'add');
-        const date = String(body.date ?? '').slice(0, 10);
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return sendError(res, 400, 'date 格式不对');
-        if (action === 'clear') {
-          db.clearExtraTasks(handleKey, date);
-          return sendJson(res, 200, { ok: true, keys: [] });
-        }
-        const axis = String(body.axis ?? '');
-        if (!axis) return sendError(res, 400, '缺少方向');
-        const exclude = new Set(
-          (Array.isArray(body.exclude) ? body.exclude : []).map(String).filter(Boolean).slice(0, 800),
-        );
-        const picked = pickAxisExtras({ handleKey, axis, count: 3, exclude });
-        if (!picked.length) return sendError(res, 404, `「${axis}」这个方向暂时没有合适的题`);
-        db.addExtraTasks(
-          handleKey,
-          date,
-          picked.map((problem) => `${problem.contestId}-${problem.index}`),
-        );
-        return sendJson(res, 200, {
-          ok: true,
-          problems: picked.map(toClientProblem),
-          keys: db.listExtraTasks(handleKey, date),
-        });
-      } catch (error) {
-        return sendError(res, 400, error.message);
-      }
-    }
-  }
-
-  // ---------- 复盘卡：最近 20 题的表现，和上一轮比 ----------
-  if (pathname === '/api/retro' && req.method === 'GET') {
-    const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
-    if (!handleKey) return sendError(res, 400, '缺少 handle');
-    try {
-      return sendJson(res, 200, buildRetroCard(handleKey));
-    } catch (error) {
-      return sendError(res, 500, `复盘算不出来：${error.message}`);
     }
   }
 
@@ -1590,14 +1587,18 @@ async function route(req, res, url) {
   }
 
   if (pathname === '/api/platforms' && req.method === 'GET') {
-    return sendJson(res, 200, { platforms: db.listPlatformStats() });
+    return sendJson(res, 200, {
+      platforms: db.listPlatformStats(),
+      // 洛谷题库的抓取摘要（抓了几道、抽了哪几页），设置里会显示上一次的结果
+      luoguCatalog: parseJson(db.metaGet('luogu_catalog_info'), null),
+    });
   }
 
   // 手动屏蔽的题目：屏蔽后永远不再出现在推荐里
   if (pathname === '/api/blocked' && req.method === 'GET') {
     const rawHandle = url.searchParams.get('handle');
     if (!rawHandle) return sendError(res, 400, '请先填写 Codeforces 用户名');
-    return sendJson(res, 200, { blocked: db.listBlockedProblems(db.normalizeHandle(rawHandle)) });
+    return sendJson(res, 200, { blocked: blockedPayload(db.normalizeHandle(rawHandle)) });
   }
 
   // 做过的题，按首次通过时间倒序
@@ -1609,7 +1610,8 @@ async function route(req, res, url) {
     const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
     return sendJson(res, 200, {
       total: db.countSolved(handleKey),
-      solved: db.recentlySolved(handleKey, limit, offset),
+      // 这里会带上 AtCoder 的过题记录：界面上按 platform 显示来源角标
+      solved: db.recentlySolved(handleKey, limit, offset).map(toClientProblem),
     });
   }
 
@@ -1627,7 +1629,7 @@ async function route(req, res, url) {
         rating: Number.isFinite(Number(body.rating)) ? Number(body.rating) : null,
         reason: body.reason,
       });
-      return sendJson(res, 200, { blocked: db.listBlockedProblems(handleKey) });
+      return sendJson(res, 200, { blocked: blockedPayload(handleKey) });
     } catch (error) {
       return sendError(res, 400, error.message);
     }
@@ -1641,7 +1643,7 @@ async function route(req, res, url) {
       if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
       if (!Number.isFinite(contestId) || !body.index) return sendError(res, 400, '题目参数不完整');
       db.unblockProblem(handleKey, contestId, String(body.index));
-      return sendJson(res, 200, { blocked: db.listBlockedProblems(handleKey) });
+      return sendJson(res, 200, { blocked: blockedPayload(handleKey) });
     } catch (error) {
       return sendError(res, 400, error.message);
     }
@@ -1664,10 +1666,162 @@ async function route(req, res, url) {
       recentSyncs.set(key, Date.now());
 
       const result = platform === 'luogu' ? await fetchLuogu(account) : await fetchNowcoder(account);
+
+      // 洛谷顺手把「做过的题」记下来：训练计划靠它排除做过的题、自动打勾。
+      // 逐题列表不写进 platform_stats（几千道题的 JSON 太大），记完就删。
+      let solvedMarked = null;
+      if (platform === 'luogu') {
+        const rawHandle = String(body.handle ?? db.getSettings().handle ?? '').trim();
+        const passed = result.extra?.solved ?? [];
+        if (rawHandle && passed.length) {
+          solvedMarked = db.appendLuoguSolved(db.normalizeHandle(rawHandle), passed);
+        }
+        if (result.extra) delete result.extra.solved;
+      }
+
       db.savePlatformStats(result);
-      return sendJson(res, 200, { result, platforms: db.listPlatformStats() });
+      return sendJson(res, 200, {
+        result,
+        solvedMarked,
+        platforms: db.listPlatformStats(),
+      });
     } catch (error) {
       const message = error instanceof PlatformError ? error.message : `同步失败：${error.message}`;
+      return sendError(res, 502, message);
+    }
+  }
+
+  /**
+   * AtCoder 同步：题库（ABC/ARC/AGC 里有难度的题）+ 这个用户的提交记录。
+   * 题库 7 天内只抓一次，提交记录按游标增量补，所以这个按钮可以随便点。
+   */
+  if (pathname === '/api/atcoder/sync' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const account = normalizeAtcoderUser(body.account);
+      const force = Boolean(body.force);
+      // 题库 7 天才换一次，所以「强制」默认只作用于提交记录；
+      // 想连题库一起重抓就传 forceCatalog
+      const forceCatalog = Boolean(body.forceCatalog);
+
+      const cooldownKey = `atcoder:${account}`;
+      if (force && Date.now() - (recentSyncs.get(cooldownKey) ?? 0) < SYNC_COOLDOWN_MS) {
+        return sendError(res, 429, '刚刚同步过，等 20 秒再试');
+      }
+      recentSyncs.set(cooldownKey, Date.now());
+
+      const catalog = await ensureAtcoderCatalog({ force: forceCatalog });
+      // 记录挂在 CF 账号下（计划和进度都按这个号存），和 AtCoder 用户名是两回事
+      const rawHandle = String(
+        body.handle ?? url.searchParams.get('handle') ?? db.getSettings().handle ?? '',
+      ).trim();
+      if (!rawHandle) return sendError(res, 400, '请先填写 Codeforces 用户名');
+      const handleKey = db.normalizeHandle(rawHandle);
+
+      const submissions = await syncAtcoderSubmissions(handleKey, account, { force: true });
+      const stats = {
+        通过题目: submissions.total,
+        提交记录: db.getSubmissions(handleKey).filter((row) => row.platform === 'atcoder').length,
+      };
+      db.savePlatformStats({
+        platform: 'atcoder',
+        account,
+        nickname: account,
+        stats,
+        extra: { catalog: catalog.count },
+      });
+
+      return sendJson(res, 200, {
+        result: { platform: 'atcoder', account, solved: submissions.total, stats },
+        catalog,
+        submissions,
+        platforms: db.listPlatformStats(),
+      });
+    } catch (error) {
+      const message =
+        error instanceof AtcoderError ? error.message : `同步 AtCoder 失败：${error.message}`;
+      return sendError(res, 502, message);
+    }
+  }
+
+  /**
+   * 洛谷题库。默认只抓普及档（普及−/普及/普及+/提高−），每档等距抽 8 页 = 400 题，
+   * 单线程 1.2 秒一个请求，单次上限 60 个请求。要爬提高/省选档就传 levels。
+   */
+  if (pathname === '/api/luogu/catalog' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const levels =
+        Array.isArray(body.levels) && body.levels.length
+          ? [...new Set(body.levels.map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= 8))].sort()
+          : LUOGU_POPULAR_LEVELS;
+      if (!levels.length) return sendError(res, 400, '难度档要给 1~8 之间的数字');
+      const pagesPerLevel = Math.max(1, Math.min(20, Number(body.pagesPerLevel) || 8));
+      const budget = Math.max(
+        levels.length + 1,
+        Math.min(200, Number(body.budget) || LUOGU_REQUEST_BUDGET),
+      );
+
+      if (Date.now() - (recentSyncs.get('luogu-catalog') ?? 0) < SYNC_COOLDOWN_MS) {
+        return sendError(res, 429, '刚刚抓过题库，等 20 秒再试');
+      }
+      recentSyncs.set('luogu-catalog', Date.now());
+
+      const { rows, perLevel, requests } = await fetchLuoguCatalog({
+        levels,
+        pagesPerLevel,
+        budget,
+      });
+      const inserted = db.replaceLuoguProblems(rows);
+      dropProblemsCache();
+      const now = Date.now();
+      db.metaSet('luogu_problems_updated_at', now);
+      // 分档记进度：先抓普及、过几天再抓提高，设置里两批都能看到
+      const previousInfo = parseJson(db.metaGet('luogu_catalog_info'), null) ?? {};
+      const levelsInfo = { ...(previousInfo.levels ?? {}) };
+      for (const row of perLevel) {
+        levelsInfo[row.level] = {
+          label: row.label,
+          total: row.total,
+          pages: row.pages,
+          taken: row.taken,
+          updatedAt: now,
+        };
+      }
+      const info = {
+        count: db.countLuoguProblems(),
+        inserted,
+        levels: levelsInfo,
+        perLevel,
+        requests,
+        updatedAt: now,
+      };
+      db.metaSet('luogu_catalog_info', JSON.stringify(info));
+
+      // 题库刚更新，顺手把「做过的题」也标一遍：之前题库里没有的题现在能对上了
+      const settings = readSettings();
+      let solvedMarked = null;
+      if (settings.luoguUid) {
+        try {
+          const stats = await fetchLuogu(settings.luoguUid);
+          const passed = stats.extra?.solved ?? [];
+          const rawHandle = String(body.handle ?? settings.handle ?? '').trim();
+          if (rawHandle && passed.length) {
+            solvedMarked = db.appendLuoguSolved(db.normalizeHandle(rawHandle), passed);
+          }
+        } catch (error) {
+          solvedMarked = { error: error.message };
+        }
+      }
+
+      return sendJson(res, 200, {
+        catalog: info,
+        solvedMarked,
+        luoguCatalog: info,
+        platforms: db.listPlatformStats(),
+      });
+    } catch (error) {
+      const message = `抓洛谷题库失败：${error.message}`;
       return sendError(res, 502, message);
     }
   }
@@ -1883,8 +2037,12 @@ async function route(req, res, url) {
 
     const base = axisProfileOf(baseKey);
     const other = axisProfileOf(otherKey);
-    const baseSolved = deriveProgress(db.getSubmissions(baseKey)).solved;
-    const otherSolved = deriveProgress(db.getSubmissions(otherKey)).solved;
+    // 对比只看 Codeforces 的过题：AtCoder 的记录挂在同一个 CF 账号下面，
+    // 混进「谁先做出来」会让两个号看起来做过一模一样的 AtCoder 题
+    const cfSubmissionsOf = (key) =>
+      db.getSubmissions(key).filter((row) => row.platform !== 'atcoder');
+    const baseSolved = deriveProgress(cfSubmissionsOf(baseKey)).solved;
+    const otherSolved = deriveProgress(cfSubmissionsOf(otherKey)).solved;
 
     // 方向差异
     const axes = base.axes.map((row, index) => {

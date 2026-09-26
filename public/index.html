@@ -315,28 +315,6 @@
                   <span>紧凑模式（行距更小、字号略小）</span>
                 </label>
         
-        <h3 class="settings-title">背景图片</h3>
-        <p class="subtle">
-          挑一张自己的图当整个训练台的背景。图片存在本机数据目录里，不会上传到任何地方；
-          显示强度和模糊随时能调，觉得花就点「恢复默认背景」。
-        </p>
-        <div class="platform-row">
-          <div class="sched-field">
-            <label for="bg-file">选择图片（PNG / JPG / WebP，最大 12 MB）</label>
-            <input id="bg-file" type="file" accept="image/*" />
-          </div>
-          <div class="sched-field">
-            <label for="bg-opacity">显示强度</label>
-            <input id="bg-opacity" type="range" min="5" max="100" step="5" value="35" />
-          </div>
-          <div class="sched-field">
-            <label for="bg-blur">模糊</label>
-            <input id="bg-blur" type="range" min="0" max="24" step="1" value="0" />
-          </div>
-          <button class="btn" id="bg-clear">恢复默认背景</button>
-        </div>
-        <p class="hint" id="bg-hint">还没设置背景图。</p>
-
         <h3 class="settings-title">水平评估</h3>
         <p class="subtle">
           算「你在这个专题上做到什么难度」时，忽略掉比当前 rating 低一段的题。
@@ -375,6 +353,36 @@
           <input type="checkbox" id="hide-tags" />
           <span>隐藏题目里的算法标签</span>
         </label>
+
+        <h3 class="settings-title">题目来源</h3>
+        <p class="subtle">
+          训练计划默认全用 Codeforces 的题。勾上以后按比例混进别的平台，各占四分之一、每天最多一道：
+          AtCoder（ABC / ARC / AGC，来自 Kenkoooo 公开接口）和洛谷（要先在下面「洛谷」里抓一次题库）。
+          两个平台都不需要登录，也不会往对面提交任何东西；做过的题在同步过之后会自动排除、自动打勾。
+        </p>
+        <label class="tag-hide-toggle" title="勾上以后题单里会按比例混入 AtCoder 的题">
+          <input type="checkbox" id="atcoder-in-plan" />
+          <span>训练计划里加入 AtCoder 题</span>
+        </label>
+        <label class="tag-hide-toggle" title="勾上以后题单里会按比例混入洛谷的题（要先把洛谷题库抓好）">
+          <input type="checkbox" id="luogu-in-plan" />
+          <span>训练计划里加入洛谷题</span>
+        </label>
+        <p class="hint" id="luogu-in-plan-hint">
+          洛谷题进题单之前，先到下面「洛谷」那里抓一次题库（约 1 分钟）。
+        </p>
+        <div class="platform-row">
+          <div class="sched-field">
+            <label for="atcoder-input">AtCoder 用户名</label>
+            <input id="atcoder-input" type="text" placeholder="例如 chokudai" autocomplete="off" />
+          </div>
+          <button class="btn primary" id="atcoder-sync">同步 AtCoder 数据</button>
+        </div>
+        <p class="hint" id="atcoder-hint">
+          用户名就是 atcoder.jp 个人主页地址里的那个，区分大小写。第一次同步会抓题库（ABC/ARC/AGC
+          里有难度的题）和你的全部提交记录；之后只补新的记录，题库 7 天才换一次。
+          做过的 AtCoder 题会自动排除、自动打勾。
+        </p>
 
         <h3 class="settings-title">打卡提醒</h3>
         <p class="subtle">
@@ -443,10 +451,32 @@
         <p class="hint" id="luogu-hint">
           洛谷 ID 在个人主页地址栏里：luogu.com.cn/user/<b>数字</b>
         </p>
+
+        <p class="subtle">
+          题库按难度档<b>等距抽页</b>抓：每档抽 8 页 = 400 题，单线程 1.2 秒一个请求。
+          抽页而不是只抓前几页，是为了别把十几年前的老题全收进来。
+          折算成练习分：普及− 1000、普及 1200、普及+/提高− 1400、提高 1650、提高+/省选− 1950、
+          省选/NOI− 2250、NOI/CTSC 2600。低于练习区间的题先入库、暂不进题单。
+        </p>
+        <div class="platform-row">
+          <div class="sched-field">
+            <label for="luogu-levels">要抓的难度档</label>
+            <select id="luogu-levels">
+              <option value="3">只抓普及</option>
+              <option value="2,3,4">普及档（普及− / 普及 / 普及+/提高−）</option>
+              <option value="5,6,7,8">提高及以上（提高 / 提高+/省选− / 省选/NOI− / NOI/CTSC）</option>
+              <option value="2,3,4,5,6,7,8" selected>除入门都抓（7 档，约 70 个请求）</option>
+            </select>
+          </div>
+          <button class="btn" id="luogu-catalog" title="按难度档等距抽页抓题库">
+            抓取题库
+          </button>
+        </div>
+        <p class="hint" id="luogu-catalog-hint">还没抓过洛谷题库。</p>
       </section>
 
       <footer class="footer">
-        <span>数据来源：Codeforces 官方公开 API</span>
+        <span>数据来源：Codeforces 官方公开 API · AtCoder 取自 Kenkoooo · 洛谷取自公开练习页与题目列表</span>
       <span>
         所有数据都保存在你自己的电脑上 · <span id="app-version">读取中…</span>
       </span>

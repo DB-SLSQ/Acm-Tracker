@@ -32,6 +32,70 @@ export function startOfWeek(date) {
 }
 
 /**
+ * 把「一天最多几道」的平台摊开。
+ *
+ * 计划那边已经按「每天几题」摊过一遍，但真正排期时某天可能多一题、少一题
+ * （休息日、某天没空、每周题量不是 7 的倍数），跨过原来的分组边界就会把
+ * 同一平台的两道题挤到同一天。这里排完之后再对一次：把多出来的题跟别的天里
+ * 难度最接近的题换个位置，一天之内的难度曲线基本不动。
+ */
+function capPlatformsPerDay(days, caps) {
+  const limited = Object.entries(caps).filter(([, cap]) => Number(cap) > 0);
+  if (!limited.length || days.length < 2) return days;
+
+  const platformOf = (problem) => problem.platform ?? 'codeforces';
+  const countOf = (day, platform) =>
+    day.problems.reduce((total, p) => total + (platformOf(p) === platform ? 1 : 0), 0);
+  const moved = new Set();
+
+  for (const day of days) {
+    for (const [platform, cap] of limited) {
+      while (countOf(day, platform) > cap) {
+        let fromIndex = -1;
+        for (let i = day.problems.length - 1; i >= 0; i -= 1) {
+          const problem = day.problems[i];
+          if (platformOf(problem) === platform && !moved.has(problem)) {
+            fromIndex = i;
+            break;
+          }
+        }
+        if (fromIndex < 0) break;
+        const mover = day.problems[fromIndex];
+
+        let best = null;
+        for (const other of days) {
+          if (other === day) continue;
+          if (countOf(other, platform) >= cap) continue;
+          for (let i = 0; i < other.problems.length; i += 1) {
+            const candidate = other.problems[i];
+            if (moved.has(candidate)) continue;
+            const candidatePlatform = platformOf(candidate);
+            if (candidatePlatform === platform) continue;
+            // 换进来的题不能把本天另一个限流平台顶爆
+            const candidateCap = caps[candidatePlatform];
+            if (candidateCap != null && countOf(day, candidatePlatform) >= candidateCap) continue;
+            const cost = Math.abs((candidate.rating ?? 0) - (mover.rating ?? 0));
+            if (cost > 150) continue;
+            if (!best || cost < best.cost) best = { other, index: i, candidate, cost };
+          }
+        }
+        if (!best) break;
+
+        best.other.problems[best.index] = mover;
+        day.problems[fromIndex] = best.candidate;
+        moved.add(mover);
+        moved.add(best.candidate);
+      }
+    }
+  }
+  for (const day of days) {
+    day.problems.sort((a, b) => (a.rating ?? 0) - (b.rating ?? 0));
+    day.stages = [...new Set(day.problems.map((p) => p.stage).filter((s) => s != null))];
+  }
+  return days;
+}
+
+/**
  * 把题目分配到具体日期。
  *
  * 规则：
@@ -47,6 +111,8 @@ export function buildSchedule({
   dayOff = {},
   startDate = new Date(),
   maxWeeks = 60,
+  // 有些平台一天最多几道：AtCoder 和洛谷各一道。传 null 表示不管。
+  platformCaps = { atcoder: 1, luogu: 1 },
 } = {}) {
   const rest = new Set(restDays.map(Number));
   const off = dayOff ?? {};
@@ -106,6 +172,8 @@ export function buildSchedule({
     });
     if (index >= problems.length) break;
   }
+
+  if (platformCaps) capPlatformsPerDay(days, platformCaps);
 
   // 休息日也放进来，界面上要能显示「这天不做」
   const horizonEnd = days.length ? days[days.length - 1].date : dateKey(firstDay);

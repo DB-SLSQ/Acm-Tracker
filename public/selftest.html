@@ -214,7 +214,11 @@
       }
 
       function renderTiers(stage, problems) {
-        const targets = TIER_OFFSETS.map((offset) => stage.targetRating + offset);
+        // 四档是相对「这一阶段的中心」，而中心会被难度自适应整体上下挪过（bandShift）。
+        // 练习区间固定是 [中心-150, 中心+500]，所以从 band[0] 反推中心，才和挑题时用的是同一组档位。
+        // 以前直接用 targetRating 算，挪过区间之后这一项就会假报警。
+        const center = stage.band[0] + 150;
+        const targets = TIER_OFFSETS.map((offset) => center + offset);
         const counts = targets.map(() => 0);
         for (const problem of problems) {
           let best = 0;
@@ -252,7 +256,14 @@
         const ascending = ratings.every((value, index) => index === 0 || value >= ratings[index - 1]);
         return `<tr class="${ascending && (ratings.length < 2 || spread >= 100) ? '' : 'bad-row'}">
           <td class="mono">${day.date} ${day.label}</td>
-          <td>${ratings.map((rating) => `<span class="pill">${rating}</span>`).join('')}</td>
+          <td>${day.problems
+            .map(
+              (problem) =>
+                `<span class="pill">${problem.rating}${
+                  problem.platform === 'atcoder' ? ' AT' : ''
+                }</span>`,
+            )
+            .join('')}</td>
           <td class="mono">跨度 ${spread}</td>
           <td>${ascending ? '从易到难' : '⚠ 顺序乱了'}</td>
         </tr>`;
@@ -351,6 +362,34 @@
           problems.length >= Math.round((gap / 100) * 60),
           `差距 ${gap} 分，应该有 ${Math.round((gap / 100) * 60)} 题以上`,
         );
+
+        // 6. 别的平台的题：勾了才排，且各自每天最多一道
+        const PLATFORM_LABELS = { atcoder: 'AtCoder', luogu: '洛谷' };
+        for (const [platform, label] of Object.entries(PLATFORM_LABELS)) {
+          const list = problems.filter((problem) => problem.platform === platform);
+          if (!list.length) continue;
+          const crowded = days.filter(
+            (day) => day.problems.filter((problem) => problem.platform === platform).length > 1,
+          );
+          add(
+            `${label} ${list.length} 题，每天最多一道`,
+            crowded.length === 0,
+            crowded.length
+              ? `有 ${crowded.length} 天排了两道以上：${crowded
+                  .slice(0, 3)
+                  .map((d) => d.date)
+                  .join('、')}`
+              : '和 CF 题混排，不影响四档分布',
+          );
+          const share = Math.round((list.length / problems.length) * 100);
+          add(
+            `${label} 占比 ${share}%（默认约 25%）`,
+            share >= 8 && share <= 40,
+            `占比由挑题算法固定成「一天四题里一道」，想改就调 lib/plan.js 里的 ${
+              platform === 'atcoder' ? 'ATCODER_SHARE' : 'LUOGU_SHARE'
+            }`,
+          );
+        }
 
         // 数据体检：题库新不新、模型值不值得留、库多大
         try {

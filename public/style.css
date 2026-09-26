@@ -1573,6 +1573,18 @@ input[type="number"]:focus {
   vertical-align: middle;
 }
 
+/* 题目来源角标：AtCoder 的题带一个，CF 的题不标（主场不用标） */
+.platform-tag {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--text-dim) 22%, transparent);
+  color: var(--text-dim);
+  vertical-align: middle;
+}
+
 .module-item {
   display: flex;
   align-items: center;
@@ -1975,35 +1987,7 @@ input[type="number"]:focus {
   max-width: 340px;
 }
 
-/* ============ 侧边栏 + 主视图 =
-   以前是一整页从上滑到底，现在左边菜单切换页面：同时只显示一个 section.panel。
-   背景图铺在最后面（body::before 是图，body::after 是压暗的那层纱）。 */
-
-body::before,
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-}
-
-body::before {
-  z-index: -2;
-  background-image: var(--bg-image, none);
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  opacity: var(--bg-image-opacity, 0.35);
-  filter: blur(var(--bg-image-blur, 0px));
-}
-
-/* 图片上面压一层背景色，保证文字始终读得清（强度越高纱越淡） */
-body.has-bg::after {
-  z-index: -1;
-  background: var(--bg);
-  /* 强度直接理解成「图片占多少」：强度 0.35 → 纱只剩 0.9-0.35=0.55 */
-  opacity: calc(0.9 - var(--bg-image-opacity, 0.35));
-}
+/* ============ 侧边栏 + 主视图 ============ */
 
 .app {
   display: flex;
@@ -2153,11 +2137,6 @@ body.has-bg::after {
   margin: 34px 0 0;
 }
 
-/* 背景图相关的两个滑杆和文件选择框 */
-input[type='range'] {
-  width: 150px;
-  accent-color: var(--accent);
-}
 
 input[type='file'] {
   color: var(--text-dim);

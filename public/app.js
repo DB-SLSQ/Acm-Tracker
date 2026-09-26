@@ -41,10 +41,6 @@ const state = {
   // 当前打开的页面（左边菜单点了就切）和已经拿到数据的页面
   view: 'panel-overview',
   readyView: new Set(),
-  // 自定义背景图：文件存在服务端，这里只记一个版本号 + 透明度/模糊
-  bgImage: null,
-  bgOpacity: 0.35,
-  bgBlur: 0,
   // 列表密度：紧凑模式
   compact: false,
   // 做题手感反馈：key -> feel；以及最近一次拉回来的复盘/热身数据
@@ -54,6 +50,11 @@ const state = {
   extraTasks: {},
   // 其他平台
   nowcoderUid: null,
+  // AtCoder：用户名 + 训练计划里要不要混 AtCoder 的题
+  atcoderUid: null,
+  atcoderInPlan: false,
+  // 洛谷题要不要进训练计划
+  luoguInPlan: false,
   // 打卡提醒
   remindAt: null,
   remindLast: null,
@@ -72,6 +73,8 @@ const state = {
   platforms: [],
   // 洛谷镜像的 CF 题号集合，用来标记「这题你在洛谷做过」
   luoguKeys: new Set(),
+  // 洛谷题库的抓取摘要（抓了几道、抽了哪几页）
+  luoguCatalog: null,
   // 训练计划里是否隐藏标签（有些人喜欢不看标签自己想）
   hideTags: false,
   // 做题记录
@@ -623,6 +626,7 @@ function problemRow(problem, target, extraNote = '') {
   const elsewhere = state.luoguKeys.has(key)
     ? '<span class="solved-elsewhere">洛谷做过</span>'
     : '';
+  const source = platformBadge(problem);
   // 自动打勾的题单独标一下，免得看着像自己什么时候点过
   const autoBadge = isAuto
     ? '<span class="auto-done" title="提交记录里已经通过了这道题，自动打勾">已通过</span>'
@@ -641,9 +645,9 @@ function problemRow(problem, target, extraNote = '') {
         <input type="checkbox" ${isDone ? 'checked' : ''}
                data-contest="${problem.contestId}" data-index="${problem.index}" />
       </td>
-      <td class="problem-code">${problem.contestId}${problem.index}</td>
+      <td class="problem-code">${problemCodeText(problem)}</td>
       <td>
-        <a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>${elsewhere}${autoBadge}${deferredTag}
+        <a class="problem-name" href="${problemHref(problem)}" target="_blank" rel="noreferrer">${problem.name}</a>${source}${elsewhere}${autoBadge}${deferredTag}
         ${
           tags || extraNote
             ? `<div class="problem-tags">${tags}${tags && extraNote ? ' · ' : ''}${extraNote}</div>`
@@ -651,7 +655,7 @@ function problemRow(problem, target, extraNote = '') {
         }
       </td>
       <td style="width:70px">${ratingBadge(problem.rating)}</td>
-      <td style="width:90px" class="problem-tags">${problem.solvedCount} 人过</td>
+      <td style="width:90px" class="problem-tags">${solvedCountText(problem)}</td>
       <td style="width:44px">
         <button type="button" class="block-btn" data-block-key="${key}"
                 data-block-contest="${problem.contestId}" data-block-index="${problem.index}"
@@ -802,6 +806,59 @@ $('handle-input').addEventListener('keydown', (event) => {
 // 有些题就是不想再做（题目本身有问题、或者不符合你的训练方向）。
 // 屏蔽后不会再出现在任何推荐里，但随时可以在设置里恢复。
 
+/**
+ * 题号显示：Codeforces 是 1234A，AtCoder 是 ABC300E。
+ * 服务端会给好 code，老数据没有这个字段就退回「比赛号 + 题号」。
+ */
+function problemCodeText(problem) {
+  return problem.code ?? `${problem.contestId}${problem.index}`;
+}
+
+/** 题目链接：服务端按平台给好了 url，没有就退回 Codeforces 的地址。 */
+function problemHref(problem) {
+  return (
+    problem.url ?? `https://codeforces.com/problemset/problem/${problem.contestId}/${problem.index}`
+  );
+}
+
+/**
+ * 来源角标。CF 的题不标（那是主场，标了反而吵），只标 AtCoder。
+ * 鼠标悬停能看到 AtCoder 自己的难度值，方便核对折算对不对。
+ */
+function platformBadge(problem) {
+  if (problem.platform === 'atcoder') {
+    const raw = problem.nativeRating != null ? `（AtCoder 难度 ${problem.nativeRating}）` : '';
+    return `<span class="platform-tag" title="AtCoder 题${raw}，已折算成练习区间里的分值">AtCoder</span>`;
+  }
+  if (problem.platform === 'luogu') {
+    // LUOGU_SHORT 就是平台数据那儿用的那套难度名，这里复用它，两处别写两套
+    const level = LUOGU_SHORT[problem.nativeRating];
+    const raw = level ? `（洛谷难度：${level}）` : '';
+    return `<span class="platform-tag" title="洛谷题${raw}，已折算成练习区间里的分值">洛谷</span>`;
+  }
+  return '';
+}
+
+/**
+ * 题单里那一列「多少人过」。
+ * AtCoder 那边我们只抓了难度、没抓过题人数，就显示它自己的难度值——
+ * 空着或者写「0 人过」都不对。
+ */
+function solvedCountText(problem) {
+  if (problem.platform === 'atcoder') {
+    return problem.nativeRating != null
+      ? `<span title="AtCoder 自己的难度估计（Kenkoooo），折算成练习分值是 ${problem.rating}">ATC ${problem.nativeRating}</span>`
+      : '—';
+  }
+  if (problem.platform === 'luogu') {
+    const level = LUOGU_SHORT[problem.nativeRating] ?? '';
+    return problem.solvedCount
+      ? `<span title="洛谷上的通过提交数，难度档：${level}">${problem.solvedCount} 次通过</span>`
+      : `<span title="洛谷难度档：${level}">${level}</span>`;
+  }
+  return `${problem.solvedCount} 人过`;
+}
+
 async function loadBlocked() {
   if (!state.handle) return;
   try {
@@ -825,9 +882,9 @@ function renderBlockedList() {
       (item) => `<div class="record-row">
         <span class="record-time">${new Date(item.createdAt).toLocaleDateString('zh-CN')}</span>
         <span class="record-name">
-          <span class="record-code">${item.contestId}${item.index}</span>
-          <a href="https://codeforces.com/problemset/problem/${item.contestId}/${item.index}"
-             target="_blank" rel="noreferrer">${escapeHtml(item.name ?? '（题库里没有这道题）')}</a>
+          <span class="record-code">${problemCodeText(item)}</span>
+          <a href="${problemHref(item)}"
+             target="_blank" rel="noreferrer">${escapeHtml(item.name ?? '（题库里没有这道题）')}</a>${platformBadge(item)}
         </span>
         <span>${ratingBadge(item.rating)}</span>
         <button type="button" class="btn" data-unblock-contest="${item.contestId}"
@@ -1273,9 +1330,9 @@ function renderSolved() {
       (item) => `<div class="record-row">
         <span class="record-time">${new Date(item.firstAcAt * 1000).toLocaleDateString('zh-CN')}</span>
         <span class="record-name">
-          <span class="record-code">${item.contestId}${item.index}</span>
-          <a href="https://codeforces.com/problemset/problem/${item.contestId}/${item.index}"
-             target="_blank" rel="noreferrer">${escapeHtml(item.name ?? '（题库里没有这道题）')}</a>
+          <span class="record-code">${problemCodeText(item)}</span>
+          <a href="${problemHref(item)}"
+             target="_blank" rel="noreferrer">${escapeHtml(item.name ?? '（题库里没有这道题）')}</a>${platformBadge(item)}
         </span>
         <span>${ratingBadge(item.rating)}</span>
         <span class="problem-tags">${tagSpans(item.tags, 2)}</span>
@@ -1592,7 +1649,7 @@ function renderRunning(running) {
     .map(
       (problem) => `
         <tr>
-          <td class="problem-code">${problem.contestId}${problem.index}</td>
+          <td class="problem-code">${problemCodeText(problem)}</td>
           <td><a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>
               <div class="problem-tags">${tagSpans(problem.tags, 3)}</div></td>
           <td style="width:70px">${ratingBadge(problem.rating)}</td>
@@ -1959,9 +2016,10 @@ function todayRow(problem) {
   return `<div class="today-row ${isDone ? 'done' : ''}">
     <input type="checkbox" ${isDone ? 'checked' : ''}
            data-contest="${problem.contestId}" data-index="${problem.index}" />
-    <span class="problem-code">${problem.contestId}${problem.index}</span>
+    <span class="problem-code">${problemCodeText(problem)}</span>
     <span class="today-name">
-      <a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>
+      <a class="problem-name" href="${problemHref(problem)}" target="_blank" rel="noreferrer">${problem.name}</a>
+      ${platformBadge(problem)}
       ${isAuto ? '<span class="auto-done" title="提交记录里已经通过了这道题，自动打勾">已通过</span>' : ''}
       ${state.luoguKeys.has(key) ? '<span class="solved-elsewhere">洛谷做过</span>' : ''}
       ${tags ? `<span class="today-tags">${tags}</span>` : ''}
@@ -2062,7 +2120,7 @@ function renderTodayCard() {
     ? `<p class="subtle today-extra">另外从补题队列排进来 ${extras.length} 道：${extras
         .map(
           (problem) =>
-            `<a href="${problem.url}" target="_blank" rel="noreferrer">${problem.contestId}${problem.index}</a>`,
+            `<a href="${problemHref(problem)}" target="_blank" rel="noreferrer">${problemCodeText(problem)}</a>`,
         )
         .join('、')}（在训练日程里勾选）</p>`
     : '';
@@ -2216,8 +2274,8 @@ function extrasBlock(dateKeyValue) {
           <input type="checkbox" ${isDone ? 'checked' : ''}
                  data-extra-contest="${problem.contestId}" data-extra-index="${problem.index}" />
         </td>
-        <td class="problem-code">${problem.contestId}${problem.index}</td>
-        <td><a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${escapeHtml(problem.name)}</a>
+        <td class="problem-code">${problemCodeText(problem)}</td>
+        <td><a class="problem-name" href="${problemHref(problem)}" target="_blank" rel="noreferrer">${escapeHtml(problem.name)}</a>${platformBadge(problem)}
             ${state.hideTags ? '' : `<div class="problem-tags">${tagSpans(problem.tags, 3)}</div>`}</td>
         <td style="width:70px">${ratingBadge(problem.rating)}</td>
         <td style="width:86px"><button type="button" class="swap-btn"
@@ -2279,8 +2337,8 @@ function renderDayDetail() {
           const isDone = state.done.has(key);
           return `
       <tr class="${isDone ? 'done' : ''}">
-        <td class="problem-code">${problem.contestId}${problem.index}</td>
-        <td><a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${problem.name}</a>
+        <td class="problem-code">${problemCodeText(problem)}</td>
+        <td><a class="problem-name" href="${problemHref(problem)}" target="_blank" rel="noreferrer">${problem.name}</a>${platformBadge(problem)}
             ${isDone ? '<span class="auto-done">已通过</span>' : ''}
             ${state.luoguKeys.has(key) ? '<span class="solved-elsewhere">洛谷做过</span>' : ''}
             ${state.hideTags ? '' : `<div class="problem-tags">${tagSpans(problem.tags, 3)}</div>`}</td>
@@ -2328,7 +2386,7 @@ function renderUpcoming() {
       .map((day) => {
         const names = day.problems
           .slice(0, 4)
-          .map((problem) => `${problem.contestId}${problem.index}`)
+          .map(problemCodeText)
           .join(' · ');
         const more = day.problems.length > 4 ? ` 等 ${day.problems.length} 题` : '';
         return `<div class="upcoming-row" data-cal-date="${day.date}">
@@ -2432,88 +2490,6 @@ const NAV_ITEMS = [
 ];
 
 const VIEW_IDS = NAV_ITEMS.map((item) => item.id);
-
-// ---------- 自定义背景图 ----------
-// 图片本身由服务端存在数据目录里（浏览器读不到本地路径），这边只负责上传、
-// 铺到页面上、以及「显示强度 / 模糊」两个参数。
-
-/** 把设置里的背景参数写到 :root 的 CSS 变量上。 */
-function applyBackground() {
-  const root = document.documentElement;
-  root.style.setProperty(
-    '--bg-image',
-    state.bgImage ? `url('/api/background?v=${state.bgImage}')` : 'none',
-  );
-  root.style.setProperty('--bg-image-opacity', String(state.bgOpacity));
-  root.style.setProperty('--bg-image-blur', `${state.bgBlur}px`);
-  document.body.classList.toggle('has-bg', Boolean(state.bgImage));
-}
-
-/** 设置面板里那块背景图控件的绑定。 */
-function bindBackgroundInputs() {
-  const file = $('bg-file');
-  const opacity = $('bg-opacity');
-  const blur = $('bg-blur');
-  const hint = $('bg-hint');
-  if (!file) return;
-
-  opacity.value = String(Math.round(state.bgOpacity * 100));
-  blur.value = String(state.bgBlur);
-  if (state.bgImage) hint.textContent = '当前用的就是你自己选的背景图。';
-
-  file.addEventListener('change', async () => {
-    const picked = file.files?.[0];
-    if (!picked) return;
-    if (picked.size > 12 * 1024 * 1024) {
-      hint.textContent = '这张图超过 12 MB，换一张小点的吧。';
-      hint.classList.add('error');
-      return;
-    }
-    hint.classList.remove('error');
-    hint.textContent = '正在保存背景图…';
-    try {
-      const response = await fetch('/api/background', {
-        method: 'POST',
-        headers: { 'Content-Type': picked.type || 'application/octet-stream' },
-        body: picked,
-      });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error ?? '保存失败');
-      state.bgImage = body.version;
-      applyBackground();
-      hint.textContent = `背景图已保存（${picked.name}）。`;
-      file.value = '';
-    } catch (error) {
-      hint.classList.add('error');
-      hint.textContent = `保存背景图失败：${error.message}`;
-    }
-  });
-
-  // 拖动时只改外观，松手才写进设置——不然每拖一下都发一次请求
-  opacity.addEventListener('input', () => {
-    state.bgOpacity = Math.min(1, Math.max(0.05, Number(opacity.value) / 100));
-    applyBackground();
-  });
-  blur.addEventListener('input', () => {
-    state.bgBlur = Math.min(24, Math.max(0, Number(blur.value)));
-    applyBackground();
-  });
-  const remember = () => saveSettings({ bgOpacity: state.bgOpacity, bgBlur: state.bgBlur });
-  opacity.addEventListener('change', remember);
-  blur.addEventListener('change', remember);
-
-  $('bg-clear')?.addEventListener('click', async () => {
-    try {
-      await fetch('/api/background', { method: 'DELETE' });
-    } catch {
-      /* 删不掉也让界面先回到默认 */
-    }
-    state.bgImage = null;
-    applyBackground();
-    hint.textContent = '已恢复默认背景。';
-    hint.classList.remove('error');
-  });
-}
 
 /** 画左边那列菜单。group 变了就插一个小标题，把功能分成几段。 */
 function renderSideNav() {
@@ -2625,16 +2601,19 @@ $('module-list').addEventListener('change', (event) => {
 
 async function loadPlatforms() {
   try {
-      const { platforms } = await getJson('/api/platforms');
-      state.platforms = platforms;
-      refreshLuoguKeys();
-      renderPlatformCards();
+    const { platforms, luoguCatalog } = await getJson('/api/platforms');
+    state.platforms = platforms ?? [];
+    state.luoguCatalog = luoguCatalog ?? state.luoguCatalog;
+    renderLuoguCatalogHint();
+    renderLuoguInPlanHint();
+    refreshLuoguKeys();
+    renderPlatformCards();
   } catch {
     /* 读不到就先不显示 */
   }
 }
 
-const PLATFORM_LABELS = { nowcoder: '牛客', luogu: '洛谷' };
+  const PLATFORM_LABELS = { nowcoder: '牛客', luogu: '洛谷', atcoder: 'AtCoder' };
 const STAT_ORDER = ['题已通过', '题已挑战', '次提交', 'Rating', 'Rating排名'];
 
 // 洛谷官方的难度配色，共 9 档（0-8），和主页「难度统计」的颜色一一对应。
@@ -2784,6 +2763,159 @@ bindPlatformSync({
   label: '洛谷',
   settingsKey: 'luoguUid',
 });
+
+// ---------- 洛谷题库 ----------
+// 练习页只能告诉我「你做过哪些题」，题目本身（难度、标签、通过人数）得从题目列表页抓。
+// 这一步按难度档等距抽页，抓完进本地库，训练计划靠它排除做过的洛谷题。
+
+/** 上次抓洛谷题库的结果，直接显示在设置里，不用重新点一遍才知道抓到什么。 */
+function renderLuoguCatalogHint() {
+  const hint = $('luogu-catalog-hint');
+  if (!hint) return;
+  const info = state.luoguCatalog;
+  if (!info?.count) {
+    hint.textContent = '还没抓过洛谷题库。';
+    hint.classList.remove('error');
+    return;
+  }
+  // 按难度档列：哪一档抓了多少道、哪一档还没抓
+  const levels = Object.entries(info.levels ?? {})
+    .map(([level, row]) => ({ level: Number(level), ...row }))
+    .sort((a, b) => a.level - b.level)
+    .map(
+      (row) =>
+        `${row.label} ${row.taken ?? 0} 题${
+          row.failed ? `（${row.failed} 页没抓到）` : ''
+        }`,
+    );
+  hint.textContent =
+    `题库共 ${info.count} 道，最近一次抓于 ${new Date(info.updatedAt).toLocaleString('zh-CN')}。` +
+    (levels.length ? ` 各档：${levels.join('、')}。` : '');
+}
+
+$('luogu-catalog').addEventListener('click', async () => {
+  const button = $('luogu-catalog');
+  const hint = $('luogu-catalog-hint');
+  const levels = $('luogu-levels').value
+    .split(',')
+    .map(Number)
+    .filter((n) => Number.isInteger(n));
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = '抓取中…';
+  hint.classList.remove('error');
+  hint.textContent = `正在按难度档抽页（${levels.length} 档，每档 8 页），大约 ${
+    levels.length * 9
+  } 个请求、${Math.round((levels.length * 9 * 1.7) / 60)} 分钟左右…`;
+
+  try {
+    const data = await postJson('/api/luogu/catalog', {
+      handle: state.handle,
+      levels,
+      // 单次请求上限跟着档数走：每档最多 9 页 + 第 1 页重复算一次，留点余量
+      budget: Math.min(200, levels.length * 11 + 5),
+    });
+    state.luoguCatalog = data.catalog ?? null;
+    renderLuoguCatalogHint();
+    renderLuoguInPlanHint();
+    const marked = data.solvedMarked?.inserted;
+    if (marked) {
+      hint.textContent += ` 另外认出了 ${marked} 道你做过的题。`;
+    }
+  } catch (error) {
+    hint.textContent = error.message;
+    hint.classList.add('error');
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+});
+
+// ---------- AtCoder：题库 + 提交记录（决定训练计划里有没有 AtCoder 题） ----------
+
+/**
+ * AtCoder 的同步和牛客/洛谷不一样：它既要抓题库，也要抓提交记录，
+ * 而且记录是挂在当前这个 Codeforces 账号下面的（计划和进度都按这个号存）。
+ */
+$('atcoder-sync').addEventListener('click', async () => {
+  const account = $('atcoder-input').value.trim();
+  const hint = $('atcoder-hint');
+  const button = $('atcoder-sync');
+
+  if (!account) {
+    hint.textContent = '先填 AtCoder 用户名再同步。';
+    hint.classList.add('error');
+    return;
+  }
+  if (!state.handle) {
+    hint.textContent = '先在上面填 Codeforces 用户名——AtCoder 的记录要挂在这个账号下面。';
+    hint.classList.add('error');
+    return;
+  }
+
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = '同步中…';
+  hint.classList.remove('error');
+  hint.textContent = '正在抓题库和提交记录，第一次会慢一点…';
+
+  try {
+    const data = await postJson('/api/atcoder/sync', {
+      account,
+      handle: state.handle,
+      force: true,
+    });
+    state.platforms = data.platforms ?? state.platforms;
+    state.atcoderUid = account;
+    renderPlatformCards();
+    saveSettings({ atcoderUid: account });
+    const added = data.submissions?.added ?? 0;
+    hint.textContent =
+      `同步成功：题库 ${data.catalog?.count ?? '?'} 道题，这次写入 ${added} 条提交记录，` +
+      `累计通过 ${data.result?.solved ?? '?'} 道。`;
+    // 记录变了，把计划重新拉一次：做过的题会自动打勾、也不会再推荐
+    if (state.planData) generatePlan(false, { scroll: false });
+  } catch (error) {
+    hint.textContent = error.message;
+    hint.classList.add('error');
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+});
+
+/**
+ * 勾选框改了要重新出计划：计划指纹里带了这一项，服务端会自动重挑一批题。
+ * 没勾就是纯 Codeforces，和以前完全一样。
+ */
+$('atcoder-in-plan').addEventListener('change', () => {
+  const on = $('atcoder-in-plan').checked;
+  state.atcoderInPlan = on;
+  saveSettings({ atcoderInPlan: on });
+  if (on && !state.atcoderUid) {
+    $('atcoder-hint').textContent = '填上 AtCoder 用户名并同步一次，题单里才会有 AtCoder 的题。';
+  }
+  if (state.handle && state.target) generatePlan(false, { scroll: false });
+});
+
+// 洛谷题进题单：题库要先抓过；没抓的话给一句提示，别让人以为勾了没反应
+$('luogu-in-plan').addEventListener('change', () => {
+  const on = $('luogu-in-plan').checked;
+  state.luoguInPlan = on;
+  saveSettings({ luoguInPlan: on });
+  renderLuoguInPlanHint();
+  if (state.handle && state.target) generatePlan(false, { scroll: false });
+});
+
+/** 「加入洛谷题」旁边那行小字：题库抓了没有、抓了多少。 */
+function renderLuoguInPlanHint() {
+  const hint = $('luogu-in-plan-hint');
+  if (!hint) return;
+  const count = state.luoguCatalog?.count ?? 0;
+  hint.textContent = count
+    ? `洛谷题库已有 ${count} 道题，勾上就会按份额进题单（每天最多一道）。`
+    : '洛谷题进题单之前，先到下面「洛谷」那里抓一次题库（约 1 分钟）。';
+}
 
   /** 洛谷同步后，重新渲染计划，把「洛谷做过」的标记刷出来。 */
   function applyLuoguMarks() {
@@ -2938,14 +3070,17 @@ async function restoreSession() {
     state.restDays = Array.isArray(settings.restDays) ? settings.restDays : [];
     state.dayOff = settings.dayOff ?? {};
     state.hiddenModules = Array.isArray(settings.hiddenModules) ? settings.hiddenModules : [];
-    state.bgOpacity = Number.isFinite(settings.bgOpacity) ? settings.bgOpacity : 0.35;
-    state.bgBlur = Number.isFinite(settings.bgBlur) ? settings.bgBlur : 0;
-    state.bgImage = settings.bgImage ?? null;
     if (settings.nowcoderUid) {
       state.nowcoderUid = settings.nowcoderUid;
       $('nowcoder-input').value = settings.nowcoderUid;
     }
     if (settings.luoguUid) $('luogu-input').value = settings.luoguUid;
+    state.atcoderUid = settings.atcoderUid ?? null;
+    if (settings.atcoderUid) $('atcoder-input').value = settings.atcoderUid;
+    state.atcoderInPlan = Boolean(settings.atcoderInPlan);
+    $('atcoder-in-plan').checked = state.atcoderInPlan;
+    state.luoguInPlan = Boolean(settings.luoguInPlan);
+    $('luogu-in-plan').checked = state.luoguInPlan;
     if (settings.floorGap !== null && settings.floorGap !== undefined) {
       $('floor-gap-input').value = settings.floorGap;
     }
@@ -2958,7 +3093,6 @@ async function restoreSession() {
     }
   }
   applyAppearance();
-  applyBackground();
   state.compact = Boolean(settings?.compact);
   document.body.classList.toggle('compact', state.compact);
   bindDataTools();
@@ -2970,7 +3104,6 @@ async function restoreSession() {
   // 还没填账号就先停在「账号」页，填过的话停在地址栏指向的页面（默认当前水平）
   // 账号和当前水平合并成一页了，冷启动也停在这一页
   showView(VIEW_IDS.includes(fromHash) ? fromHash : 'panel-overview', { save: false });
-  bindBackgroundInputs();
   loadPlatforms();
 
   if (!settings?.handle) {
@@ -3020,7 +3153,8 @@ function matchesPlanFilter(problem) {
   if (planFilter.min != null && (problem.rating ?? 0) < planFilter.min) return false;
   if (planFilter.max != null && (problem.rating ?? 9999) > planFilter.max) return false;
   if (planFilter.keyword) {
-    const haystack = `${problem.contestId}${problem.index} ${problem.name}`.toLowerCase();
+    // 用界面上的题号（ABC300E）参与搜索，这样搜 "abc" 也能筛出 AtCoder 的题
+    const haystack = `${problemCodeText(problem)} ${problem.name}`.toLowerCase();
     if (!haystack.includes(planFilter.keyword.toLowerCase())) return false;
   }
   return true;
@@ -3134,7 +3268,7 @@ function exportPlan(format) {
     const rows = [['题号', '题名', '难度', '方向', '链接']];
     for (const problem of problems) {
       rows.push([
-        `${problem.contestId}${problem.index}`,
+        problemCodeText(problem),
         problem.name,
         problem.rating ?? '',
         (problem.axes ?? []).join(' / '),
@@ -3147,7 +3281,7 @@ function exportPlan(format) {
     const lines = [`# ACM 训练台题单 · 目标 ${plan.target} 分`, '', '| 题号 | 题名 | 难度 | 方向 |', '| --- | --- | --- | --- |'];
     for (const problem of problems) {
       lines.push(
-        `| [${problem.contestId}${problem.index}](${problem.url}) | ${problem.name} | ${
+        `| [${problemCodeText(problem)}](${problemHref(problem)}) | ${problem.name} | ${
           problem.rating ?? '—'
         } | ${(problem.axes ?? []).join(' / ') || '—'} |`,
       );
@@ -3375,7 +3509,7 @@ async function copyTodayList() {
     `【今天要做的题】${formatMonthDay(dateKey(new Date()))}`,
     ...items.map(
       (problem, index) =>
-        `${index + 1}. ${problem.contestId}${problem.index} ${problem.name}（${problem.rating ?? '?'} 分）${problem.url}`,
+        `${index + 1}. ${problemCodeText(problem)} ${problem.name}（${problem.rating ?? '?'} 分）${problemHref(problem)}`,
     ),
   ].join('\n');
   try {
@@ -3433,8 +3567,8 @@ function renderWarmup() {
     <div class="today-list">${warmup.problems
       .map(
         (problem) => `<div class="today-row">
-          <span class="problem-code">${problem.contestId}${problem.index}</span>
-          <span class="today-name"><a class="problem-name" href="${problem.url}" target="_blank" rel="noreferrer">${escapeHtml(problem.name)}</a></span>
+          <span class="problem-code">${problemCodeText(problem)}</span>
+          <span class="today-name"><a class="problem-name" href="${problemHref(problem)}" target="_blank" rel="noreferrer">${escapeHtml(problem.name)}</a></span>
           ${ratingBadge(problem.rating)}
         </div>`,
       )
