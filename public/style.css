@@ -2387,3 +2387,30 @@ body.compact .panel-head h2 {
     grid-template-columns: 1fr;
   }
 }
+
+/* 比赛日历：每行左边标一下这场是哪家的 */
+.contest-source {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  vertical-align: middle;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  color: var(--text-dim);
+}
+
+.contest-source.src-cf {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+}
+
+.contest-source.src-luogu {
+  background: color-mix(in srgb, #3498db 20%, transparent);
+  color: #5fb3e8;
+}
+
+.contest-source.src-atcoder {
+  background: color-mix(in srgb, #aaaaaa 22%, transparent);
+  color: var(--text-dim);
+}

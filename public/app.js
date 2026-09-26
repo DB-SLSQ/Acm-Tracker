@@ -50,6 +50,11 @@ const state = {
   extraTasks: {},
   // 其他平台
   nowcoderUid: null,
+  // 比赛日历：当前筛选的来源 + 最近一次拿到的数据
+  calendarSource: 'all',
+  calendarData: null,
+  // 今日卡片是否显示「补一个方向」（设置里能关）
+  extraAxis: true,
   // AtCoder：用户名 + 训练计划里要不要混 AtCoder 的题
   atcoderUid: null,
   atcoderInPlan: false,
@@ -1553,26 +1558,68 @@ renderQuickPicks();
 
 let countdownInterval = null;
 
+// 「补一个方向」开关 + 赛程来源筛选的交互（都在这块统一绑一次）
+$('extra-axis-toggle')?.addEventListener('change', () => {
+  state.extraAxis = $('extra-axis-toggle').checked;
+  saveSettings({ extraAxis: state.extraAxis });
+  renderTodayCard();
+});
+
+$('calendar-filter')?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-calendar-source]');
+  if (!button || !state.calendarData) return;
+  state.calendarSource = button.dataset.calendarSource;
+  renderCalendar(state.calendarData);
+});
+
 async function loadCalendar() {
   markViewReady('panel-calendar');
   try {
     const query = state.handle ? `?handle=${encodeURIComponent(state.handle)}` : '';
-    renderCalendar(await getJson(`/api/calendar${query}`));
+    // 存一份原始数据：切来源筛选时直接重画，不用再请求一次
+    state.calendarData = await getJson(`/api/calendar${query}`);
+    renderCalendar(state.calendarData);
   } catch (error) {
     $('calendar-summary').textContent = `赛程加载失败：${error.message}`;
     $('calendar-list').innerHTML = '';
   }
 }
 
-function renderCalendar(data) {
-  $('calendar-summary').textContent = data.upcoming.length
-    ? `未来 ${data.days} 天有 ${data.upcoming.length} 场 Codeforces 比赛（时间已换算成本机时区）。`
-    : `未来 ${data.days} 天还没有已公布的比赛。Codeforces 一般提前几天放出赛程，过阵子再看看。`;
+// 赛程来源的中文名（筛选按钮和每行左边那个小标都用它）
+const SOURCE_LABELS = { cf: 'Codeforces', luogu: '洛谷', atcoder: 'AtCoder' };
 
-  $('calendar-list').innerHTML = data.upcoming.length
-    ? data.upcoming
+function renderCalendar(data) {
+  // 来源筛选：默认全看，点一下只看某一家
+  const source = state.calendarSource ?? 'all';
+  const visible = (data.upcoming ?? []).filter(
+    (contest) => source === 'all' || (contest.source ?? 'cf') === source,
+  );
+  const bySource = { cf: 0, luogu: 0, atcoder: 0 };
+  for (const contest of data.upcoming ?? []) {
+    bySource[contest.source ?? 'cf'] = (bySource[contest.source ?? 'cf'] ?? 0) + 1;
+  }
+
+  $('calendar-summary').textContent = data.upcoming?.length
+    ? `未来 ${data.days} 天有 ${data.upcoming.length} 场：Codeforces ${bySource.cf} 场 · 洛谷 ${bySource.luogu} 场 · AtCoder ${bySource.atcoder} 场（时间已换算成本机时区）。`
+    : `未来 ${data.days} 天还没有已公布的比赛。各平台一般提前几天放出赛程，过阵子再看看。`;
+
+  $('calendar-filter').innerHTML = [
+    ['all', `全部 ${data.upcoming?.length ?? 0}`],
+    ['cf', `Codeforces ${bySource.cf}`],
+    ['luogu', `洛谷 ${bySource.luogu}`],
+    ['atcoder', `AtCoder ${bySource.atcoder}`],
+  ]
+    .map(
+      ([value, label]) =>
+        `<button type="button" class="btn${source === value ? ' active' : ''}" data-calendar-source="${value}">${label}</button>`,
+    )
+    .join('');
+
+  $('calendar-list').innerHTML = visible.length
+    ? visible
         .map((contest) => {
           const fit = contest.fit;
+          const label = SOURCE_LABELS[contest.source ?? 'cf'] ?? '';
           return `
             <div class="contest-row">
               <div class="contest-when">
@@ -1580,8 +1627,9 @@ function renderCalendar(data) {
                 ${formatLocalTime(contest.startTime)} · ${(contest.durationSeconds / 3600).toFixed(1)} 小时
               </div>
               <div class="contest-name">
-                <a href="${contest.url}" target="_blank" rel="noreferrer">${contest.name}</a>
-                <div class="contest-meta">${contest.division}</div>
+                <span class="contest-source src-${contest.source ?? 'cf'}">${label}</span>
+                <a href="${contest.url}" target="_blank" rel="noreferrer">${escapeHtml(contest.name)}</a>
+                <div class="contest-meta">${escapeHtml(contest.division ?? '')}</div>
               </div>
               <div class="contest-tail">
                 ${fit ? `<span class="fit-badge fit-${fit.tone}">${fit.label}</span>` : ''}
@@ -2129,7 +2177,8 @@ function renderTodayCard() {
     head +
     body +
     extrasLine +
-    (total
+    // 「补一个方向」可以在设置里关掉：不想每天被这个入口勾着加题的人就关
+    (total && state.extraAxis
       ? `<div class="today-extra">
            <select id="extra-axis" title="选一个方向，临时加三道题进今天">${(state.planData.axes ?? [])
              .map((row) => `<option value="${escapeHtml(row.axis)}">${escapeHtml(row.axis)}</option>`)
@@ -3085,6 +3134,8 @@ async function restoreSession() {
       $('floor-gap-input').value = settings.floorGap;
     }
     state.hideTags = Boolean(settings.hideTags);
+    state.extraAxis = settings.extraAxis !== false;
+    if ($('extra-axis-toggle')) $('extra-axis-toggle').checked = state.extraAxis;
     $('hide-tags').checked = state.hideTags;
     state.remindAt = settings.remindAt ?? null;
     state.remindLast = settings.remindLast ?? null;

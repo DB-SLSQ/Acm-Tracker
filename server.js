@@ -347,6 +347,8 @@ function readSettings() {
       hideTags: raw.hide_tags === '1',
       // 每天打卡提醒的时间（'HH:MM'，null = 关闭）
       remindAt: raw.remind_at ?? null,
+      // 今日卡片是否显示「补一个方向」（默认显示）
+      extraAxis: raw.extra_axis !== '0',
       // 上一次提醒是哪天（'YYYY-MM-DD'），避免同一天反复弹
       remindLast: raw.remind_last ?? null,
       updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
@@ -1163,16 +1165,124 @@ function decorateContest(contest) {
 }
 
 /** 比赛日历：未来一段时间内已公布赛程的 Codeforces 比赛。 */
+/**
+ * 洛谷 / AtCoder 的赛程。
+ *
+ * 这两家都不给「官方赛程接口」：AtCoder 只能抓 /contests/ 那张 HTML 表，
+ * 洛谷有 _contentOnly=1 的半公开 JSON。都缓存 12 小时，只在打开比赛日历、
+ * 缓存过期时才请求；抓不到就退回上一次的缓存，页面照常用 Codeforces 的赛程。
+ * 失败也记一个「尝试时间」，半小时内不重复试，免得断网时每次打开都等几秒。
+ */
+const EXTERNAL_CONTEST_CACHE_MS = 1000 * 60 * 60 * 12;
+const EXTERNAL_RETRY_MS = 1000 * 60 * 30;
+const CALENDAR_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) acm-trainer';
+
+async function loadExternalContests(source) {
+  const key = `external_contests_${source}`;
+  const cached = parseJson(db.metaGet(key), []);
+  const updatedAt = Number(db.metaGet(`${key}_updated_at`) || 0);
+  const attemptedAt = Number(db.metaGet(`${key}_attempted_at`) || 0);
+  if (cached.length && isFresh(updatedAt, EXTERNAL_CONTEST_CACHE_MS)) return cached;
+  if (isFresh(attemptedAt, EXTERNAL_RETRY_MS)) return cached;
+
+  db.metaSet(`${key}_attempted_at`, Date.now());
+  try {
+    const list = source === 'luogu' ? await fetchLuoguContests() : await fetchAtCoderContests();
+    if (list.length) {
+      db.metaSet(key, JSON.stringify(list));
+      db.metaSet(`${key}_updated_at`, Date.now());
+      return list;
+    }
+  } catch (error) {
+    console.warn(`[calendar] ${source} 赛程抓取失败：${error.message}`);
+  }
+  return cached;
+}
+
+/** 洛谷赛程：contest/list 加上 _contentOnly=1 会返回一份 JSON。 */
+async function fetchLuoguContests() {
+  const response = await fetch('https://www.luogu.com.cn/contest/list?_contentOnly=1', {
+    headers: { 'User-Agent': CALENDAR_UA, 'x-luogu-type': 'content-only' },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const body = await response.json();
+  const rows = body?.currentData?.contests?.result ?? [];
+  // 洛谷只要 rated 的场次：这份数据里 rated 标记的字段名变过（rated / ratedLimit），
+  // 两个都认；万一哪天两个都没了，退回「时长 ≥ 2 小时」当正式赛，别把列表抓空。
+  const valid = rows.filter((row) => row?.startTime && row?.endTime && row?.name);
+  const hasRatedFlag = valid.some((row) => row.rated !== undefined || row.ratedLimit !== undefined);
+  return valid
+    .filter((row) => {
+      if (hasRatedFlag) {
+        return row.rated === true || row.rated === 1 || Number(row.ratedLimit ?? 0) > 0;
+      }
+      return Number(row.endTime) - Number(row.startTime) >= 2 * 3600;
+    })
+    .map((row) => ({
+      id: `luogu-${row.id}`,
+      name: row.name,
+      startTime: Number(row.startTime),
+      durationSeconds: Math.max(0, Number(row.endTime) - Number(row.startTime)),
+      url: `https://www.luogu.com.cn/contest/${row.id}`,
+      source: 'luogu',
+    }));
+}
+
+/** AtCoder 赛程：没有接口，抓 /contests/ 里 upcoming 那张表。 */
+async function fetchAtCoderContests() {
+  const response = await fetch('https://atcoder.jp/contests/', {
+    headers: { 'User-Agent': CALENDAR_UA },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const html = await response.text();
+
+  const table = html.split('id="contest-table-upcoming"')[1] ?? '';
+  const result = [];
+  for (const row of table.split('<tr>').slice(1)) {
+    const start = row.match(/<time[^>]*>([^<]+)<\/time>/);
+    const link = row.match(/href="\/contests\/([A-Za-z0-9_-]+)"[^>]*>([^<]+)</);
+    if (!start || !link) continue;
+    const minutes = row.match(/<td class="text-center">(\d+)<\/td>/);
+    // AtCoder 给的是日本时间，形如 2026-09-27 21:00:00+0900
+    const parsed = new Date(
+      start[1].trim().replace(' ', 'T').replace(/([+-]\d{2})(\d{2})$/, '$1:$2'),
+    );
+    if (Number.isNaN(parsed.getTime())) continue;
+    result.push({
+      id: `atcoder-${link[1]}`,
+      name: link[2].trim(),
+      startTime: Math.floor(parsed.getTime() / 1000),
+      durationSeconds: (Number(minutes?.[1] ?? 100) || 100) * 60,
+      url: `https://atcoder.jp/contests/${link[1]}`,
+      source: 'atcoder',
+    });
+  }
+  return result;
+}
+
 async function handleCalendar(url) {
   const days = Math.min(60, Math.max(1, Number(url.searchParams.get('days') || 14)));
   const rawHandle = url.searchParams.get('handle');
   const contestsState = await ensureContests();
+  // 洛谷和 AtCoder 的赛程：抓不到就只用 Codeforces 的，不影响页面
+  const [luogu, atcoder] = await Promise.all([
+    loadExternalContests('luogu'),
+    loadExternalContests('atcoder'),
+  ]);
 
   const now = Math.floor(Date.now() / 1000);
   const until = now + days * 86400;
+  // Codeforces 和 AtCoder 只留一周内的（赛程太远排着也没用，主要看这周打哪场）；
+  // 洛谷的正式赛公布得早，按用户选的窗口来。
+  const weekAhead = now + 7 * 86400;
   const upcoming = db
     .getUpcomingContests(200)
-    .filter((contest) => contest.type === 'CF' && contest.startTime <= until);
+    .filter(
+      (contest) =>
+        contest.type === 'CF' &&
+        contest.startTime <= Math.min(until, weekAhead) &&
+        contest.startTime + contest.duration > now,
+    );
 
   let current = null;
   if (rawHandle) {
@@ -1180,22 +1290,45 @@ async function handleCalendar(url) {
     if (cached?.rating) current = cached.rating;
   }
 
+  const cfRows = upcoming.map((contest) => {
+    const info = parseContestInfo(contest.name);
+    return {
+      id: contest.id,
+      name: contest.name,
+      division: info.division,
+      source: 'cf',
+      startTime: contest.startTime,
+      durationSeconds: contest.duration,
+      url: `https://codeforces.com/contest/${contest.id}`,
+      fit: current == null ? null : divisionFit(info.division, current),
+    };
+  });
+
+  // 外面的赛程只保留「还没结束、且在时间窗里」的
+  const externalRows = [...luogu, ...atcoder]
+    .filter((contest) => {
+      if (contest.startTime + contest.durationSeconds <= now) return false;
+      // AtCoder 和 Codeforces 一样只看一周内；洛谷按用户选的窗口
+      return contest.source === 'luogu' ? contest.startTime <= until : contest.startTime <= weekAhead;
+    })
+    .map((contest) => ({
+      id: contest.id,
+      name: contest.name,
+      division: contest.source === 'luogu' ? '洛谷' : 'AtCoder',
+      source: contest.source,
+      startTime: contest.startTime,
+      durationSeconds: contest.durationSeconds,
+      url: contest.url,
+      // 这两家不区分 Div.，也就没有「适合你的组别」这个判断
+      fit: null,
+    }));
+
   return {
     contestsState,
     now,
     days,
-    upcoming: upcoming.map((contest) => {
-      const info = parseContestInfo(contest.name);
-      return {
-        id: contest.id,
-        name: contest.name,
-        division: info.division,
-        startTime: contest.startTime,
-        durationSeconds: contest.duration,
-        url: `https://codeforces.com/contest/${contest.id}`,
-        fit: current == null ? null : divisionFit(info.division, current),
-      };
-    }),
+    sources: ['cf', 'luogu', 'atcoder'],
+    upcoming: [...cfRows, ...externalRows].sort((a, b) => a.startTime - b.startTime),
   };
 }
 
@@ -1427,6 +1560,7 @@ async function route(req, res, url) {
       }
       // 训练计划里是否隐藏标签
       if (body.hideTags !== undefined) patch.hide_tags = body.hideTags ? '1' : '';
+      if (body.extraAxis !== undefined) patch.extra_axis = body.extraAxis ? '1' : '';
       // 打卡提醒时间：'HH:MM'，空串表示关闭
       if (body.remindAt !== undefined) {
         const value = String(body.remindAt ?? '').trim();

@@ -148,6 +148,7 @@
           <h2>比赛日历</h2>
           <p id="calendar-summary"></p>
         </div>
+        <div class="review-toolbar" id="calendar-filter"></div>
         <div class="contest-list" id="calendar-list"></div>
       </section>
 
@@ -292,6 +293,15 @@
         <h3 class="settings-title">界面模块</h3>
         <p class="subtle">不需要的模块可以直接关掉，连标题都不显示。</p>
         <div class="module-list" id="module-list"></div>
+
+        <h3 class="settings-title">今日卡片</h3>
+        <p class="subtle">
+          卡片上那个「今天补一个方向」的入口，不想用可以关掉——关掉之后今日卡片只剩当天计划里的题。
+        </p>
+        <label class="tag-hide-toggle" title="今日卡片是否显示「补一个方向」">
+          <input type="checkbox" id="extra-axis-toggle" />
+          <span>显示「今天补一个方向」</span>
+        </label>
 
         <h3 class="settings-title">数据安全</h3>
                 <p class="subtle">
