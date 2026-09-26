@@ -3577,6 +3577,9 @@ async function sendFeedback(contestId, index, feel) {
     await postJson('/api/feedback', { handle: state.handle, contestId, index, feel });
     state.feedback.set(`${contestId}-${index}`, feel);
     toast(`已记下：${FEEL_LABELS[feel]}`);
+    // 立刻重画一次，让刚点的按钮变成选中态：不重画的话点了只弹一条提示、按钮还是灰的，
+    // 看着像没记上
+    renderTodayCard();
   } catch (error) {
     toast(`记录失败：${error.message}`, { error: true });
   }

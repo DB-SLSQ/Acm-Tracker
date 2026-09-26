@@ -2086,6 +2086,28 @@ async function route(req, res, url) {
     }
   }
 
+  // 做题手感：秒了 / 刚好 / 卡住 / 看题解，用来把练习区间上下微调。
+  // 这条路由在 19e6c08（撤背景图那次）被连着一块删掉了，0.1.7 里这四个按钮点了只弹「接口不存在」，
+  // 0.1.8 补回来。读的那一头一直没断——历史手感一直跟着 /api/plan 返回，所以老记录不用补录。
+  if (pathname === '/api/feedback' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      const contestId = Number(body.contestId);
+      if (!handleKey || !Number.isFinite(contestId) || !body.index) {
+        return sendError(res, 400, '参数不完整');
+      }
+      const allowed = ['too_easy', 'ok', 'hard', 'read_editorial'];
+      if (!allowed.includes(body.feel)) {
+        return sendError(res, 400, 'feel 只能是 too_easy / ok / hard / read_editorial');
+      }
+      db.setProblemFeedback(handleKey, contestId, String(body.index), body.feel);
+      return sendJson(res, 200, { ok: true, shift: db.feedbackShift(handleKey) });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
   // 换一道题：同方向、难度最接近、没做过、也不在现有计划里
   if (pathname === '/api/plan/replace' && req.method === 'POST') {
     try {
@@ -2277,6 +2299,37 @@ async function route(req, res, url) {
       }
       db.setReviewDone(handleKey, contestId, String(body.index), Boolean(body.done));
       return sendJson(res, 200, { ok: true, total: buildReviewQueue(handleKey, 'stale').length });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 「今天补一个方向」：临时往某一天塞几道指定方向的题，不占计划配额。
+  // 和 /api/feedback 一样是 19e6c08 误删的；挑题的 pickAxisExtras 一直在，补回路由就能用。
+  if (pathname === '/api/plan/extra' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      const date = String(body.date ?? '').slice(0, 10);
+      if (!handleKey) return sendError(res, 400, '缺少 handle');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return sendError(res, 400, 'date 格式不对');
+      const axis = String(body.axis ?? '');
+      if (!axis) return sendError(res, 400, '缺少方向');
+      const exclude = new Set(
+        (Array.isArray(body.exclude) ? body.exclude : []).map(String).filter(Boolean).slice(0, 800),
+      );
+      const picked = pickAxisExtras({ handleKey, axis, count: 3, exclude });
+      if (!picked.length) return sendError(res, 404, `「${axis}」这个方向暂时没有合适的题`);
+      db.addExtraTasks(
+        handleKey,
+        date,
+        picked.map((problem) => `${problem.contestId}-${problem.index}`),
+      );
+      return sendJson(res, 200, {
+        ok: true,
+        problems: picked.map(toClientProblem),
+        keys: db.listExtraTasks(handleKey, date),
+      });
     } catch (error) {
       return sendError(res, 400, error.message);
     }
