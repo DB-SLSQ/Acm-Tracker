@@ -301,6 +301,54 @@
         </div>
       </section>
 
+      <section class="panel hidden" id="panel-mashup">
+        <div class="panel-head">
+          <h2>拼好题</h2>
+          <p id="mashup-summary">
+            一场 Codeforces + 一场 AtCoder，凑成一套——两场加起来十几题，和一场区域赛的量差不多，
+            难度也会自然错开。只会挑
+            <b>你还没打过</b>的场，并且尽量挑最近的。
+          </p>
+        </div>
+
+        <div class="bank-filters">
+          <label class="sched-field">
+            <span>Codeforces</span>
+            <select id="mashup-cf">
+              <option value="Div. 3">Div. 3</option>
+              <option value="Div. 2" selected>Div. 2</option>
+              <option value="Educational">Educational</option>
+              <option value="Div. 1">Div. 1</option>
+              <option value="any">随便哪一类</option>
+              <option value="none">不要 CF</option>
+            </select>
+          </label>
+          <label class="sched-field">
+            <span>AtCoder</span>
+            <select id="mashup-at">
+              <option value="ABC" selected>ABC</option>
+              <option value="ARC">ARC</option>
+              <option value="AGC">AGC</option>
+              <option value="any">随便哪一类</option>
+              <option value="none">不要 AtCoder</option>
+            </select>
+          </label>
+          <label class="sched-field">
+            <span>时间范围</span>
+            <select id="mashup-months">
+              <option value="12">近一年</option>
+              <option value="18" selected>近一年半</option>
+              <option value="24">近两年</option>
+              <option value="36">近三年</option>
+            </select>
+          </label>
+          <button class="btn primary" id="mashup-roll">拼一套</button>
+          <button class="btn" id="mashup-copy" disabled>复制这一套</button>
+        </div>
+
+        <div id="mashup-result"></div>
+      </section>
+
       <section class="panel hidden" id="panel-growth">
         <div class="panel-head">
           <h2>成长</h2>

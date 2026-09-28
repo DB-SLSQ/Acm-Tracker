@@ -1859,6 +1859,18 @@ input[type="number"]:focus {
   color: var(--accent);
 }
 
+/* 今日卡片上的换一道 / 放最后 */
+.today-actions {
+  display: inline-flex;
+  gap: 4px;
+  flex: none;
+}
+
+.today-actions .swap-btn {
+  padding: 3px 8px;
+  font-size: 11.5px;
+}
+
 .contest-list {
   display: flex;
   flex-direction: column;

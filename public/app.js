@@ -788,6 +788,27 @@ $('today-card').addEventListener('click', async (event) => {
     copyTodayList();
     return;
   }
+  // 今日卡片上的「换一道 / 放最后」：和训练计划里走同一套函数
+  const swapOnCard = event.target.closest('[data-swap-key]');
+  if (swapOnCard) {
+    swapProblem(swapOnCard.dataset.swapKey);
+    return;
+  }
+  const undoOnCard = event.target.closest('[data-swap-undo]');
+  if (undoOnCard) {
+    undoSwap(undoOnCard.dataset.swapUndo);
+    return;
+  }
+  const deferOnCard = event.target.closest('[data-defer-key]');
+  if (deferOnCard) {
+    setDeferred(deferOnCard.dataset.deferKey, true);
+    return;
+  }
+  const undeferOnCard = event.target.closest('[data-defer-undo]');
+  if (undeferOnCard) {
+    setDeferred(undeferOnCard.dataset.deferUndo, false);
+    return;
+  }
   const add = event.target.closest('#extra-add');
   if (add) {
     const axis = $('extra-axis')?.value;
@@ -1380,6 +1401,97 @@ async function loadSolved({ append = false } = {}) {
 
 $('solved-more').addEventListener('click', () => loadSolved({ append: true }));
 
+// ---------- 拼好题：一场 CF + 一场 AtCoder ----------
+// 「cf + atc 题数就跟区域赛差不多了，组合一下难度还有起伏」——挑场规则在服务端
+// （buildMashup）：只挑没打过的、从最近 60 场里随机，太久远的不碰。
+let mashupData = null;
+
+function mashupParams() {
+  const params = new URLSearchParams({
+    cf: $('mashup-cf')?.value || 'any',
+    at: $('mashup-at')?.value || 'any',
+    months: $('mashup-months')?.value || '18',
+  });
+  if (state.handle) params.set('handle', state.handle);
+  return params.toString();
+}
+
+async function rollMashup() {
+  const button = $('mashup-roll');
+  if (!button) return;
+  button.disabled = true;
+  button.textContent = '正在拼…';
+  try {
+    mashupData = await getJson(`/api/mashup?${mashupParams()}`);
+    renderMashup();
+    button.textContent = '换一套';
+    $('mashup-copy').disabled = false;
+  } catch (error) {
+    $('mashup-result').innerHTML = `<p class="subtle">${escapeHtml(error.message)}</p>`;
+    button.textContent = '拼一套';
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderMashup() {
+  const data = mashupData;
+  if (!data) return;
+  const range = data.ratingRange ? `${data.ratingRange[0]} ~ ${data.ratingRange[1]}` : '难度待定';
+  const notes = [];
+  if (data.fellBack?.cf) notes.push('Codeforces 那边你选的那类最近没有没打过的场，这轮换成了别的类别');
+  if (data.fellBack?.atcoder) notes.push('AtCoder 同理，这轮换成了别的类别');
+
+  $('mashup-summary').innerHTML =
+    `合计 <b>${data.total}</b> 题 · 难度 ${range} · 候选池：Codeforces ${data.pool.cf} 场、` +
+    `AtCoder ${data.pool.atcoder} 场（最近 ${data.months} 个月里你还没打过的）。` +
+    (notes.length ? `<br><span class="subtle">${notes.join('；')}。</span>` : '');
+
+  const contests = [data.cf, data.atcoder].filter(Boolean).map(contestCard).join('');
+  const rows = data.problems
+    .map(
+      (problem) => `<div class="bank-row${problem.solved ? ' done' : ''}">
+        <span class="record-code">${escapeHtml(problem.code)}</span>
+        <span class="bank-name"><a href="${problem.url}" target="_blank" rel="noreferrer">${escapeHtml(problem.name)}</a></span>
+        <span>${ratingBadge(problem.rating)}</span>
+        <span class="problem-tags">${escapeHtml(problem.contestName ?? '')}</span>
+        <span class="bank-state">${problem.solved ? '已通过' : ''}</span>
+      </div>`,
+    )
+    .join('');
+
+  $('mashup-result').innerHTML = `
+    ${contests}
+    <h3 class="settings-title">这一套（按难度从小到大）</h3>
+    <div class="record-list">${rows}</div>`;
+}
+
+/** 复制成 Markdown：贴群里、记笔记、丢给队友都能用。 */
+async function copyMashup() {
+  if (!mashupData) return;
+  const text = [
+    `## 拼好题 · ${mashupData.total} 题（难度 ${mashupData.ratingRange?.join(' ~ ') ?? '待定'}）`,
+    [mashupData.cf, mashupData.atcoder]
+      .filter(Boolean)
+      .map((contest) => `- ${contest.name}（${contest.problems.length} 题）`)
+      .join('\n'),
+    '',
+    ...mashupData.problems.map(
+      (problem, i) =>
+        `${i + 1}. ${problem.code} ${problem.name}${problem.rating ? ` · ${problem.rating}` : ''} — ${problem.url}`,
+    ),
+  ].join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`已复制这一套（${mashupData.total} 题）。`);
+  } catch {
+    toast('浏览器不让复制，手动选一下吧。', { error: true });
+  }
+}
+
+$('mashup-roll')?.addEventListener('click', rollMashup);
+$('mashup-copy')?.addEventListener('click', copyMashup);
+
 // ---------- 历年比赛：一场一行，题目按难度上色 ----------
 // 照着 cftracker 的 contests 页做的：按比赛看题，而不是按题看题。
 // 数据是本地题库按 contest_id 分组的，所以只列「题库里已经有题」的比赛。
@@ -1790,7 +1902,8 @@ async function swapProblem(key) {
       exclude: state.planProblems.map((problem) => `${problem.contestId}-${problem.index}`),
     });
     applySwap(data.fromKey, data.problem);
-    setStatus(`已换成 ${data.problem.contestId}${data.problem.index}`);
+    // AtCoder 的 contestId 是内部编号（3000024 这种），提示里要用界面上的题号
+    setStatus(`已换成 ${data.problem.code ?? `${data.problem.contestId}${data.problem.index}`}`);
     // 同一道题反复换的话，直接建议屏蔽——一直换说明它不适合你
     if (data.hint) showHint(data.hint, false);
   } catch (error) {
@@ -2410,7 +2523,23 @@ function todayRow(problem) {
     <span class="today-stage">第 ${problem.stage ?? 1} 阶段</span>
     ${ratingBadge(problem.rating)}
     ${feedbackButtons(key)}
+    ${swapControls(problem)}
   </div>`;
+}
+
+/**
+ * 换一道 / 放最后。今日卡片和训练计划里用的是同一套 data 属性和同一套处理函数，
+ * 所以在哪一页点效果都一样（换完两边都会重画）。
+ */
+function swapControls(problem) {
+  const key = `${problem.contestId}-${problem.index}`;
+  const swap = problem.swappedFrom
+    ? `<button type="button" class="swap-btn" data-swap-undo="${problem.swappedFrom}" title="换回系统推荐的那道题">还原</button>`
+    : `<button type="button" class="swap-btn" data-swap-key="${key}" title="换一道同方向、难度差不多的题">换一道</button>`;
+  const defer = problem.deferred
+    ? `<button type="button" class="swap-btn" data-defer-undo="${key}" title="取消「放到最后」">取消</button>`
+    : `<button type="button" class="swap-btn" data-defer-key="${key}" title="挪到本阶段最后再做">放最后</button>`;
+  return `<span class="today-actions">${swap}${defer}</span>`;
 }
 
 /**
@@ -2865,6 +2994,7 @@ const NAV_ITEMS = [
   { id: 'panel-review', label: '补题队列', icon: '🧾' },
   { id: 'panel-problems', label: '题库', icon: '📚' },
   { id: 'panel-contests', label: '历年比赛', icon: '🏆' },
+  { id: 'panel-mashup', label: '拼好题', icon: '🧩' },
   { id: 'panel-tags', label: '能力画像', icon: '🧭', group: '数据' },
   { id: 'panel-growth', label: '成长', icon: '🌱' },
   { id: 'panel-records', label: '做题记录', icon: '📝' },
@@ -2927,6 +3057,8 @@ $('side-nav').addEventListener('click', (event) => {
   // 题库页第一次打开时才去取数据：一万六千道题，没必要开机就查一遍
   if (button.dataset.view === 'panel-problems' && !bankState.loaded) loadProblems();
   if (button.dataset.view === 'panel-contests' && !contestState.loaded) loadContests();
+  // 拼好题第一次进来就先拼一套，不用先点按钮
+  if (button.dataset.view === 'panel-mashup' && !mashupData) rollMashup();
 });
 
 window.addEventListener('hashchange', () => {

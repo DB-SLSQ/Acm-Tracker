@@ -1033,9 +1033,8 @@ function collectContests(url) {
   if (handleKey) solved = deriveProgress(db.getSubmissions(handleKey)).solved;
 
   const cfInfo = new Map(db.getContests().map((contest) => [contest.id, contest]));
-  const atcoderTimes = new Map(
-    db.listAtcoderContestDates().map((row) => [row.contestId, row.startTime]),
-  );
+  // 这个函数返回的就是 [contestId, startTime] 数组对，直接塞进 Map
+  const atcoderTimes = new Map(db.listAtcoderContestDates());
 
   const groups = new Map();
   for (const problem of allProblems()) {
@@ -1090,6 +1089,80 @@ function collectContests(url) {
     });
   }
   return { rows, solved };
+}
+
+/**
+ * 拼好题：一场没打过的 CF + 一场没打过的 AtCoder，凑成一套。
+ *
+ * 为什么要拼：单打一场 CF Div.2 才 6 题、一场 ABC 七八题，都不够一场区域赛的量；
+ * 两场拼起来十几题，两边的难度分布也不同，练起来有起伏。
+ *
+ * 「没打过」按有没有提交记录判断——只看通过会把「打过但零通过」的场次算成没打过。
+ * 只从最近 N 个月里挑：太久远的题难度标定和现在不一样，练了意义不大；
+ * 但每次都取最新那一场又会一直重复，所以在最近的 60 场候选里随机取一场。
+ */
+function buildMashup(url) {
+  const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
+  const { rows } = collectContests(url);
+  const submissions = handleKey ? db.getSubmissions(handleKey) : [];
+  const played = new Set(submissions.map((row) => row.contestId));
+
+  const months = Math.min(36, Math.max(3, Number(url.searchParams.get('months') || 18)));
+  const now = Math.floor(Date.now() / 1000);
+  const since = now - months * 30 * 86400;
+  const wantCf = url.searchParams.get('cf') || 'any';
+  const wantAt = url.searchParams.get('at') || 'any';
+
+  const candidates = (kind) =>
+    rows
+      .filter((contest) => contest.startTime >= since && contest.startTime <= now)
+      .filter((contest) => !played.has(contest.contestId))
+      .filter((contest) => contest.problems.length >= 4)
+      .filter((contest) => (kind === 'any' ? true : contest.kind === kind))
+      .sort((a, b) => b.startTime - a.startTime);
+
+  const roll = (kind) => {
+    const pool = candidates(kind);
+    if (!pool.length) return { contest: null, size: 0 };
+    // 最近的 60 场里随机：既保证够近，又不会每次都同一套
+    const recent = pool.slice(0, 60);
+    return { contest: recent[Math.floor(Math.random() * recent.length)], size: pool.length };
+  };
+
+  // 指定的类别最近正好没有没打过的场次时，退回「随便哪一类」，并在界面上说一声，
+  // 免得用户选了半天只得到一句「没有符合条件的比赛」
+  const rollWithFallback = (kind) => {
+    const direct = roll(kind);
+    if (direct.contest || kind === 'any') return { ...direct, fellBack: false };
+    const fallback = roll('any');
+    return { ...fallback, fellBack: Boolean(fallback.contest) };
+  };
+
+  // CF 先挑，AtCoder 再挑；两边互相不认识，拼在一起才有难度起伏
+  const cfRoll = wantCf === 'none' ? { contest: null, size: 0 } : rollWithFallback(wantCf);
+  const atRoll = wantAt === 'none' ? { contest: null, size: 0 } : rollWithFallback(wantAt);
+
+  const problems = [];
+  for (const contest of [cfRoll.contest, atRoll.contest]) {
+    if (!contest) continue;
+    for (const problem of contest.problems) {
+      problems.push({ ...problem, contestName: contest.name, platform: contest.platform });
+    }
+  }
+  // 按难度排：这套题要按由易到难做，没难度的排最后
+  problems.sort((a, b) => (a.rating ?? 99999) - (b.rating ?? 99999));
+  const rated = problems.filter((problem) => problem.rating != null);
+
+  return {
+    cf: cfRoll.contest,
+    atcoder: atRoll.contest,
+    problems,
+    total: problems.length,
+    months,
+    pool: { cf: cfRoll.size, atcoder: atRoll.size },
+    fellBack: { cf: Boolean(cfRoll.fellBack), atcoder: Boolean(atRoll.fellBack) },
+    ratingRange: rated.length ? [rated[0].rating, rated[rated.length - 1].rating] : null,
+  };
 }
 
 /** 分类按钮上要显示的数量。 */
@@ -2037,6 +2110,15 @@ async function route(req, res, url) {
     if (!list.length) return sendError(res, 404, '没有符合条件的比赛了，换个类别试试');
     const pick = list[Math.floor(Math.random() * list.length)];
     return sendJson(res, 200, { matched: list.length, contest: pick });
+  }
+
+  // 拼好题：一场没打过的 CF + 一场没打过的 AtCoder，凑成一套
+  if (pathname === '/api/mashup' && req.method === 'GET') {
+    const result = buildMashup(url);
+    if (!result.cf && !result.atcoder) {
+      return sendError(res, 404, '这段时间里没有你没打过的比赛了，把时间范围放宽一点');
+    }
+    return sendJson(res, 200, result);
   }
 
   if (pathname === '/api/blocked' && req.method === 'POST') {
