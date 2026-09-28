@@ -453,6 +453,8 @@ async function loadUser(force = false) {
     loadActivity();
     loadBlocked();
     loadSolved();
+    // 题库页开着的话，换账号后刷新一下「做过没」的标记
+    if (bankState.loaded) loadProblems({ keepPage: true });
     return true;
   } catch (error) {
     setStatus('抓取失败');
@@ -1373,6 +1375,143 @@ async function loadSolved({ append = false } = {}) {
 }
 
 $('solved-more').addEventListener('click', () => loadSolved({ append: true }));
+
+// ---------- 题库：筛选 + 分页 + 随机挑一道 ----------
+// 数据全在本地题库里（CF / AtCoder / 抓过的洛谷题），所以这一页不联网也能翻。
+// 做成服务端筛选：一万六千道题在浏览器里全量渲染没意义，按条件取一页更省事。
+const bankState = {
+  page: 1,
+  perPage: 50,
+  total: 0,
+  loaded: false,
+  items: [],
+};
+
+/** 标签下拉：用和题单同一套中文名（TAG_ZH），排好序再填进去。 */
+function fillBankTags() {
+  const select = $('problems-tag');
+  if (!select || select.options.length) return;
+  const options = Object.entries(TAG_ZH)
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
+  select.innerHTML =
+    '<option value="">全部标签</option>' +
+    options
+      .map((item) => `<option value="${item.value}">${escapeHtml(item.label)}</option>`)
+      .join('');
+}
+
+/** 把界面上的筛选条件拼成查询串。 */
+function bankQuery(extra = {}) {
+  const params = new URLSearchParams();
+  if (state.handle) params.set('handle', state.handle);
+  const q = $('problems-q')?.value.trim();
+  if (q) params.set('q', q);
+  const from = Number($('problems-from')?.value);
+  const to = Number($('problems-to')?.value);
+  if (from) params.set('from', String(from));
+  if (to) params.set('to', String(to));
+  const tag = $('problems-tag')?.value;
+  if (tag) params.set('tags', tag);
+  const platform = $('problems-platform')?.value ?? 'all';
+  if (platform !== 'all') params.set('platform', platform);
+  if ($('problems-todo')?.checked) params.set('todo', '1');
+  params.set('sort', $('problems-sort')?.value ?? 'rating');
+  for (const [key, value] of Object.entries(extra)) params.set(key, String(value));
+  return params.toString();
+}
+
+async function loadProblems({ keepPage = false } = {}) {
+  fillBankTags();
+  if (!keepPage) bankState.page = 1;
+  try {
+    const data = await getJson(`/api/problems?${bankQuery({ page: bankState.page, perPage: bankState.perPage })}`);
+    bankState.items = data.items ?? [];
+    bankState.total = data.total ?? 0;
+    bankState.loaded = true;
+    renderProblems();
+    markViewReady('panel-problems');
+  } catch (error) {
+    $('problems-summary').textContent = `题库读取失败：${error.message}`;
+  }
+}
+
+function renderProblems() {
+  const items = bankState.items;
+  const pages = Math.max(1, Math.ceil(bankState.total / bankState.perPage));
+  $('problems-summary').textContent = bankState.total
+    ? `一共 ${bankState.total} 道符合条件的题，第 ${bankState.page} / ${pages} 页。点题名去原站做题。`
+    : '没有符合条件的题，把条件放宽一点试试。';
+  $('problems-page').textContent = `${bankState.page} / ${pages}`;
+  $('problems-prev').disabled = bankState.page <= 1;
+  $('problems-next').disabled = bankState.page >= pages;
+
+  $('problems-list').innerHTML = items
+    .map(
+      (item) => `<div class="bank-row${item.solved ? ' done' : ''}">
+        <span class="record-code">${escapeHtml(item.code)}</span>
+        <span class="bank-name">
+          <a href="${item.url}" target="_blank" rel="noreferrer">${escapeHtml(item.name)}</a>${platformBadge(item)}
+        </span>
+        <span>${ratingBadge(item.rating)}</span>
+        <span class="problem-tags">${tagSpans(item.tags, 2)}</span>
+        <span class="bank-state">${
+          item.solved ? '已通过' : item.attempts ? `试过 ${item.attempts} 次` : `${item.solvedCount ?? 0} 人过`
+        }</span>
+      </div>`,
+    )
+    .join('');
+}
+
+/** 随机一道：同一套筛选条件，在服务端随机取，命中多少一并告诉用户。 */
+async function pickRandomProblem() {
+  const button = $('problems-random');
+  button.disabled = true;
+  try {
+    const data = await getJson(`/api/problems/random?${bankQuery()}`);
+    const problem = data.problem;
+    $('problems-random-card').innerHTML = `
+      <div class="running-card">
+        <div class="today-row">
+          <span class="record-code">${escapeHtml(problem.code)}</span>
+          <span class="bank-name">
+            <a href="${problem.url}" target="_blank" rel="noreferrer">${escapeHtml(problem.name)}</a>
+            ${platformBadge(problem)}
+          </span>
+          <span>${ratingBadge(problem.rating)}</span>
+          <span class="problem-tags">${tagSpans(problem.tags, 3)}</span>
+        </div>
+        <p class="subtle" style="margin:8px 0 0">
+          在 ${data.matched} 道符合条件的题里随机挑的${problem.solved ? '（这题你做过）' : ''}。
+        </p>
+      </div>`;
+  } catch (error) {
+    $('problems-random-card').innerHTML = `<p class="subtle">${escapeHtml(error.message)}</p>`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+for (const id of ['problems-tag', 'problems-platform', 'problems-sort', 'problems-todo']) {
+  $(id)?.addEventListener('change', () => loadProblems());
+}
+for (const id of ['problems-q', 'problems-from', 'problems-to']) {
+  $(id)?.addEventListener('change', () => loadProblems());
+}
+$('problems-q')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') loadProblems();
+});
+$('problems-random')?.addEventListener('click', pickRandomProblem);
+$('problems-prev')?.addEventListener('click', () => {
+  if (bankState.page > 1) {
+    bankState.page -= 1;
+    loadProblems({ keepPage: true });
+  }
+});
+$('problems-next')?.addEventListener('click', () => {
+  bankState.page += 1;
+  loadProblems({ keepPage: true });
+});
 
 async function blockProblem(problem) {
   if (!state.handle) return;
@@ -2536,6 +2675,7 @@ const NAV_ITEMS = [
   { id: 'panel-plan', label: '训练计划', icon: '📋' },
   { id: 'panel-schedule', label: '训练日程', icon: '🗓' },
   { id: 'panel-review', label: '补题队列', icon: '🧾' },
+  { id: 'panel-problems', label: '题库', icon: '📚' },
   { id: 'panel-tags', label: '能力画像', icon: '🧭', group: '数据' },
   { id: 'panel-growth', label: '成长', icon: '🌱' },
   { id: 'panel-records', label: '做题记录', icon: '📝' },
@@ -2543,6 +2683,7 @@ const NAV_ITEMS = [
   { id: 'panel-calendar', label: '比赛日历', icon: '🏁', group: '其他' },
   { id: 'panel-virtual', label: '虚拟参赛', icon: '⏱' },
   { id: 'panel-platforms', label: '平台数据', icon: '🔔' },
+  { id: 'panel-help', label: '帮助', icon: '💡' },
   { id: 'panel-settings', label: '设置', icon: '⚙️' },
 ];
 
@@ -2592,7 +2733,10 @@ function markViewReady(id) {
 
 $('side-nav').addEventListener('click', (event) => {
   const button = event.target.closest('[data-view]');
-  if (button) showView(button.dataset.view);
+  if (!button) return;
+  showView(button.dataset.view);
+  // 题库页第一次打开时才去取数据：一万六千道题，没必要开机就查一遍
+  if (button.dataset.view === 'panel-problems' && !bankState.loaded) loadProblems();
 });
 
 window.addEventListener('hashchange', () => {

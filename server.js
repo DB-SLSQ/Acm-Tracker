@@ -30,6 +30,7 @@ import {
   AtcoderError,
   fetchCatalog as fetchAtcoderCatalog,
   fetchSubmissions as fetchAtcoderSubmissions,
+  fetchUserInfo as fetchAtcoderUserInfo,
   normalizeUser as normalizeAtcoderUser,
   toVerdict as toAtcoderVerdict,
 } from './lib/atcoder.js';
@@ -968,6 +969,68 @@ function buildReviewQueue(handleKey, sort) {
 }
 
 /**
+ * 题库浏览的筛选：把 URL 上的条件翻译成一批题。
+ *
+ * 题量一万六千出头，全在内存里（allProblems 有缓存），一次筛选几毫秒，够用。
+ * 「做没做过」用 deriveProgress 算一遍——这个页面要看的就是「这题我做过没」。
+ */
+function filterProblemBank(url) {
+  const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
+  let solved = new Map();
+  let attempted = new Map();
+  if (handleKey) {
+    const progress = deriveProgress(db.getSubmissions(handleKey));
+    solved = progress.solved;
+    attempted = progress.attempted;
+  }
+
+  const q = (url.searchParams.get('q') ?? '').trim().toLowerCase();
+  const from = Number(url.searchParams.get('from') || 0);
+  const to = Number(url.searchParams.get('to') || 0);
+  const tags = (url.searchParams.get('tags') ?? '')
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  const platform = url.searchParams.get('platform') ?? 'all';
+  const onlyTodo = url.searchParams.get('todo') === '1';
+
+  let rows = allProblems().filter((problem) => problem.type === 'PROGRAMMING');
+  if (platform !== 'all') {
+    rows = rows.filter((problem) => (problem.platform ?? 'codeforces') === platform);
+  }
+  // 不填难度区间就不筛。填了才按区间来（没难度的题会被排除，它们没法判断难易）
+  if (from) rows = rows.filter((problem) => (problem.rating ?? -1) >= from);
+  if (to) rows = rows.filter((problem) => (problem.rating ?? -1) <= to);
+  if (tags.length) {
+    rows = rows.filter((problem) => (problem.tags ?? []).some((tag) => tags.includes(tag)));
+  }
+  if (onlyTodo) {
+    rows = rows.filter((problem) => !solved.has(`${problem.contestId}-${problem.index}`));
+  }
+  if (q) {
+    rows = rows.filter(
+      (problem) =>
+        problemCode(problem).toLowerCase().includes(q) || problem.name.toLowerCase().includes(q),
+    );
+  }
+  return { rows, solved, attempted };
+}
+
+/** 题库列表的排序。按难度排时把没难度的题丢最后，否则它们会跟最简单的题挤在一起。 */
+function sortProblemRows(rows, sort) {
+  if (sort === 'rating-desc') {
+    rows.sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1));
+  } else if (sort === 'solved') {
+    rows.sort((a, b) => (b.solvedCount ?? 0) - (a.solvedCount ?? 0));
+  } else if (sort === 'newest') {
+    rows.sort((a, b) => b.contestId - a.contestId || a.index.localeCompare(b.index));
+  } else {
+    rows.sort((a, b) => (a.rating ?? 99999) - (b.rating ?? 99999) || a.contestId - b.contestId);
+  }
+  return rows;
+}
+
+/**
  * 把用户手动换过的题，按记录换回去。
  *
  * 换进来的那道题如果已经不满足条件（被屏蔽、被别的槽位占了、题库里没有了），
@@ -1265,6 +1328,13 @@ async function fetchLuoguContests() {
 }
 
 /** AtCoder 赛程：没有接口，抓 /contests/ 里 upcoming 那张表。 */
+/**
+ * AtCoder 赛程：抓 atcoder.jp/contests/ 里 upcoming 那张表。
+ *
+ * 试过改用 Kenkoooo 的 contests.json（和题目、提交记录同一个来源），不行：那份文件是它自己的
+ * 批处理生成的，实测 2026-09-28 最新一条停在 9/27，**未来一场都没有**，拿它当赛程会直接把日历搞空。
+ * 官方这张表反而更全，而且带「Rated Range」列，正好用来实现「只列计分场次」。
+ */
 async function fetchAtCoderContests() {
   const response = await fetch('https://atcoder.jp/contests/', {
     headers: { 'User-Agent': CALENDAR_UA },
@@ -1275,25 +1345,50 @@ async function fetchAtCoderContests() {
   const table = html.split('id="contest-table-upcoming"')[1] ?? '';
   const result = [];
   for (const row of table.split('<tr>').slice(1)) {
+    const link = row.match(/href="\/contests\/([A-Za-z0-9_+-]+)"[^>]*>([^<]+)</);
     const start = row.match(/<time[^>]*>([^<]+)<\/time>/);
-    const link = row.match(/href="\/contests\/([A-Za-z0-9_-]+)"[^>]*>([^<]+)</);
-    if (!start || !link) continue;
-    const minutes = row.match(/<td class="text-center">(\d+)<\/td>/);
-    // AtCoder 给的是日本时间，形如 2026-09-27 21:00:00+0900
+    if (!link || !start) continue;
+    // 官方给的是日本时间，形如 2026-10-03 21:00:00+0900
     const parsed = new Date(
       start[1].trim().replace(' ', 'T').replace(/([+-]\d{2})(\d{2})$/, '$1:$2'),
     );
     if (Number.isNaN(parsed.getTime())) continue;
+
+    // text-center 的格子有两个：时长（01:40）和 Rated Range（" - 1999" / "1200 - 2799" / "-"）
+    const centers = [...row.matchAll(/<td class="text-center">([^<]*)<\/td>/g)].map((m) =>
+      m[1].trim(),
+    );
+    const durationText = centers.find((text) => /^\d{1,2}:\d{2}$/.test(text));
+    const ratedText = centers[centers.length - 1] ?? '';
+    // 这一列有三种取值：区间（" - 1999" / "1200 - 2799"）、全员计分（All）、
+    // 以及不评分的一个「-」（PAST、AWC、AAL 这类练习赛）。只跳过最后一种。
+    const allRated = /^all$/i.test(ratedText);
+    if (!allRated && !/\d/.test(ratedText)) continue;
+
     result.push({
       id: `atcoder-${link[1]}`,
       name: link[2].trim(),
       startTime: Math.floor(parsed.getTime() / 1000),
-      durationSeconds: (Number(minutes?.[1] ?? 100) || 100) * 60,
+      durationSeconds: durationText
+        ? (Number(durationText.slice(0, -3)) * 60 + Number(durationText.slice(-2))) * 60
+        : 100 * 60,
       url: `https://atcoder.jp/contests/${link[1]}`,
       source: 'atcoder',
+      // 「计分区间」文案：上界写成 ~1999，两端都有就写 1200~2799，全员计分单独说
+      ratedLabel: allRated ? '全员计分' : `计分区间 ${formatRatedRange(ratedText)}`,
     });
   }
   return result;
+}
+
+/** 把 AtCoder 的 Rated Range 格子（"- 1999" / "1200 - 2799" / "2400 -"）收拾成好读的样子。 */
+function formatRatedRange(text) {
+  const [low, high] = String(text)
+    .split('-')
+    .map((part) => part.trim());
+  if (!low && high) return `~${high}`;
+  if (low && !high) return `${low}~`;
+  return `${low}~${high}`;
 }
 
 async function handleCalendar(url) {
@@ -1350,7 +1445,11 @@ async function handleCalendar(url) {
     .map((contest) => ({
       id: contest.id,
       name: contest.name,
-      division: contest.source === 'luogu' ? '洛谷' : 'AtCoder',
+      // AtCoder 顺带把「这场对哪个分段计分」带出来，挑场次时有用
+      division:
+        contest.source === 'luogu'
+          ? '洛谷'
+          : contest.ratedLabel ?? 'AtCoder',
       source: contest.source,
       startTime: contest.startTime,
       durationSeconds: contest.durationSeconds,
@@ -1785,6 +1884,40 @@ async function route(req, res, url) {
     });
   }
 
+  // 题库浏览：筛选 + 分页 + 随机挑一道（照着 cftracker 那套做的，但数据是本地题库，
+  // 所以 CF / AtCoder / 洛谷三个平台能一起筛，不用联网）
+  if (pathname === '/api/problems' && req.method === 'GET') {
+    const { rows, solved, attempted } = filterProblemBank(url);
+    const sort = url.searchParams.get('sort') ?? 'rating';
+    const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+    const perPage = Math.min(100, Math.max(10, Number(url.searchParams.get('perPage') || 50)));
+    sortProblemRows(rows, sort);
+    const total = rows.length;
+    const items = rows.slice((page - 1) * perPage, page * perPage).map((problem) => {
+      const key = `${problem.contestId}-${problem.index}`;
+      return {
+        ...toClientProblem(problem),
+        solved: solved.has(key),
+        attempts: attempted.get(key) ?? 0,
+      };
+    });
+    return sendJson(res, 200, { total, page, perPage, sort, items });
+  }
+
+  // 随机一道：拿同一套筛选条件，在筛完的结果里随机挑
+  if (pathname === '/api/problems/random' && req.method === 'GET') {
+    const { rows, solved } = filterProblemBank(url);
+    if (!rows.length) return sendError(res, 404, '这组条件下没有题，放宽一点再试');
+    const pick = rows[Math.floor(Math.random() * rows.length)];
+    return sendJson(res, 200, {
+      matched: rows.length,
+      problem: {
+        ...toClientProblem(pick),
+        solved: solved.has(`${pick.contestId}-${pick.index}`),
+      },
+    });
+  }
+
   if (pathname === '/api/blocked' && req.method === 'POST') {
     try {
       const body = await readJsonBody(req);
@@ -1889,10 +2022,21 @@ async function route(req, res, url) {
       const handleKey = db.normalizeHandle(rawHandle);
 
       const submissions = await syncAtcoderSubmissions(handleKey, account, { force: true });
+      // Kenkoooo 的用户总览：排名这种要全站数据才算得出来，顺手抓一次
+      let overview = null;
+      try {
+        overview = await fetchAtcoderUserInfo(account);
+      } catch {
+        // 拿不到就不显示这几项，同步本身不受影响
+      }
       const stats = {
         通过题目: submissions.total,
         提交记录: db.getSubmissions(handleKey).filter((row) => row.platform === 'atcoder').length,
       };
+      if (overview) {
+        stats['AtCoder 通过排名'] = overview.acceptedRank;
+        stats['计分总分'] = overview.ratedPointSum;
+      }
       db.savePlatformStats({
         platform: 'atcoder',
         account,

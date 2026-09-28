@@ -217,6 +217,47 @@
         <div class="record-list" id="review-list"></div>
       </section>
 
+      <section class="panel hidden" id="panel-problems">
+        <div class="panel-head">
+          <h2>题库</h2>
+          <p id="problems-summary">
+            从本地题库里翻题：Codeforces、AtCoder 和抓过的洛谷题都在里面，不用联网。
+          </p>
+        </div>
+
+        <div class="bank-filters">
+          <input id="problems-q" type="text" placeholder="搜题号或题名，例如 1555D / Segment" autocomplete="off" />
+          <input id="problems-from" type="number" min="800" max="4000" step="100" placeholder="最低分" />
+          <input id="problems-to" type="number" min="800" max="4000" step="100" placeholder="最高分" />
+          <select id="problems-tag"></select>
+          <select id="problems-platform">
+            <option value="all">全部来源</option>
+            <option value="codeforces">Codeforces</option>
+            <option value="atcoder">AtCoder</option>
+            <option value="luogu">洛谷</option>
+          </select>
+          <select id="problems-sort">
+            <option value="rating">难度从低到高</option>
+            <option value="rating-desc">难度从高到低</option>
+            <option value="solved">通过人数从多到少</option>
+            <option value="newest">最新的比赛在前</option>
+          </select>
+          <label class="tag-hide-toggle" title="只列你还没通过的题">
+            <input type="checkbox" id="problems-todo" />
+            <span>只看没做过的</span>
+          </label>
+          <button class="btn primary" id="problems-random">随机来一道</button>
+        </div>
+
+        <div id="problems-random-card"></div>
+        <div class="record-list" id="problems-list"></div>
+        <div class="reco-actions bank-pager">
+          <button class="btn" id="problems-prev">上一页</button>
+          <span class="subtle" id="problems-page"></span>
+          <button class="btn" id="problems-next">下一页</button>
+        </div>
+      </section>
+
       <section class="panel hidden" id="panel-growth">
         <div class="panel-head">
           <h2>成长</h2>
@@ -282,6 +323,137 @@
           <p>相对你的目标区间，最拖后腿的专题排在最前。标「未接触」的是你没做过的盲区。</p>
         </div>
         <div class="tag-list" id="tag-list"></div>
+      </section>
+
+      <section class="panel hidden" id="panel-help">
+        <div class="panel-head">
+          <h2>帮助</h2>
+          <p>用这个工具时最常撞到的几件事，都写在这里。点标题展开。</p>
+        </div>
+
+        <h3 class="settings-title">数据与隐私</h3>
+
+        <details class="qa">
+          <summary>我的数据存在哪？会不会传到网上？</summary>
+          <p>
+            全部存在本机：装好的程序在 <code>%APPDATA%\acm-trainer\data\trainer.db</code>，
+            网页版在项目的 <code>data\trainer.db</code>。不需要登录 Codeforces，也不要密码，
+            抓的都是公开数据。除了抓题库和赛程本身发出的请求，程序不往任何服务器发东西。
+          </p>
+        </details>
+
+        <details class="qa">
+          <summary>换电脑、重装系统怎么带走进度？</summary>
+          <p>
+            设置 → 数据安全：<b>备份数据库</b>存一份完整的库；<b>导出训练数据</b>把设置、勾选进度、
+            屏蔽表、虚拟赛记录、做题手感打成 JSON，换电脑导入即可。覆盖安装不会丢数据，卸载也不会删。
+          </p>
+        </details>
+
+        <h3 class="settings-title">抓不到数据</h3>
+
+        <details class="qa">
+          <summary>Codeforces 一直转圈或者报超时</summary>
+          <p>
+            国内直连 codeforces.com 经常超时，程序等 15 秒就会放弃并报错。挂上代理再点一次「重新加载」。
+            已经抓到的题库、提交记录、rating 曲线不会因为这次失败而丢，页面照常显示上次的数据。
+          </p>
+        </details>
+
+        <details class="qa">
+          <summary>洛谷题库抓不动，提示 fetch failed</summary>
+          <p>
+            洛谷的题目列表、比赛列表、练习页都有一道「cookie 挑战」：不带它当场下发的通行证就一直重定向，
+            Node 的请求只会报一句 <code>fetch failed</code>，看着像断网。程序已经自动处理（接下 set-cookie
+            再请求一次），你不用做任何事。如果还是失败，多半是被对方风控拦了，等十几分钟再试。
+          </p>
+          <p>
+            顺便说明：抓取不带你的账号身份（不登录、不用你的 cookie），单线程、请求间隔 1.2 秒，
+            一次最多 60 个请求，只按难度档抽页、不爬全库。
+          </p>
+        </details>
+
+        <details class="qa">
+          <summary>AtCoder 的数据从哪来？要登录 AtCoder 吗？</summary>
+          <p>
+            题目、难度、提交记录都来自 Kenkoooo 的 AtCoder Problems 公开接口；赛程来自它的
+            <code>contests.json</code>。全程不需要登录 AtCoder，也不会往对面提交任何东西。
+          </p>
+        </details>
+
+        <h3 class="settings-title">按钮点了没反应</h3>
+
+        <details class="qa">
+          <summary>点「秒了 / 刚好 / 卡住 / 看题解」弹「接口不存在」</summary>
+          <p>
+            这是 0.1.7 的毛病（撤掉背景图功能时误删了两个接口），0.1.8 已经修好，升级到最新版即可。
+            那段时间标不了手感，但之前标过的记录都还在。
+          </p>
+        </details>
+
+        <details class="qa">
+          <summary>补题队列里全是我做过的题</summary>
+          <p>
+            0.1.9 之前的 bug：一道题先失败、后来通过了，它只被记进「已通过」，没从「没过的题」里摘掉，
+            于是永远赖在队列里。升级后队列只剩真的没做出来的题。
+          </p>
+        </details>
+
+        <h3 class="settings-title">计划是怎么排的</h3>
+
+        <details class="qa">
+          <summary>训练计划会自己变吗？做过的题会被换掉吗？</summary>
+          <p>
+            不会。计划在你点「生成训练计划」的那一刻就钉住了：做过的题留在原位显示成已完成，
+            只有你改目标分、改每周题量、屏蔽某道题，或者自己点「重新生成」，才会重挑一遍。
+          </p>
+        </details>
+
+        <details class="qa">
+          <summary>「落后几天」是怎么算的？为什么今天这张卡不显示落后？</summary>
+          <p>
+            日程从「计划定下来的那天」开始排，落后天数只统计<b>今天之前</b>该做完的题。把今天算进去的话，
+            每天早上起来都会凭空落后一整天，那个数字就没意义了。
+          </p>
+        </details>
+
+        <details class="qa">
+          <summary>每天那四档难度是什么意思？</summary>
+          <p>
+            练手 / 进阶 / 提升 / 学习，四档间距 200 分，围着这一阶段的中心浮动（第一阶段中心＝你的水平
+            和目标的中值）。一天几题就顺着发：四题就每档一道，两题则轮着来，长期各档一样多。
+          </p>
+        </details>
+
+        <details class="qa">
+          <summary>题单里为什么看不到算法标签？</summary>
+          <p>
+            设置里开了「隐藏题目里的算法标签」。关了就能看见，还会给出「重点补强」是哪个方向。
+          </p>
+        </details>
+
+        <details class="qa">
+          <summary>推题模型训练完为什么说「没赢过基线」？</summary>
+          <p>
+            训练会按时间切出一段留出集，和「只看难度差」的老办法比。AUC 要不低于 0.75
+            并且明显优于基线才会启用，赢不了就继续用内置规则——这是故意的，宁可不用也不瞎猜。
+          </p>
+        </details>
+
+        <details class="qa">
+          <summary>怎么知道有没有新版本？</summary>
+          <p>
+            设置 → 数据安全 → 「检查更新」，它会去问 GitHub 上的最新版本号；页脚也一直写着当前版本。
+            下载链接永远指向最新版：github.com/DB-SLSQ/Acm-Tracker/releases/latest
+          </p>
+        </details>
+
+        <details class="qa">
+          <summary>还有别的问题 / 想加功能</summary>
+          <p>
+            交流群 <b>1124017564</b>（QQ，页脚也能点开二维码）。项目开源，问题、想法都可以在群里说。
+          </p>
+        </details>
       </section>
 
       <section class="panel" id="panel-settings">
