@@ -214,9 +214,10 @@ async function getJson(url) {
   return payload;
 }
 
-async function postJson(url, body) {
+// method 默认 POST；题单的「移除/删除」走 DELETE，其它调用不用改
+async function postJson(url, body, method = 'POST') {
   const response = await fetch(url, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -1401,6 +1402,196 @@ async function loadSolved({ append = false } = {}) {
 
 $('solved-more').addEventListener('click', () => loadSolved({ append: true }));
 
+// ---------- 我的题单：把攒下来的题单存在本地，逐题勾进度 ----------
+// 「拼好题」一键存进来，或者从别处复制一段文本贴进来（解析在服务端，认三家的题号）。
+const listState = { all: [], currentId: null, items: [], editing: null };
+
+async function loadLists({ keepCurrent = true } = {}) {
+  try {
+    const data = await getJson('/api/lists');
+    listState.all = data.lists ?? [];
+    if (!listState.all.length) {
+      listState.currentId = null;
+      listState.items = [];
+      renderLists();
+      markViewReady('panel-lists');
+      return;
+    }
+    if (!keepCurrent || !listState.all.some((list) => list.id === listState.currentId)) {
+      listState.currentId = listState.all[0].id;
+    }
+    await loadListItems(listState.currentId);
+  } catch (error) {
+    $('lists-summary').textContent = `题单读取失败：${error.message}`;
+  }
+}
+
+async function loadListItems(id) {
+  const data = await getJson(`/api/lists/${id}`);
+  listState.currentId = id;
+  listState.items = data.items ?? [];
+  renderLists();
+  markViewReady('panel-lists');
+}
+
+function renderLists() {
+  const select = $('lists-select');
+  if (!listState.all.length) {
+    select.innerHTML = '<option value="">（还没有题单）</option>';
+    $('lists-items').innerHTML =
+      '<p class="subtle">还没有题单。点「新建题单」把复制来的题单贴进去，或者到「拼好题」里拼一套再点「存成题单」。</p>';
+    $('lists-summary').textContent = '把「拼好题」拼出来的一套存进来，或者从别处复制的题单直接贴进来。';
+    $('lists-copy-todo').disabled = true;
+    $('lists-delete').disabled = true;
+    $('lists-append').disabled = true;
+    return;
+  }
+  $('lists-copy-todo').disabled = false;
+  $('lists-delete').disabled = false;
+  $('lists-append').disabled = false;
+  select.innerHTML = listState.all
+    .map(
+      (list) =>
+        `<option value="${list.id}"${list.id === listState.currentId ? ' selected' : ''}>${escapeHtml(list.name)}　${list.done}/${list.total}</option>`,
+    )
+    .join('');
+
+  const current = listState.all.find((list) => list.id === listState.currentId);
+  const left = current ? current.total - current.done : 0;
+  $('lists-summary').textContent = current
+    ? `${current.name}：共 ${current.total} 道，做完 ${current.done} 道${left ? `，还剩 ${left} 道` : '，已经全做完了'}。`
+    : '';
+
+  $('lists-items').innerHTML = listState.items
+    .map(
+      (item) => `<div class="bank-row${item.done ? ' done' : ''}">
+        <input type="checkbox" ${item.done ? 'checked' : ''}
+               data-list-contest="${item.contestId}" data-list-index="${item.index}" />
+        <span class="record-code">${escapeHtml(item.code)}</span>
+        <span class="bank-name"><a href="${item.url}" target="_blank" rel="noreferrer">${escapeHtml(item.name)}</a>${platformBadge(item)}</span>
+        <span>${ratingBadge(item.rating)}</span>
+        <button type="button" class="btn" data-list-remove="${item.contestId}-${item.index}"
+                style="padding:3px 9px;font-size:12px">移除</button>
+      </div>`,
+    )
+    .join('');
+}
+
+function openListEditor(mode) {
+  // mode: 'new' 新建题单，'append' 往当前题单里追加
+  listState.editing = listState.all.length ? mode : 'new';
+  $('lists-editor').classList.remove('hidden');
+  $('lists-name').classList.toggle('hidden', listState.editing === 'append');
+  $('lists-name').value = '';
+  $('lists-text').value = '';
+  $('lists-text').focus();
+}
+
+async function saveListEditor() {
+  const text = $('lists-text').value.trim();
+  if (!text) {
+    $('lists-hint').textContent = '先贴点东西进来。';
+    return;
+  }
+  try {
+    if (listState.editing === 'append' && listState.currentId) {
+      const result = await postJson(`/api/lists/${listState.currentId}/items`, { text });
+      $('lists-hint').textContent = result.added
+        ? `追加了 ${result.added} 道${result.unmatched.length ? `；没对上：${result.unmatched.join('、')}` : ''}`
+        : `这些题已经在题单里了${result.unmatched.length ? `；没对上：${result.unmatched.join('、')}` : ''}`;
+      await loadListItems(listState.currentId);
+      listState.all = (await getJson('/api/lists')).lists ?? listState.all;
+    } else {
+      const result = await postJson('/api/lists', { name: $('lists-name').value.trim(), text });
+      $('lists-hint').textContent = `存好了：${result.matched} 道题${result.unmatched.length ? `；没对上：${result.unmatched.join('、')}` : ''}`;
+      listState.all = result.lists ?? listState.all;
+      $('lists-editor').classList.add('hidden');
+      await loadListItems(result.id);
+      toast(`已存成题单（${result.matched} 道）`);
+    }
+  } catch (error) {
+    $('lists-hint').textContent = error.message;
+  }
+}
+
+async function toggleListItem(contestId, index, done) {
+  try {
+    await postJson(`/api/lists/${listState.currentId}/item`, { contestId, index, done });
+    await loadListItems(listState.currentId);
+    listState.all = (await getJson('/api/lists')).lists ?? listState.all;
+    renderLists();
+  } catch (error) {
+    toast(`记录失败：${error.message}`, { error: true });
+  }
+}
+
+async function removeListItem(contestId, index) {
+  try {
+    await postJson(`/api/lists/${listState.currentId}/item`, { contestId, index }, 'DELETE');
+    await loadListItems(listState.currentId);
+    listState.all = (await getJson('/api/lists')).lists ?? listState.all;
+    renderLists();
+  } catch (error) {
+    toast(`移除失败：${error.message}`, { error: true });
+  }
+}
+
+/** 把没做完的题目复制成 Markdown，接着贴到别处或者发给队友。 */
+async function copyPendingListItems() {
+  const pending = listState.items.filter((item) => !item.done);
+  if (!pending.length) {
+    toast('这个题单已经全做完了。');
+    return;
+  }
+  const text = [
+    `## ${listState.all.find((list) => list.id === listState.currentId)?.name ?? '题单'} · 还剩 ${pending.length} 题`,
+    ...pending.map(
+      (item, i) =>
+        `${i + 1}. ${item.code} ${item.name}${item.rating ? ` · ${item.rating}` : ''} — ${item.url}`,
+    ),
+  ].join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`已复制没做完的 ${pending.length} 道题。`);
+  } catch {
+    toast('浏览器不让复制，手动选一下吧。', { error: true });
+  }
+}
+
+$('lists-select')?.addEventListener('change', (event) => {
+  if (event.target.value) loadListItems(Number(event.target.value));
+});
+$('lists-new')?.addEventListener('click', () => openListEditor('new'));
+$('lists-append')?.addEventListener('click', () => openListEditor('append'));
+$('lists-cancel')?.addEventListener('click', () => $('lists-editor').classList.add('hidden'));
+$('lists-save')?.addEventListener('click', saveListEditor);
+$('lists-copy-todo')?.addEventListener('click', copyPendingListItems);
+$('lists-delete')?.addEventListener('click', async () => {
+  if (!listState.currentId) return;
+  const name = listState.all.find((list) => list.id === listState.currentId)?.name ?? '这个题单';
+  if (!window.confirm(`删除「${name}」？里面的题目会一起删掉，题库和训练计划不受影响。`)) return;
+  try {
+    const result = await postJson(`/api/lists/${listState.currentId}`, {}, 'DELETE');
+    listState.all = result.lists ?? [];
+    listState.currentId = null;
+    await loadLists({ keepCurrent: false });
+    toast('题单已删除');
+  } catch (error) {
+    toast(`删除失败：${error.message}`, { error: true });
+  }
+});
+$('lists-items')?.addEventListener('change', (event) => {
+  const box = event.target.closest('[data-list-contest]');
+  if (!box) return;
+  toggleListItem(Number(box.dataset.listContest), box.dataset.listIndex, box.checked);
+});
+$('lists-items')?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-list-remove]');
+  if (!button) return;
+  const [contestId, index] = button.dataset.listRemove.split('-');
+  removeListItem(Number(contestId), index);
+});
+
 // ---------- 拼好题：一场 CF + 一场 AtCoder ----------
 // 「cf + atc 题数就跟区域赛差不多了，组合一下难度还有起伏」——挑场规则在服务端
 // （buildMashup）：只挑没打过的、从最近 60 场里随机，太久远的不碰。
@@ -1426,6 +1617,7 @@ async function rollMashup() {
     renderMashup();
     button.textContent = '换一套';
     $('mashup-copy').disabled = false;
+    $('mashup-save').disabled = false;
   } catch (error) {
     $('mashup-result').innerHTML = `<p class="subtle">${escapeHtml(error.message)}</p>`;
     button.textContent = '拼一套';
@@ -1467,9 +1659,8 @@ function renderMashup() {
 }
 
 /** 复制成 Markdown：贴群里、记笔记、丢给队友都能用。 */
-async function copyMashup() {
-  if (!mashupData) return;
-  const text = [
+function mashupAsMarkdown() {
+  return [
     `## 拼好题 · ${mashupData.total} 题（难度 ${mashupData.ratingRange?.join(' ~ ') ?? '待定'}）`,
     [mashupData.cf, mashupData.atcoder]
       .filter(Boolean)
@@ -1481,6 +1672,30 @@ async function copyMashup() {
         `${i + 1}. ${problem.code} ${problem.name}${problem.rating ? ` · ${problem.rating}` : ''} — ${problem.url}`,
     ),
   ].join('\n');
+}
+
+/** 存成题单：直接进「我的题单」，不用先复制再粘贴。 */
+async function saveMashupAsList() {
+  if (!mashupData) return;
+  const name = `拼好题 · ${mashupData.cf?.kind ?? 'CF'} + ${mashupData.atcoder?.kind ?? 'ATC'} · ${mashupData.total} 题`;
+  const button = $('mashup-save');
+  button.disabled = true;
+  try {
+    const result = await postJson('/api/lists', { name, text: mashupAsMarkdown() });
+    toast(`已存进「我的题单」：${result.matched} 道题`);
+    // 题单页下次打开时重新拉一遍
+    listState.all = result.lists ?? [];
+    listState.currentId = result.id ?? null;
+  } catch (error) {
+    toast(`存题单失败：${error.message}`, { error: true });
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function copyMashup() {
+  if (!mashupData) return;
+  const text = mashupAsMarkdown();
   try {
     await navigator.clipboard.writeText(text);
     toast(`已复制这一套（${mashupData.total} 题）。`);
@@ -1491,6 +1706,7 @@ async function copyMashup() {
 
 $('mashup-roll')?.addEventListener('click', rollMashup);
 $('mashup-copy')?.addEventListener('click', copyMashup);
+$('mashup-save')?.addEventListener('click', saveMashupAsList);
 
 // ---------- 历年比赛：一场一行，题目按难度上色 ----------
 // 照着 cftracker 的 contests 页做的：按比赛看题，而不是按题看题。
@@ -1527,26 +1743,48 @@ function fillContestKinds(kinds) {
   select.value = current;
 }
 
-/** 一道题一块：底色是它的难度色，做过的压暗加勾。 */
+/**
+ * 一道题一块。
+ *
+ * 做过的和没做过的必须一眼分开——之前只是给做过的压暗，整页都是彩色小块，
+ * 扫起来很累。现在用两种形态区分：
+ *   没做过 = 实心难度色 + 难度数字（要做的题才显眼）
+ *   做过   = 空心描边 + ✓ + 灰字，连难度数字都不显示（鼠标停上去还能看到）
+ */
 function problemChip(problem) {
   const rated = problem.rating != null;
-  const style = rated ? ` style="background:${ratingColor(problem.rating)}"` : '';
   const title = `${problem.code} · ${problem.name}${rated ? ` · ${problem.rating}` : ''}`;
-  return `<a class="p-chip${problem.solved ? ' solved' : ''}${rated ? '' : ' unrated'}"${style}
-    href="${problem.url}" target="_blank" rel="noreferrer"
-    title="${escapeHtml(title)}">${escapeHtml(problem.code)}${rated ? `<b>${problem.rating}</b>` : ''}</a>`;
+  if (problem.solved) {
+    return `<a class="p-chip solved${rated ? '' : ' unrated'}" href="${problem.url}"
+      target="_blank" rel="noreferrer" title="${escapeHtml(title)}">✓ ${escapeHtml(problem.code)}</a>`;
+  }
+  const style = rated ? ` style="background:${ratingColor(problem.rating)}"` : '';
+  return `<a class="p-chip${rated ? '' : ' unrated'}"${style} href="${problem.url}"
+    target="_blank" rel="noreferrer" title="${escapeHtml(title)}">${escapeHtml(problem.code)}${
+    rated ? `<b>${problem.rating}</b>` : ''
+  }</a>`;
 }
 
 function contestCard(contest) {
   const date = contest.startTime
     ? new Date(contest.startTime * 1000).toLocaleDateString('sv-SE')
     : '时间未知';
-  return `<div class="contest-card">
+  // 整场状态：一场没动过、做了一部分、全做完——卡片外观和进度文字都跟着变，
+  // 这样不用一行行看色块就知道哪场值得打
+  const state =
+    contest.solvedCount === 0 ? 'fresh' : contest.solvedCount >= contest.problems.length ? 'done' : 'partial';
+  const progress =
+    state === 'fresh'
+      ? '还没动过'
+      : state === 'done'
+        ? `已打完 ${contest.problems.length} 题`
+        : `做过 ${contest.solvedCount}/${contest.problems.length}`;
+  return `<div class="contest-card ${state}">
     <div class="contest-card-head">
       <span class="contest-card-date">${date}</span>
       <a class="contest-card-name" href="${contest.url}" target="_blank" rel="noreferrer">${escapeHtml(contest.name)}</a>
       <span class="contest-card-kind">${escapeHtml(contest.kind)}</span>
-      <span class="contest-card-progress">做过 ${contest.solvedCount}/${contest.problems.length}</span>
+      <span class="contest-card-progress">${progress}</span>
     </div>
     <div class="chip-row">${contest.problems.map(problemChip).join('')}</div>
   </div>`;
@@ -2995,6 +3233,7 @@ const NAV_ITEMS = [
   { id: 'panel-problems', label: '题库', icon: '📚' },
   { id: 'panel-contests', label: '历年比赛', icon: '🏆' },
   { id: 'panel-mashup', label: '拼好题', icon: '🧩' },
+  { id: 'panel-lists', label: '我的题单', icon: '📌' },
   { id: 'panel-tags', label: '能力画像', icon: '🧭', group: '数据' },
   { id: 'panel-growth', label: '成长', icon: '🌱' },
   { id: 'panel-records', label: '做题记录', icon: '📝' },
@@ -3059,6 +3298,7 @@ $('side-nav').addEventListener('click', (event) => {
   if (button.dataset.view === 'panel-contests' && !contestState.loaded) loadContests();
   // 拼好题第一次进来就先拼一套，不用先点按钮
   if (button.dataset.view === 'panel-mashup' && !mashupData) rollMashup();
+  if (button.dataset.view === 'panel-lists') loadLists();
 });
 
 window.addEventListener('hashchange', () => {

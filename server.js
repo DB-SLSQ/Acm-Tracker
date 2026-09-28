@@ -1091,6 +1091,101 @@ function collectContests(url) {
   return { rows, solved };
 }
 
+/** 题号 → 题目。复制粘贴过来的题单要认题号，这里把题库里的题号建一份索引。 */
+function problemCodeIndex() {
+  const index = new Map();
+  for (const problem of allProblems()) {
+    if (problem.type !== 'PROGRAMMING') continue;
+    index.set(problemCode(problem).toUpperCase(), problem);
+    // AtCoder 的正题号（abc476_d）和洛谷的原题号（P4170）也一起进索引
+    if (problem.nativeId) index.set(String(problem.nativeId).toUpperCase(), problem);
+  }
+  return index;
+}
+
+/**
+ * 把一段文本解析成题号列表。
+ *
+ * 用户贴过来的东西五花八门：可能是「拼好题」导出的 Markdown（带题目链接）、
+ * 可能是从别处复制的「2173A Sleeping Through Classes」、也可能是洛谷题号 P4170。
+ * 所以先按链接抓，再按裸题号抓，最后拿题库索引对齐；对不上的返回给界面提示，
+ * 免得用户以为「我贴了十条怎么只进来六条」。
+ *
+ * AtCoder 的题号统一补零到三位（ABC25C 和 ABC025C 都认）。
+ */
+function parseProblemText(text) {
+  const index = problemCodeIndex();
+  const found = new Map(); // key -> problem
+  const unresolved = new Set();
+
+  const add = (candidate) => {
+    const key = String(candidate).toUpperCase();
+    const problem = index.get(key);
+    if (problem) found.set(`${problem.contestId}-${problem.index}`, problem);
+    // 只把「看着像题号、但题库里没有」的报给用户，标题行之类的噪音不报
+    else unresolved.add(key);
+  };
+
+  // 一行一行来：先看这一行有没有链接（链接里的信息最准），没有再退到裸题号
+  for (const rawLine of String(text).split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let hit = false;
+    const before = found.size;
+
+    const cfUrl = line.match(/codeforces\.com\/(?:problemset\/problem|contest)\/(\d+)\/(?:problem\/)?([A-Za-z]\d?)/);
+    if (cfUrl) {
+      add(`${cfUrl[1]}${cfUrl[2].toUpperCase()}`);
+      hit = hit || found.size > before;
+    }
+
+    const atUrl = line.match(/atcoder\.jp\/contests\/([a-z0-9_]+)\/tasks\/([a-z0-9_]+)/i);
+    if (atUrl) {
+      add(atUrl[2].toUpperCase());
+      hit = hit || found.size > before;
+    }
+
+    const lgUrl = line.match(/luogu\.com\.cn\/problem\/([A-Za-z]+\d+)/i);
+    if (lgUrl) {
+      add(lgUrl[1].toUpperCase());
+      hit = hit || found.size > before;
+    }
+
+    if (!hit) {
+      for (const match of line.matchAll(/\b(ABC|ARC|AGC)(\d{2,3})([A-Z])\b/gi)) {
+        add(`${match[1].toUpperCase()}${match[2].padStart(3, '0')}${match[3].toUpperCase()}`);
+      }
+      for (const match of line.matchAll(/\bCF(\d+)([A-Z]\d?)\b/gi)) {
+        add(`${match[1]}${match[2].toUpperCase()}`);
+      }
+      for (const match of line.matchAll(/\b([PB]\d{3,5})\b/g)) {
+        add(match[1].toUpperCase());
+      }
+      for (const match of line.matchAll(/\b(\d{1,4})([A-Z]\d?)\b/g)) {
+        add(`${match[1]}${match[2].toUpperCase()}`);
+      }
+    }
+  }
+
+  // 题库里对上的题不算「没认出来」，哪怕前面 add 过
+  const resolvedKeys = new Set(
+    [...found.values()].flatMap((p) => [problemCode(p).toUpperCase(), String(p.nativeId ?? '').toUpperCase()]),
+  );
+  const unmatched = [...unresolved].filter((key) => key && !resolvedKeys.has(key));
+
+  return {
+    items: [...found.values()].map((p) => ({ contestId: p.contestId, index: p.index })),
+    unmatched,
+  };
+}
+
+/** 没起名字时按时间和题数给一个，比如「题单 9/28 15:30 · 11 题」。 */
+function defaultListName(count) {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `题单 ${now.getMonth() + 1}/${now.getDate()} ${pad(now.getHours())}:${pad(now.getMinutes())} · ${count} 题`;
+}
+
 /**
  * 拼好题：一场没打过的 CF + 一场没打过的 AtCoder，凑成一套。
  *
@@ -2119,6 +2214,87 @@ async function route(req, res, url) {
       return sendError(res, 404, '这段时间里没有你没打过的比赛了，把时间范围放宽一点');
     }
     return sendJson(res, 200, result);
+  }
+
+  // 自己攒的题单：列表、详情、新建、追加、勾选、删除
+  if (pathname === '/api/lists' && req.method === 'GET') {
+    return sendJson(res, 200, { lists: db.listProblemLists() });
+  }
+
+  if (pathname === '/api/lists' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const parsed = parseProblemText(String(body.text ?? ''));
+      if (!parsed.items.length) {
+        return sendError(res, 400, '没认出来任何题目，把题号或题目链接一起贴进来就行');
+      }
+      const id = db.createProblemList(body.name ?? defaultListName(parsed.items.length), parsed.items);
+      return sendJson(res, 200, {
+        id,
+        matched: parsed.items.length,
+        unmatched: parsed.unmatched,
+        lists: db.listProblemLists(),
+      });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  const listPath = pathname.match(/^\/api\/lists\/(\d+)(\/items|\/item)?$/);
+  if (listPath) {
+    const listId = Number(listPath[1]);
+    const sub = listPath[2];
+    const list = db.getProblemList(listId);
+    if (!list) return sendError(res, 404, '这个题单不存在了');
+
+    if (!sub && req.method === 'GET') {
+      const problems = db.getProblemsByKeys(
+        db.getProblemListItems(listId).map((item) => `${item.contestId}-${item.index}`),
+      );
+      const items = db
+        .getProblemListItems(listId)
+        .map((item) => {
+          const problem = problems.get(`${item.contestId}-${item.index}`);
+          if (!problem) return null;
+          return { ...toClientProblem(problem), done: item.done };
+        })
+        .filter(Boolean);
+      return sendJson(res, 200, { list, items });
+    }
+
+    if (!sub && req.method === 'DELETE') {
+      db.deleteProblemList(listId);
+      return sendJson(res, 200, { ok: true, lists: db.listProblemLists() });
+    }
+
+    if (sub === '/items' && req.method === 'POST') {
+      try {
+        const body = await readJsonBody(req);
+        const parsed = parseProblemText(String(body.text ?? ''));
+        const added = parsed.items.length ? db.addProblemListItems(listId, parsed.items) : 0;
+        return sendJson(res, 200, { added, matched: parsed.items.length, unmatched: parsed.unmatched });
+      } catch (error) {
+        return sendError(res, 400, error.message);
+      }
+    }
+
+    if (sub === '/item') {
+      try {
+        const body = await readJsonBody(req);
+        const contestId = Number(body.contestId);
+        if (!Number.isFinite(contestId) || !body.index) return sendError(res, 400, '参数不完整');
+        if (req.method === 'POST') {
+          db.setProblemListItemDone(listId, contestId, String(body.index), Boolean(body.done));
+          return sendJson(res, 200, { ok: true });
+        }
+        if (req.method === 'DELETE') {
+          db.removeProblemListItem(listId, contestId, String(body.index));
+          return sendJson(res, 200, { ok: true });
+        }
+      } catch (error) {
+        return sendError(res, 400, error.message);
+      }
+    }
   }
 
   if (pathname === '/api/blocked' && req.method === 'POST') {

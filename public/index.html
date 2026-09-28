@@ -343,10 +343,44 @@
             </select>
           </label>
           <button class="btn primary" id="mashup-roll">拼一套</button>
+          <button class="btn" id="mashup-save" disabled>存成题单</button>
           <button class="btn" id="mashup-copy" disabled>复制这一套</button>
         </div>
 
         <div id="mashup-result"></div>
+      </section>
+
+      <section class="panel hidden" id="panel-lists">
+        <div class="panel-head">
+          <h2>我的题单</h2>
+          <p id="lists-summary">
+            「拼好题」拼出来的一套可以一键存到这里，从别处复制的题单也能直接贴进来。
+            存下来之后可以逐题勾进度，做题时不用再翻聊天记录。
+          </p>
+        </div>
+
+        <div class="bank-filters">
+          <select id="lists-select"></select>
+          <button class="btn" id="lists-new">新建题单</button>
+          <button class="btn" id="lists-append">追加题目</button>
+          <button class="btn" id="lists-copy-todo">复制没做完的</button>
+          <button class="btn" id="lists-delete">删除这个题单</button>
+        </div>
+
+        <div id="lists-editor" class="lists-editor hidden">
+          <textarea id="lists-text" rows="7" placeholder="把题单贴进来：题号、题目链接都行"></textarea>
+          <div class="lists-editor-actions">
+            <input id="lists-name" type="text" placeholder="题单名字（不填就按时间起一个）" autocomplete="off" />
+            <button class="btn primary" id="lists-save">解析并保存</button>
+            <button class="btn" id="lists-cancel">取消</button>
+          </div>
+          <p class="hint" id="lists-hint">
+            认得这些写法：<b>2173A</b>（Codeforces）、<b>ABC476D</b>（AtCoder）、<b>P2120</b>（洛谷），
+            以及它们各自的题目链接；对不上的题号会单独列出来告诉你。
+          </p>
+        </div>
+
+        <div class="record-list" id="lists-items"></div>
       </section>
 
       <section class="panel hidden" id="panel-growth">
