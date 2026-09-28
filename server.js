@@ -992,7 +992,9 @@ function filterProblemBank(url) {
     .map((tag) => tag.trim())
     .filter(Boolean);
   const platform = url.searchParams.get('platform') ?? 'all';
-  const onlyTodo = url.searchParams.get('todo') === '1';
+  // 通过状态：all / todo（没做过）/ done（做过的）。老的 todo=1 仍然认
+  const state =
+    url.searchParams.get('state') ?? (url.searchParams.get('todo') === '1' ? 'todo' : 'all');
 
   let rows = allProblems().filter((problem) => problem.type === 'PROGRAMMING');
   if (platform !== 'all') {
@@ -1004,8 +1006,10 @@ function filterProblemBank(url) {
   if (tags.length) {
     rows = rows.filter((problem) => (problem.tags ?? []).some((tag) => tags.includes(tag)));
   }
-  if (onlyTodo) {
+  if (state === 'todo') {
     rows = rows.filter((problem) => !solved.has(`${problem.contestId}-${problem.index}`));
+  } else if (state === 'done') {
+    rows = rows.filter((problem) => solved.has(`${problem.contestId}-${problem.index}`));
   }
   if (q) {
     rows = rows.filter(
@@ -1014,6 +1018,85 @@ function filterProblemBank(url) {
     );
   }
   return { rows, solved, attempted };
+}
+
+/**
+ * 把题库按「比赛」分组，拼出比赛页要的数据。
+ *
+ * 一场比赛 = 题库里同一个 contest_id 的一批题。Codeforces 的名字和时间在 contests 表里；
+ * AtCoder 的时间在 atcoder_contests 表里、名字就用它的比赛 id（abc478 → ABC478）。
+ * 洛谷不参与——它的内部 id 是每题一个，没有比赛这个层级。
+ */
+function collectContests(url) {
+  const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
+  let solved = new Map();
+  if (handleKey) solved = deriveProgress(db.getSubmissions(handleKey)).solved;
+
+  const cfInfo = new Map(db.getContests().map((contest) => [contest.id, contest]));
+  const atcoderTimes = new Map(
+    db.listAtcoderContestDates().map((row) => [row.contestId, row.startTime]),
+  );
+
+  const groups = new Map();
+  for (const problem of allProblems()) {
+    if (problem.type !== 'PROGRAMMING' || problem.platform === 'luogu') continue;
+    let group = groups.get(problem.contestId);
+    if (!group) {
+      group = {
+        contestId: problem.contestId,
+        platform: problem.platform ?? 'codeforces',
+        problems: [],
+      };
+      groups.set(problem.contestId, group);
+    }
+    group.problems.push(problem);
+  }
+
+  const rows = [];
+  for (const group of groups.values()) {
+    group.problems.sort((a, b) => a.index.localeCompare(b.index));
+    const first = group.problems[0];
+    const cf = cfInfo.get(group.contestId);
+    const nativeContest = first.nativeContest ?? '';
+    const atcoderKind = nativeContest.match(/^(abc|arc|agc)/i);
+    const name = cf?.name ?? (nativeContest ? nativeContest.toUpperCase() : `比赛 ${group.contestId}`);
+    const startTime = cf?.startTime ?? atcoderTimes.get(group.contestId) ?? 0;
+    const kind = cf
+      ? parseContestInfo(cf.name).division
+      : atcoderKind
+        ? atcoderKind[1].toUpperCase()
+        : '其他';
+
+    const problems = group.problems.map((problem) => ({
+      index: problem.index,
+      code: problemCode(problem),
+      name: problem.name,
+      rating: problem.rating ?? null,
+      url: problemUrl(problem),
+      solved: solved.has(`${problem.contestId}-${problem.index}`),
+    }));
+
+    rows.push({
+      contestId: group.contestId,
+      platform: group.platform,
+      name,
+      kind,
+      startTime,
+      url: cf
+        ? `https://codeforces.com/contest/${group.contestId}`
+        : `https://atcoder.jp/contests/${nativeContest}`,
+      solvedCount: problems.filter((problem) => problem.solved).length,
+      problems,
+    });
+  }
+  return { rows, solved };
+}
+
+/** 分类按钮上要显示的数量。 */
+function contestKinds(rows) {
+  const counts = {};
+  for (const row of rows) counts[row.kind] = (counts[row.kind] ?? 0) + 1;
+  return counts;
 }
 
 /** 题库列表的排序。按难度排时把没难度的题丢最后，否则它们会跟最简单的题挤在一起。 */
@@ -1916,6 +1999,44 @@ async function route(req, res, url) {
         solved: solved.has(`${pick.contestId}-${pick.index}`),
       },
     });
+  }
+
+  // 比赛列表（照着 cftracker 的 contests 页做的）：一场一行，展开是这场每道题的难度块，
+  // 做过的高亮。洛谷不参与——它的题没有「比赛」这个层级。
+  if (pathname === '/api/contests' && req.method === 'GET') {
+    const { rows } = collectContests(url);
+    const kind = url.searchParams.get('kind') ?? 'all';
+    const state = url.searchParams.get('state') ?? 'all';
+    const sort = url.searchParams.get('sort') ?? 'newest';
+    const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+    const perPage = Math.min(60, Math.max(10, Number(url.searchParams.get('perPage') || 30)));
+
+    let list = rows;
+    if (kind !== 'all') list = list.filter((contest) => contest.kind === kind);
+    if (state === 'played') list = list.filter((contest) => contest.solvedCount > 0);
+    if (state === 'todo') list = list.filter((contest) => contest.solvedCount < contest.problems.length);
+    if (sort === 'oldest') list.sort((a, b) => a.startTime - b.startTime);
+    else if (sort === 'most-solved') list.sort((a, b) => b.solvedCount - a.solvedCount);
+    else list.sort((a, b) => b.startTime - a.startTime);
+
+    return sendJson(res, 200, {
+      total: list.length,
+      page,
+      perPage,
+      items: list.slice((page - 1) * perPage, page * perPage),
+      kinds: contestKinds(rows),
+    });
+  }
+
+  // 随机一场：cftracker 那个「random contest」，默认只挑你还没做全的
+  if (pathname === '/api/contests/random' && req.method === 'GET') {
+    const { rows } = collectContests(url);
+    const kind = url.searchParams.get('kind') ?? 'all';
+    let list = rows.filter((contest) => contest.solvedCount < contest.problems.length);
+    if (kind !== 'all') list = list.filter((contest) => contest.kind === kind);
+    if (!list.length) return sendError(res, 404, '没有符合条件的比赛了，换个类别试试');
+    const pick = list[Math.floor(Math.random() * list.length)];
+    return sendJson(res, 200, { matched: list.length, contest: pick });
   }
 
   if (pathname === '/api/blocked' && req.method === 'POST') {

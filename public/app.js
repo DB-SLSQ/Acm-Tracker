@@ -48,6 +48,8 @@ const state = {
   warmup: null,
   retro: null,
   extraTasks: {},
+  // 当前 rating：题库页「按我的水平推荐」要用
+  rating: null,
   // 其他平台
   nowcoderUid: null,
   // 比赛日历：当前筛选的来源 + 最近一次拿到的数据
@@ -429,6 +431,8 @@ async function loadUser(force = false) {
     const { user } = await getJson(
       `/api/user?handle=${encodeURIComponent(handle)}${force ? '&refresh=1' : ''}`,
     );
+    // 题库页推荐题目时要知道你现在多少分
+    state.rating = user.rating ?? null;
     renderStats(user);
     renderRatingChart(user.ratingHistory);
     $('overview-handle').textContent = `${user.displayHandle} · 数据更新于 ${new Date(user.updatedAt).toLocaleString('zh-CN')}`;
@@ -1376,6 +1380,120 @@ async function loadSolved({ append = false } = {}) {
 
 $('solved-more').addEventListener('click', () => loadSolved({ append: true }));
 
+// ---------- 历年比赛：一场一行，题目按难度上色 ----------
+// 照着 cftracker 的 contests 页做的：按比赛看题，而不是按题看题。
+// 数据是本地题库按 contest_id 分组的，所以只列「题库里已经有题」的比赛。
+const contestState = { page: 1, perPage: 30, total: 0, loaded: false };
+
+function contestQuery(extra = {}) {
+  const params = new URLSearchParams();
+  if (state.handle) params.set('handle', state.handle);
+  // 下拉还没填好时 value 是空串，当成「全部」处理，不然第一屏会查出 0 场
+  const kind = $('contests-kind')?.value || 'all';
+  if (kind !== 'all') params.set('kind', kind);
+  const contestFilter = $('contests-state')?.value || 'all';
+  if (contestFilter !== 'all') params.set('state', contestFilter);
+  params.set('sort', $('contests-sort')?.value || 'newest');
+  for (const [key, value] of Object.entries(extra)) params.set(key, String(value));
+  return params.toString();
+}
+
+/** 分类下拉：选项和数量都来自服务端统计，免得前后端各写一份。 */
+function fillContestKinds(kinds) {
+  const select = $('contests-kind');
+  if (!select) return;
+  const current = select.value || 'all';
+  const order = ['Div. 1', 'Div. 2', 'Div. 3', 'Div. 4', 'Div. 1+2', 'Educational', 'Global Round', 'Codeforces Round', 'ABC', 'ARC', 'AGC', '其他'];
+  const names = Object.keys(kinds).sort((a, b) => {
+    const ia = order.indexOf(a);
+    const ib = order.indexOf(b);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+  select.innerHTML =
+    `<option value="all">全部分类（${Object.values(kinds).reduce((sum, n) => sum + n, 0)}）</option>` +
+    names.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}（${kinds[name]}）</option>`).join('');
+  select.value = current;
+}
+
+/** 一道题一块：底色是它的难度色，做过的压暗加勾。 */
+function problemChip(problem) {
+  const rated = problem.rating != null;
+  const style = rated ? ` style="background:${ratingColor(problem.rating)}"` : '';
+  const title = `${problem.code} · ${problem.name}${rated ? ` · ${problem.rating}` : ''}`;
+  return `<a class="p-chip${problem.solved ? ' solved' : ''}${rated ? '' : ' unrated'}"${style}
+    href="${problem.url}" target="_blank" rel="noreferrer"
+    title="${escapeHtml(title)}">${escapeHtml(problem.code)}${rated ? `<b>${problem.rating}</b>` : ''}</a>`;
+}
+
+function contestCard(contest) {
+  const date = contest.startTime
+    ? new Date(contest.startTime * 1000).toLocaleDateString('sv-SE')
+    : '时间未知';
+  return `<div class="contest-card">
+    <div class="contest-card-head">
+      <span class="contest-card-date">${date}</span>
+      <a class="contest-card-name" href="${contest.url}" target="_blank" rel="noreferrer">${escapeHtml(contest.name)}</a>
+      <span class="contest-card-kind">${escapeHtml(contest.kind)}</span>
+      <span class="contest-card-progress">做过 ${contest.solvedCount}/${contest.problems.length}</span>
+    </div>
+    <div class="chip-row">${contest.problems.map(problemChip).join('')}</div>
+  </div>`;
+}
+
+async function loadContests({ keepPage = false } = {}) {
+  if (!keepPage) contestState.page = 1;
+  try {
+    const data = await getJson(`/api/contests?${contestQuery({ page: contestState.page, perPage: contestState.perPage })}`);
+    contestState.total = data.total ?? 0;
+    contestState.loaded = true;
+    fillContestKinds(data.kinds ?? {});
+    const pages = Math.max(1, Math.ceil(contestState.total / contestState.perPage));
+    $('contests-summary').textContent = contestState.total
+      ? `共 ${contestState.total} 场有题目的比赛，第 ${contestState.page} / ${pages} 页。点题目块去原站做题，做过的是暗的。`
+      : '没有符合条件的比赛，换个分类或状态试试。';
+    $('contests-page').textContent = `${contestState.page} / ${pages}`;
+    $('contests-prev').disabled = contestState.page <= 1;
+    $('contests-next').disabled = contestState.page >= pages;
+    $('contests-list').innerHTML = (data.items ?? []).map(contestCard).join('');
+    markViewReady('panel-contests');
+  } catch (error) {
+    $('contests-summary').textContent = `比赛列表读取失败：${error.message}`;
+  }
+}
+
+/** 随机一场：cftracker 那个 random，默认只挑还有题没做出来的。 */
+async function pickRandomContest() {
+  const button = $('contests-random');
+  button.disabled = true;
+  try {
+    const data = await getJson(`/api/contests/random?${contestQuery()}`);
+    $('contests-random-card').innerHTML = `
+      <div class="running-card">
+        ${contestCard(data.contest)}
+        <p class="subtle" style="margin:8px 0 0">在 ${data.matched} 场还有题没做的比赛里随机挑的。</p>
+      </div>`;
+  } catch (error) {
+    $('contests-random-card').innerHTML = `<p class="subtle">${escapeHtml(error.message)}</p>`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+for (const id of ['contests-kind', 'contests-state', 'contests-sort']) {
+  $(id)?.addEventListener('change', () => loadContests());
+}
+$('contests-random')?.addEventListener('click', pickRandomContest);
+$('contests-prev')?.addEventListener('click', () => {
+  if (contestState.page > 1) {
+    contestState.page -= 1;
+    loadContests({ keepPage: true });
+  }
+});
+$('contests-next')?.addEventListener('click', () => {
+  contestState.page += 1;
+  loadContests({ keepPage: true });
+});
+
 // ---------- 题库：筛选 + 分页 + 随机挑一道 ----------
 // 数据全在本地题库里（CF / AtCoder / 抓过的洛谷题），所以这一页不联网也能翻。
 // 做成服务端筛选：一万六千道题在浏览器里全量渲染没意义，按条件取一页更省事。
@@ -1407,18 +1525,51 @@ function bankQuery(extra = {}) {
   if (state.handle) params.set('handle', state.handle);
   const q = $('problems-q')?.value.trim();
   if (q) params.set('q', q);
-  const from = Number($('problems-from')?.value);
-  const to = Number($('problems-to')?.value);
-  if (from) params.set('from', String(from));
-  if (to) params.set('to', String(to));
+  // 滑块拖到底＝不筛：默认视图保持「全部题目」，也把没难度的题一起带上
+  const from = Number($('problems-from')?.value ?? 800);
+  const to = Number($('problems-to')?.value ?? 3500);
+  if (from > RATING_MIN) params.set('from', String(from));
+  if (to < RATING_MAX) params.set('to', String(to));
   const tag = $('problems-tag')?.value;
   if (tag) params.set('tags', tag);
-  const platform = $('problems-platform')?.value ?? 'all';
+  const platform = $('problems-platform')?.value || 'all';
   if (platform !== 'all') params.set('platform', platform);
-  if ($('problems-todo')?.checked) params.set('todo', '1');
-  params.set('sort', $('problems-sort')?.value ?? 'rating');
+  // 注意别把这个变量叫 state：外层那个 state 在同一个函数里会被它遮住，直接 TDZ 报错
+  const progressFilter = $('problems-state')?.value || 'all';
+  if (progressFilter !== 'all') params.set('state', progressFilter);
+  params.set('sort', $('problems-sort')?.value || 'rating');
   for (const [key, value] of Object.entries(extra)) params.set(key, String(value));
   return params.toString();
+}
+
+/** 难度滑块的上下限，和题库里的分值范围对齐。 */
+const RATING_MIN = 800;
+const RATING_MAX = 3500;
+
+/** 两个滑块叠在一起用：互相不让越界，并画出中间那段。 */
+function syncRatingRange() {
+  const fromEl = $('problems-from');
+  const toEl = $('problems-to');
+  if (!fromEl || !toEl) return;
+  let from = Number(fromEl.value);
+  let to = Number(toEl.value);
+  if (from > to) {
+    // 谁在拖就让谁说了算：拖下限超过上限时，把上限顶上去
+    if (document.activeElement === fromEl) {
+      to = from;
+      toEl.value = String(to);
+    } else {
+      from = to;
+      fromEl.value = String(from);
+    }
+  }
+  const span = RATING_MAX - RATING_MIN;
+  const track = $('problems-track');
+  if (track) {
+    track.style.left = `${((from - RATING_MIN) / span) * 100}%`;
+    track.style.width = `${((to - from) / span) * 100}%`;
+  }
+  $('problems-range-text').textContent = `${from} ~ ${to}`;
 }
 
 async function loadProblems({ keepPage = false } = {}) {
@@ -1464,27 +1615,32 @@ function renderProblems() {
 }
 
 /** 随机一道：同一套筛选条件，在服务端随机取，命中多少一并告诉用户。 */
+function renderRandomCard(data, note) {
+  const problem = data.problem;
+  $('problems-random-card').innerHTML = `
+    <div class="running-card pick-card">
+      <div class="pick-row">
+        <span class="record-code">${escapeHtml(problem.code)}</span>
+        <span class="bank-name">
+          <a href="${problem.url}" target="_blank" rel="noreferrer">${escapeHtml(problem.name)}</a>
+          ${platformBadge(problem)}
+        </span>
+        <span>${ratingBadge(problem.rating)}</span>
+        <span class="problem-tags">${tagSpans(problem.tags, 3)}</span>
+      </div>
+      <p class="subtle" style="margin:8px 0 0">${escapeHtml(note)}</p>
+    </div>`;
+}
+
 async function pickRandomProblem() {
   const button = $('problems-random');
   button.disabled = true;
   try {
     const data = await getJson(`/api/problems/random?${bankQuery()}`);
-    const problem = data.problem;
-    $('problems-random-card').innerHTML = `
-      <div class="running-card">
-        <div class="today-row">
-          <span class="record-code">${escapeHtml(problem.code)}</span>
-          <span class="bank-name">
-            <a href="${problem.url}" target="_blank" rel="noreferrer">${escapeHtml(problem.name)}</a>
-            ${platformBadge(problem)}
-          </span>
-          <span>${ratingBadge(problem.rating)}</span>
-          <span class="problem-tags">${tagSpans(problem.tags, 3)}</span>
-        </div>
-        <p class="subtle" style="margin:8px 0 0">
-          在 ${data.matched} 道符合条件的题里随机挑的${problem.solved ? '（这题你做过）' : ''}。
-        </p>
-      </div>`;
+    renderRandomCard(
+      data,
+      `在 ${data.matched} 道符合条件的题里随机挑的${data.problem.solved ? '（这题你做过）' : ''}。`,
+    );
   } catch (error) {
     $('problems-random-card').innerHTML = `<p class="subtle">${escapeHtml(error.message)}</p>`;
   } finally {
@@ -1492,16 +1648,48 @@ async function pickRandomProblem() {
   }
 }
 
-for (const id of ['problems-tag', 'problems-platform', 'problems-sort', 'problems-todo']) {
+/**
+ * 「按我的水平推荐」：拿当前 rating 往上抬一点（-100 ~ +300）当区间，只挑没做过的。
+ * 手拖的难度区间在这个按钮上不生效——它就是「我不想自己挑区间」时的入口。
+ */
+async function recommendProblem() {
+  const base = state.rating ?? 1200;
+  const from = Math.max(RATING_MIN, base - 100);
+  const to = Math.min(RATING_MAX, base + 300);
+  const params = new URLSearchParams(bankQuery());
+  params.set('from', String(from));
+  params.set('to', String(to));
+  params.set('state', 'todo');
+  const button = $('problems-recommend');
+  button.disabled = true;
+  try {
+    const data = await getJson(`/api/problems/random?${params.toString()}`);
+    renderRandomCard(
+      data,
+      `按你现在的水平（${state.rating ?? '未知'}）挑的：${from}~${to} 分、还没做过的题，一共 ${data.matched} 道候选。`,
+    );
+  } catch (error) {
+    $('problems-random-card').innerHTML = `<p class="subtle">${escapeHtml(error.message)}</p>`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+for (const id of ['problems-tag', 'problems-platform', 'problems-sort', 'problems-state']) {
   $(id)?.addEventListener('change', () => loadProblems());
 }
-for (const id of ['problems-q', 'problems-from', 'problems-to']) {
+$( 'problems-q')?.addEventListener('change', () => loadProblems());
+for (const id of ['problems-from', 'problems-to']) {
+  $(id)?.addEventListener('input', syncRatingRange);
   $(id)?.addEventListener('change', () => loadProblems());
 }
 $('problems-q')?.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') loadProblems();
 });
 $('problems-random')?.addEventListener('click', pickRandomProblem);
+$('problems-recommend')?.addEventListener('click', recommendProblem);
+// 难度滑块：先画一次，否则进页面时中间那段是空的
+syncRatingRange();
 $('problems-prev')?.addEventListener('click', () => {
   if (bankState.page > 1) {
     bankState.page -= 1;
@@ -2676,6 +2864,7 @@ const NAV_ITEMS = [
   { id: 'panel-schedule', label: '训练日程', icon: '🗓' },
   { id: 'panel-review', label: '补题队列', icon: '🧾' },
   { id: 'panel-problems', label: '题库', icon: '📚' },
+  { id: 'panel-contests', label: '历年比赛', icon: '🏆' },
   { id: 'panel-tags', label: '能力画像', icon: '🧭', group: '数据' },
   { id: 'panel-growth', label: '成长', icon: '🌱' },
   { id: 'panel-records', label: '做题记录', icon: '📝' },
@@ -2737,6 +2926,7 @@ $('side-nav').addEventListener('click', (event) => {
   showView(button.dataset.view);
   // 题库页第一次打开时才去取数据：一万六千道题，没必要开机就查一遍
   if (button.dataset.view === 'panel-problems' && !bankState.loaded) loadProblems();
+  if (button.dataset.view === 'panel-contests' && !contestState.loaded) loadContests();
 });
 
 window.addEventListener('hashchange', () => {

@@ -227,8 +227,6 @@
 
         <div class="bank-filters">
           <input id="problems-q" type="text" placeholder="搜题号或题名，例如 1555D / Segment" autocomplete="off" />
-          <input id="problems-from" type="number" min="800" max="4000" step="100" placeholder="最低分" />
-          <input id="problems-to" type="number" min="800" max="4000" step="100" placeholder="最高分" />
           <select id="problems-tag"></select>
           <select id="problems-platform">
             <option value="all">全部来源</option>
@@ -236,17 +234,30 @@
             <option value="atcoder">AtCoder</option>
             <option value="luogu">洛谷</option>
           </select>
+          <select id="problems-state">
+            <option value="all">全部题目</option>
+            <option value="todo">只看没做过的</option>
+            <option value="done">只看做过的</option>
+          </select>
           <select id="problems-sort">
             <option value="rating">难度从低到高</option>
             <option value="rating-desc">难度从高到低</option>
             <option value="solved">通过人数从多到少</option>
             <option value="newest">最新的比赛在前</option>
           </select>
-          <label class="tag-hide-toggle" title="只列你还没通过的题">
-            <input type="checkbox" id="problems-todo" />
-            <span>只看没做过的</span>
-          </label>
           <button class="btn primary" id="problems-random">随机来一道</button>
+          <button class="btn" id="problems-recommend" title="按你现在的 rating 挑一道稍微要踮脚的题">按我的水平推荐</button>
+        </div>
+
+        <!-- 难度区间：两个滑块叠在一起，就是 AtCoder Problems 那种拖法 -->
+        <div class="bank-range">
+          <span class="bank-range-label">难度</span>
+          <div class="dual-range">
+            <span class="dual-track" id="problems-track"></span>
+            <input type="range" id="problems-from" min="800" max="3500" step="100" value="800" />
+            <input type="range" id="problems-to" min="800" max="3500" step="100" value="3500" />
+          </div>
+          <span class="bank-range-text" id="problems-range-text">800 ~ 3500</span>
         </div>
 
         <div id="problems-random-card"></div>
@@ -255,6 +266,38 @@
           <button class="btn" id="problems-prev">上一页</button>
           <span class="subtle" id="problems-page"></span>
           <button class="btn" id="problems-next">下一页</button>
+        </div>
+      </section>
+
+      <section class="panel hidden" id="panel-contests">
+        <div class="panel-head">
+          <h2>历年比赛</h2>
+          <p id="contests-summary">
+            一场一行，题目按难度上色，做过的打勾。洛谷不在这里——它的题没有「比赛」这个层级。
+          </p>
+        </div>
+
+        <div class="bank-filters">
+          <select id="contests-kind"></select>
+          <select id="contests-state">
+            <option value="all">全部比赛</option>
+            <option value="played">我打过的</option>
+            <option value="todo">还有没做出来的</option>
+          </select>
+          <select id="contests-sort">
+            <option value="newest">最新的在前</option>
+            <option value="oldest">最早的在前</option>
+            <option value="most-solved">我做过最多的在前</option>
+          </select>
+          <button class="btn primary" id="contests-random">随机一场</button>
+        </div>
+
+        <div id="contests-random-card"></div>
+        <div class="contest-list" id="contests-list"></div>
+        <div class="reco-actions bank-pager">
+          <button class="btn" id="contests-prev">上一页</button>
+          <span class="subtle" id="contests-page"></span>
+          <button class="btn" id="contests-next">下一页</button>
         </div>
       </section>
 
