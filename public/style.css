@@ -2944,3 +2944,35 @@ body.compact .panel-head h2 {
   padding: 4px 7px;
   font-size: 12px;
 }
+
+/* ============ 成长页「赛前两周」表格 ============
+   六列中文塞在半宽卡片（四百多像素）里，默认的自动布局会让浏览器
+   按内容抢宽度：没有断词机会的中文列被压成一字一行的竖排。
+   改用固定布局 + colgroup 定比例（写在 app.js 里），这里只负责换行规则。 */
+.growth-contest-table {
+  table-layout: fixed;
+}
+
+.growth-contest-table td {
+  padding: 8px 6px;
+  vertical-align: top;
+  overflow-wrap: break-word;
+}
+
+.growth-contest-table .gc-tag {
+  line-height: 1.5;
+}
+
+/* 表头不折行，靠 colgroup 的比例去容纳 */
+.growth-contest-table .growth-head td {
+  white-space: nowrap;
+}
+
+/* 日期「2026/9/27」不能再折，折了就看不懂；宁可挤别列 */
+.growth-contest-table .gc-date {
+  white-space: nowrap;
+}
+
+.growth-contest-table .gc-name .problem-name {
+  word-break: break-word;
+}

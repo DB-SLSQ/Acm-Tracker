@@ -1218,25 +1218,28 @@ function renderGrowth() {
       .reverse()
       .map(
         (contest) => `<tr>
-          <td><a class="problem-name" href="https://codeforces.com/contest/${contest.contestId}"
+          <td class="gc-name"><a class="problem-name" href="https://codeforces.com/contest/${contest.contestId}"
                  target="_blank" rel="noreferrer">${escapeHtml(contest.name || String(contest.contestId))}</a></td>
-          <td class="problem-tags">${new Date(contest.at * 1000).toLocaleDateString('zh-CN')}</td>
-          <td style="width:96px" class="${signedClass(contest.delta)}">${
+          <td class="problem-tags gc-date">${new Date(contest.at * 1000).toLocaleDateString('zh-CN')}</td>
+          <td class="${signedClass(contest.delta)}">${
             contest.delta == null ? '—' : `${contest.delta > 0 ? '+' : ''}${contest.delta}`
           }</td>
-          <td style="width:120px" class="problem-tags">${
-            contest.solvedBefore ? `${contest.solvedBefore} 题` : '没有记录'
-          }</td>
-          <td style="width:96px" class="problem-tags">${
-            contest.avgRatingBefore ? `${contest.avgRatingBefore} 分` : '—'
-          }</td>
-          <td class="problem-tags">${contest.tag}</td>
+          <td class="problem-tags">${contest.solvedBefore ? `${contest.solvedBefore} 题` : '没有记录'}</td>
+          <td class="problem-tags">${contest.avgRatingBefore ? `${contest.avgRatingBefore} 分` : '—'}</td>
+          <td class="problem-tags gc-tag">${contest.tag}</td>
         </tr>`,
       )
       .join('');
-    $('growth-contests').innerHTML = `<table class="problem-table">
+    // 这张表在半宽卡片里只有四百多像素，六列中文表头铺不下。
+    // 用 table-layout:fixed + colgroup 定死比例，表头缩成两字词，
+    // 不然浏览器会按内容抢宽度，把短列压成一字一行的竖排。
+    $('growth-contests').innerHTML = `<table class="problem-table growth-contest-table">
+      <colgroup>
+        <col style="width:31%" /><col style="width:16%" /><col style="width:9%" />
+        <col style="width:11%" /><col style="width:11%" /><col style="width:22%" />
+      </colgroup>
       <tr class="growth-head">
-        <td>比赛</td><td>时间</td><td>分数变化</td><td>赛前两周题量</td><td>赛前两周难度</td><td>判断</td>
+        <td>比赛</td><td>时间</td><td>涨跌</td><td>题量</td><td>难度</td><td>赛前两周手感</td>
       </tr>${rows}</table>`;
   }
 
@@ -1373,7 +1376,9 @@ function renderSolved() {
   $('solved-list').innerHTML = visible
     .map(
       (item) => `<div class="record-row">
-        <span class="record-time">${new Date(item.firstAcAt * 1000).toLocaleDateString('zh-CN')}</span>
+        <span class="record-time">${
+          item.firstAcAt ? new Date(item.firstAcAt * 1000).toLocaleDateString('zh-CN') : '—'
+        }</span>
         <span class="record-name">
           <span class="record-code">${problemCodeText(item)}</span>
           <a href="${problemHref(item)}"
