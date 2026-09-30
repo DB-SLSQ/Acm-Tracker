@@ -163,6 +163,15 @@ platform/native_id/native_contest/native_rating）、
 12. **打包相关**：`package.json` 里已配 `build.electronDist = node_modules/electron/dist`，
     不会再下 110MB；仓库根目录不能有名字坏掉的目录（以前有过乱码目录，electron-builder 直接
     `lstat ENOENT`），`.dev\clean-junk-dirs.mjs` 能清掉。
+13. **在 AI 的 shell 里跑 `.dev\*.mjs`（Electron 脚本）有两个环境坑**：
+    a. 环境变量 `ELECTRON_RUN_AS_NODE=1` 会让 `require('electron')` 返回 undefined，
+       报 `Cannot read properties of undefined (reading 'whenReady')`。跑之前先 `unset ELECTRON_RUN_AS_NODE`。
+    b. 这机器在沙箱里 GPU 起不来，脚本要显式关掉硬件加速，否则报
+       `GPU process isn't usable. Goodbye.` 或页面 `ERR_FAILED (-2)`。在 `app.whenReady()` 前加：
+       `app.disableHardwareAcceleration()`、`app.commandLine.appendSwitch('disable-gpu')`、
+       `disable-gpu-compositing`、`in-process-gpu`、`no-sandbox`、`disable-dev-shm-usage`。
+    参考 `.dev\shot-themes.mjs`（五套主题截图）和 `.dev\sweep-cyber.mjs`（赛博下 18 页全扫）。
+    仓库里老的 `.dev\ui-sweep.mjs`、`.dev\run-selftest.mjs` 没加这些，在本环境跑不起来。
 
 ## 已经做过的事（按版本）
 
@@ -192,11 +201,25 @@ platform/native_id/native_contest/native_rating）、
    手动点「检查更新」）、**Mac 版**。
 3. 「我的题单」还能往下做：今日卡片／训练计划里直接「存成题单」、题单导出成 CSV/Markdown 文件、
    题单内的随机一道。
-4. **新加的 5 个页面（题库／历年比赛／拼好题／我的题单／帮助）还没进设置里的「界面模块」开关**
-   （`public/app.js` 的 `MODULE_META`）。想关掉它们目前关不掉，补进去就行。
+4. **新加的 5 个页面（题库／历年比赛／拼好题／我的题单／帮助）已经补进设置里的「界面模块」开关**
+   （`public/app.js` 的 `MODULE_META`，现在共 17 项）。
+
+## 还没发的改动（在 main 工作区里，未 commit）
+
+- 补进 `MODULE_META` 的 5 项（见上一条）
+- 新增第五套主题 **「赛博朋克」**（`data-theme='cyber'`）：深紫黑底 + 品红/青双霓虹，
+  变量定义在 `public/style.css` 的 `[data-theme='cyber']`，霓虹细节在文件末尾那段；
+  切换入口在两处——侧栏底部那组按钮、以及设置页新增的「外观」区块。
+  `applyAppearance` 现在遍历所有 `.theme-btn[data-theme-value]`，所以两处高亮自动同步。
+  加了主题后侧栏按钮会折行，`.side-foot .theme-btn` 的内边距收窄过。
 5. 宣传：B 站发过宣传版和 v0.1.3 更新版；v0.1.7 的更新视频、封面、简介都做好了
    （`.dev\make-video-v017.mjs`、`dist\ACM训练台-v0.1.7更新.mp4`、`outputs\v0.1.7-视频简介.md`），
    发不发看用户；素材同时放在 `C:\Users\summer\Documents\Codex\2026-09-20\new-chat\outputs\video-assets`。
+6. **成长页底部「每场比赛：赛前两周练了多少」那张表列宽有问题**：最后一列文字竖排、
+   比赛名折成三行。暗色主题下也一样，是既有布局 bug，跟主题无关，一直没修。
+7. **主题现在有五套**（暗色／亮色／灰色／护眼／赛博），`public/style.css` 顶部是变量块，
+   加新主题照抄一块改颜色即可；样式里凡是 `[data-theme='dark'], [data-theme='gray']` 这种
+   列举写法的选择器，记得把新主题名也加进去（比如 `--danger` 那两处）。
 
 ## 数据安全（这条最重要）
 

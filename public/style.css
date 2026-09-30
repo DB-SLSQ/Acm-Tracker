@@ -115,6 +115,37 @@
   --badge-text: #ffffff;
 }
 
+/* 赛博朋克：深紫黑底 + 品红/青双霓虹。
+   刻意压低了面积——霓虹只出现在边框、强调色和辉光上，
+   大面积底色保持暗，不然看久了眼睛疼，题号也看不清。 */
+[data-theme='cyber'] {
+  --bg: #0a0713;
+  --bg-glow: #1d0b33;
+  --bg-soft: #120c22;
+  --bg-raise: #191033;
+  --bg-topbar: rgba(10, 7, 19, 0.86);
+  --bg-overlay: rgba(18, 12, 34, 0.97);
+  --bg-track: #0d0a1c;
+  --border: #2d2050;
+  --border-strong: #4b2f85;
+  --text: #eae6ff;
+  --text-dim: #a99ed0;
+  --text-faint: #6f6595;
+  --accent: #ff2d95;
+  --accent-hover: #e61f84;
+  --accent-soft: #35124a;
+  --accent-text: #ff8ec4;
+  --accent-alt: #00e5ff;
+  --ok: #00d68f;
+  --ok-text: #5cf0bc;
+  --warn: #ffd166;
+  --warn-text: #ffd166;
+  --card-gradient: linear-gradient(180deg, #1d1140, #150e2b);
+  --card-border: #5a34a0;
+  --hm-empty: #1a1230;
+  --badge-text: #0a0713;
+}
+
 /* ============ 热力图配色 ============
    每一档从「低饱和」过渡到「高饱和」，这样在浅色和深色主题下
    都是「越活跃越显眼」，不会出现浅色主题里越深反而越淡的错觉。 */
@@ -929,8 +960,13 @@ input[type="number"]:focus {
 
 :root,
 [data-theme='dark'],
-[data-theme='gray'] {
+[data-theme='gray'],
+[data-theme='cyber'] {
   --danger: #ff8b8b;
+}
+
+[data-theme='cyber'] {
+  --danger: #ff6b9d;
 }
 
 [data-theme='light'],
@@ -2823,4 +2859,88 @@ body.compact .panel-head h2 {
 .contest-source.src-atcoder {
   background: color-mix(in srgb, #aaaaaa 22%, transparent);
   color: var(--text-dim);
+}
+
+/* ============ 赛博朋克主题：霓虹细节 ============
+   变量层已经换掉了底色和强调色，这里只补三处「一看就是赛博」的东西：
+   侧栏一条品红→青的竖向光带、当前菜单项的青边、以及主按钮的辉光。
+   辉光刻意做得很轻（blur 小、透明度低），不然满屏发光反而看不清字。 */
+
+[data-theme='cyber'] .sidebar {
+  border-right: 1px solid var(--border-strong);
+  background:
+    linear-gradient(180deg, rgba(255, 45, 149, 0.07), transparent 30%),
+    var(--bg-topbar);
+}
+
+/* 侧栏左沿一条霓虹光带 */
+[data-theme='cyber'] .sidebar::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-alt));
+  opacity: 0.85;
+  /* 菜单项是 flex 子元素、绘制在伪元素之上，光带会被盖断。
+     抬到最近一层叠上下文（sidebar 的 z-index:5）之上才压得住。 */
+  z-index: 10;
+}
+
+[data-theme='cyber'] .side-item.active {
+  background: linear-gradient(90deg, rgba(255, 45, 149, 0.22), rgba(0, 229, 255, 0.1));
+  color: #fff;
+  box-shadow: inset 2px 0 0 var(--accent-alt), 0 0 12px rgba(255, 45, 149, 0.22);
+}
+
+[data-theme='cyber'] .btn.primary {
+  box-shadow: 0 0 10px rgba(255, 45, 149, 0.45);
+}
+
+[data-theme='cyber'] .btn.primary:hover {
+  box-shadow: 0 0 16px rgba(255, 45, 149, 0.6);
+}
+
+[data-theme='cyber'] .theme-btn.active {
+  background: linear-gradient(135deg, var(--accent), #b026ff);
+  box-shadow: 0 0 10px rgba(255, 45, 149, 0.5);
+}
+
+/* 标题下面那条分隔线跟着霓虹走 */
+[data-theme='cyber'] .panel-head h2 {
+  text-shadow: 0 0 14px rgba(255, 45, 149, 0.35);
+}
+
+[data-theme='cyber'] .side-brand .brand-mark {
+  text-shadow: 0 0 12px var(--accent-alt);
+}
+
+/* 设置页那组主题按钮放宽一点，五个排得下 */
+.theme-switch-wide {
+  flex-wrap: wrap;
+}
+
+/* 赛博主题下侧栏底部那几个 pill 不要用满饱和品红实心——
+   在暗紫底上会盖过当前菜单项，视线全被拉走。改成描边+淡底。 */
+[data-theme='cyber'] .qq-pill {
+  background: rgba(255, 45, 149, 0.12);
+  color: #ffa8d5;
+}
+
+[data-theme='cyber'] .qq-pill:hover {
+  background: rgba(255, 45, 149, 0.28);
+  color: #fff;
+}
+
+/* 霓虹光带画在菜单之上，避免被菜单项背景盖断 */
+[data-theme='cyber'] .side-item.active {
+  background: linear-gradient(90deg, rgba(255, 45, 149, 0.18), rgba(0, 229, 255, 0.06));
+}
+
+/* 加到五个主题后，侧栏那组按钮在 240px 里排不下会折行。
+   收紧内边距和字号，让「暗色 亮色 灰色 护眼 赛博」挤进一行。 */
+.side-foot .theme-btn {
+  padding: 4px 7px;
+  font-size: 12px;
 }

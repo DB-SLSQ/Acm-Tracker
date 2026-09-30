@@ -241,20 +241,24 @@ function saveSettings(patch) {
 function applyAppearance() {
   document.documentElement.dataset.theme = state.theme;
   document.documentElement.dataset.palette = state.palette;
-  document.querySelectorAll('#theme-switch .theme-btn').forEach((button) => {
+  // 左边菜单底部和设置页各有一组，同步高亮
+  document.querySelectorAll('.theme-btn[data-theme-value]').forEach((button) => {
     button.classList.toggle('active', button.dataset.themeValue === state.theme);
   });
 }
 
 function bindAppearance() {
-  $('theme-switch').addEventListener('click', (event) => {
+  const onClick = (event) => {
     const button = event.target.closest('[data-theme-value]');
     if (!button) return;
     state.theme = button.dataset.themeValue;
     applyAppearance();
     saveSettings({ theme: state.theme });
     if (state.activity) renderHeatmap();
-  });
+  };
+  // 侧栏那组一直存在；设置页那组在面板里，一起绑上
+  $('theme-switch')?.addEventListener('click', onClick);
+  $('theme-switch-settings')?.addEventListener('click', onClick);
 }
 
 function formatClock(totalSeconds) {
@@ -3321,6 +3325,11 @@ const MODULE_META = [
   { id: 'panel-review', label: '补题队列' },
   { id: 'panel-growth', label: '成长' },
   { id: 'panel-tags', label: '能力画像' },
+  { id: 'panel-problems', label: '题库' },
+  { id: 'panel-contests', label: '历年比赛' },
+  { id: 'panel-mashup', label: '拼好题' },
+  { id: 'panel-lists', label: '我的题单' },
+  { id: 'panel-help', label: '帮助' },
 ];
 
 function renderModuleList() {
@@ -3413,7 +3422,7 @@ const LUOGU_SHORT = {
 /** 平台数据面板：每同步一个平台就多一张卡片，洛谷额外画难度分布图。 */
 function renderPlatformCards() {
   if (!state.platforms.length) {
-    // 没同步过就别把这个面板摆出来，免得空占一块
+    // 没同步过就别把这个面板摆出来，免得空占一块
     $('platform-charts').innerHTML =
       '<p class="subtle">还没有同步任何平台。到「设置」里填入洛谷或牛客的用户 ID，点同步即可。</p>';
     return;
