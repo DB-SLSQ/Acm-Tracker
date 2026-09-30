@@ -212,12 +212,18 @@ platform/native_id/native_contest/native_rating）、
   切换入口在两处——侧栏底部那组按钮、以及设置页新增的「外观」区块。
   `applyAppearance` 现在遍历所有 `.theme-btn[data-theme-value]`，所以两处高亮自动同步。
   加了主题后侧栏按钮会折行，`.side-foot .theme-btn` 的内边距收窄过。
+- 修了两个既有 bug：成长页那张表的列宽（一字一行竖排）、
+  做题记录页时间列显示 `Invalid Date`（`toClientProblem` 没带 `firstAcAt`）。
 5. 宣传：B 站发过宣传版和 v0.1.3 更新版；v0.1.7 的更新视频、封面、简介都做好了
    （`.dev\make-video-v017.mjs`、`dist\ACM训练台-v0.1.7更新.mp4`、`outputs\v0.1.7-视频简介.md`），
    发不发看用户；素材同时放在 `C:\Users\summer\Documents\Codex\2026-09-20\new-chat\outputs\video-assets`。
-6. **成长页底部「每场比赛：赛前两周练了多少」那张表列宽有问题**：最后一列文字竖排、
-   比赛名折成三行。暗色主题下也一样，是既有布局 bug，跟主题无关，一直没修。
-7. **主题现在有五套**（暗色／亮色／灰色／护眼／赛博），`public/style.css` 顶部是变量块，
+6. **成长页底部「每场比赛：赛前两周练了多少」那张表**已经修好了（列宽、表头、日期都正常）。
+   修的时候注意：那张表用 `table-layout: fixed` + `colgroup` 定比例，
+   写死在 `public/app.js` 的渲染里；改表头文字要同时看列宽够不够。
+7. **`toClientProblem`（`lib/plan.js`）是字段白名单**：往里加新字段要记得在转换里也列一遍，
+   否则后端查出来了、前端拿到 undefined。做题记录的「Invalid Date」就是这么来的
+   （`db.recentlySolved` 查了 `first_ac`，但转换时没带出来）。
+8. **主题现在有五套**（暗色／亮色／灰色／护眼／赛博），`public/style.css` 顶部是变量块，
    加新主题照抄一块改颜色即可；样式里凡是 `[data-theme='dark'], [data-theme='gray']` 这种
    列举写法的选择器，记得把新主题名也加进去（比如 `--danger` 那两处）。
 
