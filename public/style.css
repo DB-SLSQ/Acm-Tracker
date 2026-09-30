@@ -2861,10 +2861,258 @@ body.compact .panel-head h2 {
   color: var(--text-dim);
 }
 
-/* ============ 赛博朋克主题：霓虹细节 ============
-   变量层已经换掉了底色和强调色，这里只补三处「一看就是赛博」的东西：
-   侧栏一条品红→青的竖向光带、当前菜单项的青边、以及主按钮的辉光。
-   辉光刻意做得很轻（blur 小、透明度低），不然满屏发光反而看不清字。 */
+/* ============ 赛博朋克主题：霓虹与动态 ============
+   配色只解决「像不像」，动态和氛围才决定「赛博不赛博」。
+   这里分三层：
+     1) body 上的网格 + 扫描线（CRT 质感，固定不动，靠 background-attachment: fixed）
+     2) 会动的东西——侧栏光带流动、当前项扫光、品牌标 glitch、按钮呼吸
+     3) 悬停类反馈——卡片顶边霓虹、按钮辉光
+   所有发光都压着做（blur 小、透明度低）：满屏发光会让题目文字读不清，
+   用户视觉敏感，宁可克制。 */
+
+/* ---------- 1. 网格 + 扫描线底纹 ---------- */
+
+[data-theme='cyber'] body {
+  background:
+    /* 扫描线：非常淡，只提供质感，不干扰阅读 */
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.022) 0 1px,
+      transparent 1px 3px
+    ),
+    /* 青紫网格 */
+    linear-gradient(rgba(0, 229, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 45, 149, 0.045) 1px, transparent 1px),
+    /* 顶部那片辉光保留 */
+    radial-gradient(1100px 560px at 50% -180px, var(--bg-glow) 0%, var(--bg) 58%);
+  background-size: 100% 3px, 44px 44px, 44px 44px, 100% 100%;
+  background-attachment: fixed;
+}
+
+/* 一层随页面滚动的极淡横向光晕，让大片深色不死板 */
+[data-theme='cyber'] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(
+    620px 320px at 78% 8%,
+    rgba(0, 229, 255, 0.09),
+    transparent 70%
+  );
+}
+
+/* ---------- 2. 会动的东西 ---------- */
+
+/* 侧栏光带：品红→青循环流动 */
+@keyframes cyber-band-flow {
+  0%   { background-position: 0 0; }
+  100% { background-position: 0 200%; }
+}
+
+[data-theme='cyber'] .sidebar::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: linear-gradient(
+    180deg,
+    var(--accent) 0%,
+    var(--accent-alt) 35%,
+    #b026ff 55%,
+    var(--accent) 100%
+  );
+  background-size: 100% 200%;
+  animation: cyber-band-flow 7s linear infinite;
+  box-shadow: 0 0 10px rgba(255, 45, 149, 0.55);
+  /* 菜单项是 flex 子元素、绘制在伪元素之上，光带会被盖断。
+     抬到最近一层叠上下文（sidebar 的 z-index:5）之上才压得住。 */
+  z-index: 10;
+}
+
+/* 当前菜单项：一道青光从左侧扫过（像扫描进度） */
+@keyframes cyber-sweep {
+  0%       { transform: translateX(-120%); opacity: 0; }
+  12%      { opacity: 0.9; }
+  55%      { opacity: 0.55; }
+  100%     { transform: translateX(320%); opacity: 0; }
+}
+
+[data-theme='cyber'] .side-item.active {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(90deg, rgba(255, 45, 149, 0.2), rgba(0, 229, 255, 0.07));
+  color: #fff;
+  box-shadow: inset 2px 0 0 var(--accent-alt), 0 0 12px rgba(255, 45, 149, 0.22);
+}
+
+[data-theme='cyber'] .side-item.active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 38%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(0, 229, 255, 0.28),
+    transparent
+  );
+  animation: cyber-sweep 3.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* 品牌标：故障抖动（幅度刻意小，别晃眼睛） */
+@keyframes cyber-glitch {
+  0%, 92%, 100% { transform: none; }
+  93%           { transform: translate(-1px, 1px); }
+  95%           { transform: translate(1px, -1px); }
+  97%           { transform: translate(-1px, 0); }
+}
+
+[data-theme='cyber'] .side-brand .brand-mark {
+  display: inline-block;
+  animation: cyber-glitch 5.5s steps(1) infinite;
+  text-shadow:
+    0 0 10px var(--accent-alt),
+    0 0 22px rgba(0, 229, 255, 0.45);
+}
+
+/* 主按钮：呼吸辉光 */
+@keyframes cyber-pulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(255, 45, 149, 0.38); }
+  50%      { box-shadow: 0 0 18px rgba(255, 45, 149, 0.68); }
+}
+
+[data-theme='cyber'] .btn.primary {
+  animation: cyber-pulse 3.2s ease-in-out infinite;
+}
+
+[data-theme='cyber'] .btn.primary:hover {
+  animation: none;
+  box-shadow: 0 0 20px rgba(255, 45, 149, 0.75);
+}
+
+/* 页面标题：底部一条会流光的霓虹线 */
+@keyframes cyber-underline-flow {
+  0%   { background-position: 0 0; }
+  100% { background-position: 200% 0; }
+}
+
+[data-theme='cyber'] .panel-head h2 {
+  position: relative;
+  padding-bottom: 8px;
+  text-shadow:
+    0 0 12px rgba(255, 45, 149, 0.42),
+    0 0 26px rgba(176, 38, 255, 0.22);
+}
+
+[data-theme='cyber'] .panel-head h2::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 54px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--accent),
+    var(--accent-alt),
+    var(--accent)
+  );
+  background-size: 200% 100%;
+  animation: cyber-underline-flow 4s linear infinite;
+}
+
+/* ---------- 3. 卡片与静态霓虹 ---------- */
+
+/* 卡片顶边一道霓虹渐变（靠 inset 阴影，不改布局） */
+[data-theme='cyber'] .panel {
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(255, 45, 149, 0.045), transparent 120px),
+    var(--bg-soft);
+  border-color: var(--border-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(0, 229, 255, 0.16),
+    0 0 0 1px rgba(255, 45, 149, 0.06),
+    0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+/* 数据卡片（今日任务那种）再加一层外辉光，突出重点 */
+[data-theme='cyber'] .today-card,
+[data-theme='cyber'] .stats > * {
+  border-color: rgba(0, 229, 255, 0.28);
+  box-shadow:
+    inset 0 0 22px rgba(0, 229, 255, 0.05),
+    0 6px 24px rgba(0, 0, 0, 0.32);
+}
+
+/* 输入框与下拉：青色描边 + 聚焦时发光 */
+[data-theme='cyber'] input[type='text'],
+[data-theme='cyber'] input[type='number'],
+[data-theme='cyber'] input[type='time'],
+[data-theme='cyber'] select {
+  border-color: rgba(0, 229, 255, 0.3);
+}
+
+[data-theme='cyber'] input:focus,
+[data-theme='cyber'] select:focus {
+  border-color: var(--accent-alt);
+  box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.22), 0 0 12px rgba(0, 229, 255, 0.28);
+}
+
+/* 表格表头：青色下划线 */
+[data-theme='cyber'] .problem-table th,
+[data-theme='cyber'] .growth-head td {
+  border-bottom-color: rgba(0, 229, 255, 0.35);
+  color: var(--accent-alt);
+}
+
+/* 难度徽章在深紫底上再亮一档，保证可读 */
+[data-theme='cyber'] .theme-btn.active {
+  background: linear-gradient(135deg, var(--accent), #b026ff);
+  box-shadow: 0 0 12px rgba(255, 45, 149, 0.55);
+}
+
+[data-theme='cyber'] .side-item:hover {
+  background: rgba(0, 229, 255, 0.08);
+  color: #fff;
+}
+
+/* 滚动条也入戏 */
+[data-theme='cyber'] ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+[data-theme='cyber'] ::-webkit-scrollbar-track {
+  background: var(--bg-track);
+}
+
+[data-theme='cyber'] ::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--accent), #b026ff);
+  border-radius: 6px;
+}
+
+/* ---------- 4. 动画总开关 ---------- */
+/* 系统里开了「减少动态效果」就全部停掉，只留静态霓虹。
+   这类全屏循环动画对前庭敏感的人不友好，不能硬塞。 */
+@media (prefers-reduced-motion: reduce) {
+  [data-theme='cyber'] .sidebar::before,
+  [data-theme='cyber'] .side-item.active::after,
+  [data-theme='cyber'] .side-brand .brand-mark,
+  [data-theme='cyber'] .btn.primary,
+  [data-theme='cyber'] .panel-head h2::after {
+    animation: none;
+  }
+}
+
 
 [data-theme='cyber'] .sidebar {
   border-right: 1px solid var(--border-strong);
@@ -2873,48 +3121,7 @@ body.compact .panel-head h2 {
     var(--bg-topbar);
 }
 
-/* 侧栏左沿一条霓虹光带 */
-[data-theme='cyber'] .sidebar::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: linear-gradient(180deg, var(--accent), var(--accent-alt));
-  opacity: 0.85;
-  /* 菜单项是 flex 子元素、绘制在伪元素之上，光带会被盖断。
-     抬到最近一层叠上下文（sidebar 的 z-index:5）之上才压得住。 */
-  z-index: 10;
-}
-
-[data-theme='cyber'] .side-item.active {
-  background: linear-gradient(90deg, rgba(255, 45, 149, 0.22), rgba(0, 229, 255, 0.1));
-  color: #fff;
-  box-shadow: inset 2px 0 0 var(--accent-alt), 0 0 12px rgba(255, 45, 149, 0.22);
-}
-
-[data-theme='cyber'] .btn.primary {
-  box-shadow: 0 0 10px rgba(255, 45, 149, 0.45);
-}
-
-[data-theme='cyber'] .btn.primary:hover {
-  box-shadow: 0 0 16px rgba(255, 45, 149, 0.6);
-}
-
-[data-theme='cyber'] .theme-btn.active {
-  background: linear-gradient(135deg, var(--accent), #b026ff);
-  box-shadow: 0 0 10px rgba(255, 45, 149, 0.5);
-}
-
-/* 标题下面那条分隔线跟着霓虹走 */
-[data-theme='cyber'] .panel-head h2 {
-  text-shadow: 0 0 14px rgba(255, 45, 149, 0.35);
-}
-
-[data-theme='cyber'] .side-brand .brand-mark {
-  text-shadow: 0 0 12px var(--accent-alt);
-}
+/* 侧栏左沿那条霓虹光带见上面「会动的东西」一节 */
 
 /* 设置页那组主题按钮放宽一点，五个排得下 */
 .theme-switch-wide {
@@ -2931,11 +3138,6 @@ body.compact .panel-head h2 {
 [data-theme='cyber'] .qq-pill:hover {
   background: rgba(255, 45, 149, 0.28);
   color: #fff;
-}
-
-/* 霓虹光带画在菜单之上，避免被菜单项背景盖断 */
-[data-theme='cyber'] .side-item.active {
-  background: linear-gradient(90deg, rgba(255, 45, 149, 0.18), rgba(0, 229, 255, 0.06));
 }
 
 /* 加到五个主题后，侧栏那组按钮在 240px 里排不下会折行。
