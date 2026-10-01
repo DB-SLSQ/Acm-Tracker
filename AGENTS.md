@@ -27,7 +27,8 @@ npm.cmd run sync       # 手动刷新题库
 - 开发模式：项目里的 `data\trainer.db`（已被 .gitignore 忽略）
 - 表：`problems`（题库缓存）、`submissions`、`rating_history`、`users`、`contests`、
   `settings`（键值）、`meta`（含训练好的模型 JSON）、`model_samples`（训练样本）、
-  `blocked_problems`、`progress`、`platform_stats`、`virtual_sessions`
+  `blocked_problems`、`progress`、`platform_stats`、`virtual_sessions`、
+  `teams` / `team_members` / `team_assignments`（团队训练）
 
 ## 代码约定
 
@@ -43,7 +44,8 @@ npm.cmd run sync       # 手动刷新题库
 训练日程（按天排，支持休息日和临时没空、题目顺延）、
 活动热力图（5 种配色）、平台数据（洛谷难度分布 + 牛客）、做题记录（屏蔽的题可恢复、
 做过的题按通过时间倒序）、能力画像（8 大方向 75 分位 + 置信度）、比赛日历、虚拟参赛、
-设置（模块开关、五套主题、水平评估的排除区间、单个标签占比上限、推题模型训练）。
+设置（模块开关、五套主题、水平评估的排除区间、单个标签占比上限、推题模型训练）、
+**团队训练**（建队 + 加成员、按知识方向自动分工、团队总览、队内不撞题地排题）。
 
 题量分配是**按知识方向的配额制**：八个方向差不多，弱项多分一两道（权重 1 + 0.4 × 强度，
 最大余数法取整）。实测 99 题的题单分到 16/14/13/13/13/13/13/4（字符串那档是题源不够，
@@ -111,6 +113,21 @@ npm.cmd run sync       # 手动刷新题库
   新字段要手动补进白名单（漏了就是前端 `Invalid Date` 这种症状）。
 - **长表格列宽用 `table-layout: fixed` + `colgroup`**：表头短、数据长的表格靠 `min-width`
   调不动（表头和数据行各算各的）。改表头文字要连列宽一起改，否则会退化成「一字一行竖排」。
+- **`public/app.js` 是 ES module，函数不在 `window` 上**：验证脚本只能靠 DOM 点击驱动，
+  `executeJavaScript('loadTeams()')` 会 `is not defined`。`executeJavaScript` 的返回值还必须
+  可结构化克隆（返回 `undefined` / DOM 对象会报 `Script failed to execute`），顶层 `await`
+  要包在 async IIFE 里。
+- **隐藏窗口（`show:false`）的 `capturePage()` 只能拿到已绘制帧**：滚动后再截不可靠，
+  截长页面就开一个够高的窗口一次装下整页（团队页用了 1440×2400）。
+- **排题要防同一分值被反复取满**：洛谷每个难度档只有一个分值，光「取最接近理想分」会让整份
+  题单挤在一个分上。给距离加重复惩罚（`cost = |rating - wantRating| + 该分值已取次数 × 60`）。
+- **队内分工只有主攻必须不重叠**，副方向是补短板、允许和别人主攻重叠；三个人的时候八方向
+  被主攻占满，副方向若也要求不重叠会一个都分不出来。
+- **队内排题要共享一个「已取题」集合**，否则三个人的计划会互相撞题。
+- **重做测试库副本（`.dev\data-verify`）别用 `cp`**：上次崩溃残留的 `trainer.db-wal` 会被 SQLite
+  重放，把新拷的库搞成 `database disk image is malformed`（症状像功能坏了，其实是数据坏了）。
+  用 `VACUUM INTO` 生成无 WAL 的单文件副本；这个环境沙箱还会拦删除，坏副本删不掉时要换新目录
+  （`verify-team.mjs` 认 `ACM_TRAINER_VERIFY_DIR`）。
 - **CSS 改动的验证方式是截图**，`public/app.js` / `index.html` 的改动用 `.dev\*.mjs` 走一遍页面。
 
 ## 宣传素材

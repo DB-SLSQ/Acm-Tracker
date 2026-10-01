@@ -90,6 +90,18 @@ const state = {
   blocked: [],
   solved: [],
   solvedTotal: 0,
+  // 团队训练：队伍列表、当前选中的队伍、队伍详情（成员+总览）、分工与排题结果
+  team: {
+    loaded: false,
+    teams: [],
+    current: null,
+    detail: null,
+    plan: null,
+    perMember: 6,
+    target: 1900,
+    busy: false,
+    error: null,
+  },
 };
 
 const THEME_LABELS = { dark: '暗色', light: '亮色', gray: '灰色', eye: '护眼' };
@@ -1486,6 +1498,340 @@ function renderLists() {
     .join('');
 }
 
+// ---------------------------------------------------------------------------
+// 团队训练
+//
+// 和单人计划最大的差别：这里没有「当前登录的人」这个概念，一屏上同时要看三个人。
+// 所以界面按「先选队伍 → 看队员 → 看分工 → 看排题」四段往下排，
+// 不用 tab 切来切去（数据量小，一屏放得下，切 tab 反而要多点好几下）。
+// ---------------------------------------------------------------------------
+
+async function loadTeams() {
+  try {
+    const data = await getJson('/api/team');
+    state.team.teams = data.teams ?? [];
+    state.team.loaded = true;
+    if (state.team.teams.length) {
+      const stillThere = state.team.teams.some((t) => t.id === state.team.current);
+      if (!stillThere) state.team.current = state.team.teams[0].id;
+      await loadTeamDetail(state.team.current, { keepPlan: true });
+    } else {
+      state.team.current = null;
+      state.team.detail = null;
+      state.team.plan = null;
+    }
+    renderTeam();
+    markViewReady('panel-team');
+  } catch (error) {
+    state.team.error = error.message;
+    renderTeam();
+  }
+}
+
+async function loadTeamDetail(id, { keepPlan = false } = {}) {
+  if (!id) return;
+  const detail = await getJson(`/api/team/${encodeURIComponent(id)}`);
+  state.team.current = id;
+  state.team.detail = detail;
+  state.team.error = null;
+  // 切队伍时旧队伍的排题结果就失效了，清掉免得看串
+  state.team.plan = null;
+  renderTeam();
+  markViewReady('panel-team');
+  if (keepPlan) return;
+}
+
+async function createTeam() {
+  const name = window.prompt('给队伍起个名字', '我的队伍');
+  if (name === null) return;
+  try {
+    const { team } = await postJson('/api/team', { name: name.trim() });
+    state.team.current = team.id;
+    await loadTeams();
+  } catch (error) {
+    state.team.error = error.message;
+    renderTeam();
+  }
+}
+
+async function renameTeam() {
+  const current = state.team.teams.find((t) => t.id === state.team.current);
+  if (!current) return;
+  const name = window.prompt('改个队名', current.name);
+  if (name === null || !name.trim()) return;
+  try {
+    await postJson(`/api/team/${current.id}`, { name: name.trim() }, 'PATCH');
+    await loadTeams();
+  } catch (error) {
+    state.team.error = error.message;
+    renderTeam();
+  }
+}
+
+async function deleteTeam() {
+  const current = state.team.teams.find((t) => t.id === state.team.current);
+  if (!current) return;
+  // 说清楚「只删队伍、不动训练数据」——不然用户会怕把队友的进度删了
+  if (!window.confirm(`删除队伍「${current.name}」？\n\n只删这支队伍和它的分工记录，队员各自的训练计划、做题进度都不动。`)) {
+    return;
+  }
+  try {
+    await postJson(`/api/team/${current.id}`, {}, 'DELETE');
+    state.team.current = null;
+    state.team.plan = null;
+    await loadTeams();
+  } catch (error) {
+    state.team.error = error.message;
+    renderTeam();
+  }
+}
+
+async function addTeamMember() {
+  const input = $('team-member-input');
+  const handle = input.value.trim();
+  if (!handle) return;
+  const role = $('team-member-role').value;
+  const teamId = state.team.current;
+  state.team.busy = true;
+  renderTeam();
+  try {
+    // 加人会联网抓一次这个账号的数据，慢，状态栏要说清在等什么
+    setStatus(`正在读取 ${handle} 的数据…`, { busy: true });
+    const result = await postJson(`/api/team/${teamId}/members`, { handle, role });
+    input.value = '';
+    setStatus(result.warning ? result.warning : `${handle} 已加入队伍`);
+    await loadTeamDetail(teamId, { keepPlan: true });
+  } catch (error) {
+    setStatus(`加入失败：${error.message}`);
+    state.team.error = error.message;
+  } finally {
+    state.team.busy = false;
+    renderTeam();
+  }
+}
+
+async function removeTeamMember(handle) {
+  const teamId = state.team.current;
+  if (!teamId) return;
+  try {
+    await postJson(
+      `/api/team/${teamId}/members?handle=${encodeURIComponent(handle)}`,
+      {},
+      'DELETE',
+    );
+    await loadTeamDetail(teamId, { keepPlan: true });
+  } catch (error) {
+    state.team.error = error.message;
+    renderTeam();
+  }
+}
+
+async function reassignAxes() {
+  const teamId = state.team.current;
+  if (!teamId) return;
+  state.team.busy = true;
+  renderTeam();
+  try {
+    await postJson(`/api/team/${teamId}/assign`, {});
+    setStatus('方向已重新分配');
+    await loadTeamDetail(teamId, { keepPlan: true });
+  } catch (error) {
+    setStatus(`分配失败：${error.message}`);
+    state.team.error = error.message;
+  } finally {
+    state.team.busy = false;
+    renderTeam();
+  }
+}
+
+async function generateTeamPlan() {
+  const teamId = state.team.current;
+  if (!teamId) return;
+  const perMember = Math.min(50, Math.max(1, Number($('team-per-member').value) || 6));
+  const target = Math.min(4000, Math.max(800, Number($('team-target').value) || 1900));
+  state.team.perMember = perMember;
+  state.team.target = target;
+  state.team.busy = true;
+  renderTeam();
+  try {
+    setStatus('正在按分工排题…', { busy: true });
+    const data = await getJson(
+      `/api/team/${encodeURIComponent(teamId)}/plan?perMember=${perMember}&target=${target}`,
+    );
+    state.team.plan = data;
+    setStatus(`排好了：${data.members.length} 人各 ${perMember} 道`);
+  } catch (error) {
+    setStatus(`排题失败：${error.message}`);
+    state.team.error = error.message;
+  } finally {
+    state.team.busy = false;
+    renderTeam();
+  }
+}
+
+/** 八个方向的固定顺序，显示用。和 lib/knowledge.js 的 KNOWLEDGE_AXES 保持一致。 */
+const TEAM_AXES = [
+  '基础与模拟',
+  '数据结构',
+  '图论与树',
+  '动态规划',
+  '数学',
+  '字符串',
+  '搜索与构造',
+  '贪心与思维',
+];
+
+function renderTeam() {
+  const team = state.team;
+  const select = $('team-select');
+  const busy = team.busy;
+
+  if (team.error) {
+    $('team-empty').classList.remove('hidden');
+    $('team-empty').innerHTML = `<p class="team-error">${escapeHtml(team.error)}</p>`;
+    $('team-body').classList.add('hidden');
+    if (select) select.innerHTML = '<option value="">（读取失败）</option>';
+    return;
+  }
+
+  if (!team.teams.length) {
+    $('team-empty').classList.remove('hidden');
+    $('team-empty').innerHTML =
+      '<p>还没有队伍。点上面的「新建队伍」，然后把队友的账号加进来。</p>';
+    $('team-body').classList.add('hidden');
+    if (select) select.innerHTML = '<option value="">（没有队伍）</option>';
+    return;
+  }
+
+  $('team-empty').classList.add('hidden');
+  $('team-body').classList.remove('hidden');
+
+  select.innerHTML = team.teams
+    .map(
+      (t) =>
+        `<option value="${t.id}"${t.id === team.current ? ' selected' : ''}>${escapeHtml(t.name)}（${t.memberCount} 人）</option>`,
+    )
+    .join('');
+
+  const detail = team.detail;
+  if (!detail) return;
+  const members = detail.members ?? [];
+
+  // ---- 队员卡片 ----
+  $('team-members').innerHTML = members.length
+    ? members.map((m) => {
+        const roleLabel = { leader: '队长', coach: '教练', member: '队员' }[m.role] ?? '队员';
+        const last = m.lastActive
+          ? `${m.lastActive} 还在动`
+          : '还没有做题记录';
+        return `<div class="team-member-card">
+          <div class="team-member-top">
+            <b>${escapeHtml(m.display)}</b>
+            <span class="team-role">${roleLabel}</span>
+            <button type="button" class="btn members-remove" data-team-remove="${escapeHtml(m.handleKey)}"
+                    ${busy ? 'disabled' : ''}>移出</button>
+          </div>
+          <div class="team-member-stat">
+            ${ratingBadge(m.rating)}
+            <span>做题 <b>${m.solvedCount}</b></span>
+            <span>近 7 天 <b>${m.solvedThisWeek}</b></span>
+          </div>
+          <div class="team-member-last">${escapeHtml(last)}</div>
+        </div>`;
+      }).join('')
+    : '<p class="subtle">还没有队员。在上面输入账号，点「加入」。</p>';
+
+  // ---- 分工矩阵：八个方向 × 谁主攻 ----
+  // 用矩阵而不是每人一张卡：分工的意义就是「不重叠」，一眼扫一列就知道
+  // 每个方向归谁，比分开看三张卡更容易发现"两个人撞了"。
+  // 数据来源是 detail.assignment（钉住的那份分工），不是 members——
+  // 成员画像里没有"他主攻哪块"，分工是单独一张表。
+  if (!members.length) {
+    $('team-assignment').innerHTML = '<p class="subtle">先加队员，再分配方向。</p>';
+  } else {
+    // 排过题的话用排题返回的那份（可能刚重算过），否则用详情里的
+    const assignList = team.plan?.assignment ?? detail.assignment ?? [];
+    const mainOf = new Map(); // axis -> {handleKey, display}
+    const subOf = new Map(); // axis -> [display]
+    for (const a of assignList) {
+      for (const axis of a.main ?? []) mainOf.set(axis, a);
+      for (const axis of a.sub ?? []) {
+        const list = subOf.get(axis) ?? [];
+        list.push(a.display ?? a.handleKey);
+        subOf.set(axis, list);
+      }
+    }
+    $('team-assignment').innerHTML = `<div class="team-matrix">${TEAM_AXES.map((axis) => {
+      const main = mainOf.get(axis);
+      const subs = subOf.get(axis) ?? [];
+      return `<div class="team-axis ${main ? 'has-main' : ''}">
+        <span class="team-axis-name">${escapeHtml(axis)}</span>
+        <span class="team-axis-main">${main ? escapeHtml(main.display ?? main.handleKey) : '<span class="subtle">待分配</span>'}</span>
+        ${subs.length ? `<span class="team-axis-sub">副：${subs.map((s) => escapeHtml(s)).join(' ')}</span>` : ''}
+      </div>`;
+    }).join('')}</div>
+    <p class="hint">点「重新分配方向」会按最新的做题数据重算一遍。想固定下来就保持不动，
+      之后排题一直用这份分工。</p>`;
+  }
+
+  // ---- 进度总览 ----
+  $('team-overview').innerHTML = members.length
+    ? `<table class="team-table">
+        <thead><tr><th>队员</th><th>rating</th><th>累计做题</th><th>近 7 天</th><th>强项</th><th>待补</th></tr></thead>
+        <tbody>${members
+          .map((m) => {
+            const st = (m.strengths ?? [])
+              .map((s) => `<span class="axis-chip">${escapeHtml(s.axis)}</span>`)
+              .join('');
+            const wk = (m.weaknesses ?? [])
+              .map((s) => `<span class="axis-chip weak">${escapeHtml(s.axis)}</span>`)
+              .join('');
+            return `<tr>
+              <td>${escapeHtml(m.display)}</td>
+              <td>${m.rating ?? '—'}</td>
+              <td>${m.solvedCount}</td>
+              <td>${m.solvedThisWeek}</td>
+              <td>${st || '<span class="subtle">—</span>'}</td>
+              <td>${wk || '<span class="subtle">—</span>'}</td>
+            </tr>`;
+          })
+          .join('')}</tbody>
+      </table>`
+    : '<p class="subtle">还没有队员。</p>';
+
+  // ---- 团队排题结果 ----
+  const plan = team.plan;
+  if (!plan || !plan.members?.length) {
+    $('team-plan').innerHTML = members.length
+      ? '<p class="subtle">点右上角「排题」，按队内分工给每个人排一份。</p>'
+      : '';
+    return;
+  }
+  $('team-plan').innerHTML = plan.members
+    .map((m) => {
+      const focusLabel = { main: '主攻', sub: '副', other: '综合' };
+      const rows = m.problems
+        .map(
+          (p) => `<div class="bank-row">
+            <span class="record-code">${escapeHtml(p.code)}</span>
+            <span class="bank-name"><a href="${p.url}" target="_blank" rel="noreferrer">${escapeHtml(p.name)}</a>${platformBadge(p)}</span>
+            <span>${ratingBadge(p.rating)}</span>
+            <span class="focus-chip focus-${p.focus}">${focusLabel[p.focus] ?? ''}</span>
+          </div>`,
+        )
+        .join('');
+      return `<div class="team-plan-member">
+        <div class="team-plan-head">
+          <b>${escapeHtml(m.display)}</b>
+          <span class="subtle">rating ${m.rating ?? '—'}　练习区间 ${m.band.lo}~${m.band.hi}</span>
+          <span class="team-plan-main">主攻：${(m.main ?? []).map((a) => escapeHtml(a)).join('、') || '—'}</span>
+        </div>
+        ${rows}
+      </div>`;
+    })
+    .join('');
+}
+
 function openListEditor(mode) {
   // mode: 'new' 新建题单，'append' 往当前题单里追加
   listState.editing = listState.all.length ? mode : 'new';
@@ -1599,6 +1945,33 @@ $('lists-items')?.addEventListener('click', (event) => {
   if (!button) return;
   const [contestId, index] = button.dataset.listRemove.split('-');
   removeListItem(Number(contestId), index);
+});
+
+// ---------- 团队训练 ----------
+
+$('team-select')?.addEventListener('change', (event) => {
+  if (event.target.value) loadTeamDetail(event.target.value);
+});
+$('team-new')?.addEventListener('click', createTeam);
+$('team-rename')?.addEventListener('click', renameTeam);
+$('team-delete')?.addEventListener('click', deleteTeam);
+$('team-add-member')?.addEventListener('click', addTeamMember);
+// 输入框里按回车等于点「加入」，不然加三个人要点六下
+$('team-member-input')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addTeamMember();
+  }
+});
+$('team-reassign')?.addEventListener('click', reassignAxes);
+$('team-generate')?.addEventListener('click', generateTeamPlan);
+// 移出队员：事件委托，队员卡片是动态渲染的
+$('team-members')?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-team-remove]');
+  if (!button) return;
+  const handle = button.dataset.teamRemove;
+  if (!window.confirm(`把 ${handle} 移出队伍？\n\n只移出这支队伍，他的训练数据不动。`)) return;
+  removeTeamMember(handle);
 });
 
 // ---------- 拼好题：一场 CF + 一场 AtCoder ----------
@@ -3237,6 +3610,7 @@ const NAV_ITEMS = [
   { id: 'panel-overview', label: '当前水平', icon: '📊' },
   { id: 'panel-target', label: '目标设置', icon: '🎯', group: '训练' },
   { id: 'panel-plan', label: '训练计划', icon: '📋' },
+  { id: 'panel-team', label: '团队训练', icon: '👥' },
   { id: 'panel-schedule', label: '训练日程', icon: '🗓' },
   { id: 'panel-review', label: '补题队列', icon: '🧾' },
   { id: 'panel-problems', label: '题库', icon: '📚' },
@@ -3308,6 +3682,8 @@ $('side-nav').addEventListener('click', (event) => {
   // 拼好题第一次进来就先拼一套，不用先点按钮
   if (button.dataset.view === 'panel-mashup' && !mashupData) rollMashup();
   if (button.dataset.view === 'panel-lists') loadLists();
+  // 团队页第一次进来先拉一次队伍列表，省得看到空页面
+  if (button.dataset.view === 'panel-team' && !state.team.loaded) loadTeams();
 });
 
 window.addEventListener('hashchange', () => {
@@ -3321,6 +3697,7 @@ const MODULE_META = [
   { id: 'panel-overview', label: '当前水平' },
   { id: 'panel-target', label: '目标设置' },
   { id: 'panel-plan', label: '训练计划' },
+  { id: 'panel-team', label: '团队训练' },
   { id: 'panel-schedule', label: '训练日程' },
   { id: 'panel-calendar', label: '比赛日历' },
   { id: 'panel-virtual', label: '虚拟参赛' },
@@ -3887,6 +4264,7 @@ async function restoreSession() {
 
   if (!settings?.handle) {
     setStatus('未连接');
+    if (state.view === 'panel-team' && !state.team.loaded) loadTeams();
     return;
   }
 
@@ -3912,6 +4290,8 @@ async function restoreSession() {
   renderTodayCard();
   // 设置读完再起提醒，不然会把「已设好的提醒时间」当成没设
   startReminder();
+  // 冷启动直接落在团队页（地址栏 #/team）：这时上面的懒加载挂点没触发，补一次
+  if (state.view === 'panel-team' && !state.team.loaded) loadTeams();
 }
 
 // ---------- 题单筛选与导出 ----------

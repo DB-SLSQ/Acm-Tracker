@@ -9,8 +9,12 @@
 
 ## 一句话现状
 
-**v1.0.5 已经写完、打包、发布**（标签 `v1.0.5`，GitHub Actions 自动建了 Release，附件是安装包）。
-`main` 分支干净、和远端同步；桌面上装的那份也是 1.0.5；安装包在
+**v1.0.5 已发布**（标签 `v1.0.5`，GitHub Actions 自动建了 Release，附件是安装包）；
+在这之上工作区里又加了**「团队训练」这一页（未发布）**，改动集中在 6 个文件：
+`lib/db.js` / `lib/plan.js` / `server.js` / `public/index.html` / `public/app.js` / `public/style.css`。
+验证脚本 `.dev\verify-team.mjs` 17 项全通过，五套主题截图人工核对过。**还没写更新说明、没发版。**
+
+`main` 分支和远端同步到了 1.0.5；桌面上装的那份是 1.0.5；安装包在
 `D:\Acm-Tracker\dist\ACM Trainer Setup 1.0.5.exe`。
 （桌面上还留了一份 1.0.5 之前的备份 `ACM Trainer.bak-104`，确认新版没问题后可以删。）
 
@@ -51,6 +55,18 @@ node_modules\electron\dist\electron.exe .dev\verify-tracker-pages.mjs # 题库 +
 这些脚本都用 `ACM_TRAINER_DATA_DIR=.dev/data-verify`（开发库的副本），
 **不会动用户的真实数据**；要重跑先 `Copy-Item data\trainer.db .dev\data-verify\trainer.db -Force`。
 
+团队功能的验证脚本是 `.dev\verify-team.mjs`（17 项 + 五套主题截图 + 整页图 `team-full.png`）：
+
+```powershell
+# 重跑前刷一份副本：用 VACUUM INTO，别用 cp（原因见坑 22）
+node -e "const {DatabaseSync}=require('node:sqlite');const fs=require('fs');fs.mkdirSync('.dev/data-verify2',{recursive:true});const s=new DatabaseSync('data/trainer.db',{readOnly:true});s.exec(\"VACUUM INTO '.dev/data-verify2/trainer.db'\");s.close();"
+unset ELECTRON_RUN_AS_NODE
+$env:ACM_TRAINER_VERIFY_DIR='.dev/data-verify2'
+node_modules\electron\dist\electron.exe .dev\verify-team.mjs
+```
+
+（默认数据目录还是 `.dev\data-verify`；`ACM_TRAINER_VERIFY_DIR` 是给副本坏掉时换目录用的。）
+
 发布流程（改完要发版时）：
 
 1. 改 `package.json` 的 `version`
@@ -81,18 +97,18 @@ node_modules\electron\dist\electron.exe .dev\verify-tracker-pages.mjs # 题库 +
 ## 代码地图
 
 ```
-server.js              本地服务 + 全部接口（约 3000 行，路由都写在 route() 里，共 44 个 /api/）
+server.js              本地服务 + 全部接口（约 3200 行，路由都写在 route() 里；团队接口见下方）
 lib/cf.js              Codeforces 官方 API（题目、提交、比赛、rating）
 lib/atcoder.js         AtCoder：Kenkoooo 的题目表 / 难度 / 提交记录 / 用户统计
 lib/luogu.js           洛谷题库：按难度档等距抽页抓取
 lib/platforms.js       洛谷练习页、牛客；fetchLuoguText() 处理洛谷的 cookie 挑战
-lib/plan.js            挑题算法（方向配额、四档均分、难度自适应、deriveProgress）
-lib/db.js              node:sqlite 封装：建表、迁移、所有 SQL（约 1700 行）
+lib/plan.js            挑题算法（方向配额、四档均分、难度自适应、deriveProgress；**团队分工与排题也在这**，约 1325 行）
+lib/db.js              node:sqlite 封装：建表、迁移、所有 SQL（约 1900 行）
 lib/contests.js        比赛分档解析（Div. 1/2/3、Educational…）与适合度判断
 lib/model.js           推题模型（逻辑回归，训练好才启用）
 public/index.html      所有页面（<section class="panel" id="panel-xxx">）
-public/app.js          全部前端逻辑（约 4400 行；导航项是 NAV_ITEMS，页面切换用 showView）
-public/style.css       全部样式（约 2800 行，CSS 变量控制四套主题）
+public/app.js          全部前端逻辑（约 4600 行；导航项是 NAV_ITEMS，页面切换用 showView）
+public/style.css       全部样式（约 3470 行，CSS 变量控制五套主题）
 public/schedule.js     日程排布（按天把题排开，考虑休息日/没空的天）
 public/selftest.html   计划自检页
 electron/main.js       桌面入口：起服务 + 开窗口，打包后数据目录 = %APPDATA%\acm-trainer\data
@@ -106,18 +122,64 @@ electron/main.js       桌面入口：起服务 + 开窗口，打包后数据目
 3. `server.js`：在 `route()` 里加接口；数据尽量走 `allProblems()`（有缓存）或 `db.xxx`
 4. 需要新表就在 `lib/db.js` 的建表块里加 `CREATE TABLE IF NOT EXISTS`（老库升级靠 `db.exec`）
 
-现在的导航（18 页）：
-当前水平 / 目标设置 / 训练计划 / 训练日程 / 补题队列 / 题库 / 历年比赛 / 拼好题 / 我的题单 /
+现在的导航（19 页，比 1.0.5 多了「团队训练」）：
+当前水平 / 目标设置 / 训练计划 / **团队训练** / 训练日程 / 补题队列 / 题库 / 历年比赛 / 拼好题 / 我的题单 /
 能力画像 / 成长 / 做题记录 / 活动记录 / 比赛日历 / 虚拟参赛 / 平台数据 / 帮助 / 设置。
 
-数据表（28 张，其中 `sqlite_sequence` 是 SQLite 自带的）：`problems`（题库缓存，含
+数据表（31 张，其中 `sqlite_sequence` 是 SQLite 自带的）：`problems`（题库缓存，含
 platform/native_id/native_contest/native_rating）、
 `submissions`、`rating_history`、`users`、`contests`、`atcoder_contests`（比赛 id 映射）、
 `luogu_ids`、`settings`、`meta`（各种缓存 JSON）、`model_samples`、`blocked_problems`、
 `progress`（打勾）、`platform_stats`、`virtual_sessions`、`plan_snapshots`（钉住的计划）、
 `plan_swaps`、`plan_defer`、`plan_adjust`、`extra_tasks`（补一个方向）、`schedule_extras`、
 `problem_feedback`（做题手感）、`review_done`、`growth_snapshots`、`known_handles`、
-`problem_lists` + `problem_list_items`（我的题单）。
+`problem_lists` + `problem_list_items`（我的题单）、
+`teams` + `team_members` + `team_assignments`（团队训练，见下节）。
+
+## 团队训练（本轮新加，未发布）
+
+给 ACM 队伍三人各自分配方向和题目，避免三人练重。**数据层天然是按人隔离的**：`progress`、
+`plan_snapshots`、`submissions`、`users` 等 17 张表的主键第一维就是 `handle_key`，所以团队模式
+不需要重构数据模型，只加了一层「队伍」概念。
+
+**三张新表**（`lib/db.js` 建表块）：
+
+```sql
+teams(id TEXT PK, name, created_at)                      -- id 是随机串，不是自增
+team_members(team_id, handle_key, role, added_at)         -- PK(team_id, handle_key)
+team_assignments(team_id, handle_key, axis, kind, updated_at) -- PK(team_id, handle_key, axis)
+```
+
+`team_assignments.kind` 是 `main` / `sub`（主攻 / 副攻）。**删队伍只删这三张表里该队的行，
+绝不动成员的训练数据**；删成员会连带清掉他在该队的分工。
+
+**两个算法**（`lib/plan.js` 末尾）：
+
+- `assignAxes(members, {subPerMember: 2})` —— 队内分工。用贪心：每次取全局最大
+  `(该成员该方向的 gapVsSelf) - 已拿方向数 × 120`；名额 `base = floor(8/n)` 的余数给前几个
+  （3 人 → 3/3/2，2 人 → 4/4，1 人 → 8）。**只有主攻必须不重叠**；副方向允许和别人主攻重叠，
+  因为它就是「补自己最弱的那块」。
+- `buildTeamPlans(members, {problems, target, perMember, tagShare, blocked, now})` —— 团队排题。
+  队内**共享一个 `assignedKeys` 集合保证不撞题**。每人区间跟自己的水平走
+  （`center = max(800, round((rating+target)/2/50)*50)`，`lo = center-150`，`hi = center+500`）。
+  难度梯度靠「每个取题槽位盯一个不同的目标分」：`LADDER_TIER_OFFSETS` 映射成
+  `center + [-150, 50, 250, 450]` 四个目标分轮转。focus 顺序是 `['main','main','sub','other']`，
+  所以 8 道大约 4 主 / 2 副 / 2 其他。实测三道题单跨 650 分（1550→2200）、4 CF + 4 洛谷、零撞题。
+
+**接口**（`server.js`，都挂在 `/api/team` 下）：`GET/POST /api/team`（列表/建队）、
+`GET/PATCH/DELETE /api/team/:id`（总览/改名/删队）、`POST /api/team/:id/members`、
+`DELETE /api/team/:id/members?handle=X`、`POST /api/team/:id/assign`（重算分工）、
+`GET /api/team/:id/plan`（团队排题）。总览接口会顺带返回 `assignment`，
+**没分过或成员变了就现场分一份存下来**，保证前端的分工矩阵永远不为空。
+
+前端在 `public/app.js`：`state.team` + `loadTeams() / loadTeamDetail() / createTeam() /
+addTeamMember() / reassignAxes() / generateTeamPlan() / renderTeam()`，页面在
+`#panel-team`，样式在 `public/style.css` 末尾（全走 CSS 变量，五套主题自动适配）。
+分工矩阵的数据源要用 `team.plan?.assignment ?? detail.assignment`——**成员画像里没有
+「他主攻哪块」，只能从 assignment 拿**（这里踩过一次坑，矩阵全显示「待分配」）。
+
+**没做的**：上云端（用户明确选了「先本地，留云端接口」，本轮只做本地）；
+`settings` 和 `problem_lists` 这两张表没有 handle 维度，还没按人/按队隔离。
 
 ## 数据从哪来、口径是什么
 
@@ -188,6 +250,32 @@ platform/native_id/native_contest/native_rating）、
 18. **打包时沙箱会拦批量删除**（`SAFE_DELETE_BULK_CONFIRM_REQUIRED`）：electron-builder 清理
     `dist\win-unpacked\locales`（78 个文件 > 50）会被拦下。手动 `rm -rf dist/win-unpacked` 后
     重跑即可；有时删 `__uninstaller.exe` 也会被拦，但产物其实已经生成完了，手动清残留就行。
+19. **`public/app.js` 是 ES module，里面的函数不在 `window` 上**。验证脚本用
+    `webContents.executeJavaScript('loadTeams()')` 会直接 `is not defined`。只能用
+    **DOM 点击驱动**（`document.querySelector('#nav-team').click()` 这类），别想着直接调函数。
+    另外 `executeJavaScript` 的返回值必须能被结构化克隆，返回 `undefined` 或 DOM 对象会报
+    `Script failed to execute`——要返回状态就返回普通对象/字符串。顶层 `await` 也不合法，得包一层
+    `(async () => { ... })()`。
+20. **隐藏窗口（`show:false`）的 `capturePage()` 截的是已绘制帧**，滚动之后再截基本拿不到新内容。
+    要截长页面就开一个够高的窗口（团队页用了 1440×2400）一次装下整页，别靠 `scrollIntoView`
+    或多次滚动拼接。
+21. **排题时同一分值会被反复取满**。洛谷每个难度档只有一个分值，`takeClosest` 会连着从同一分值
+    取好几道，最后整份题单挤在一个分上。解法是给分值和「理想分」的距离加一个**重复惩罚**
+    （`cost = |rating - wantRating| + dup × 60`，`dup` 是该分值已被取走的次数）。加之前实测 8 道
+    全是 1950/2050/2150，加之后跨了 650 分。
+22. **重做 `.dev/data-verify` 副本别用 `cp` / `copyFileSync`**。上一次验证崩溃会在旁边留下
+    `trainer.db-wal` 和 `trainer.db-shm`；直接覆盖 `trainer.db` 之后，SQLite 下次打开时**会把
+    那份旧的 WAL 重放上去**，新拷的库当场变成 `database disk image is malformed`。症状是验证脚本
+    大面积 FAIL、server 控制台刷 `database disk image is malformed`，看着像功能坏了其实是数据坏了。
+    正确做法是用 `VACUUM INTO` 从干净的源库生成无 WAL 的单文件副本：
+    ```js
+    const { DatabaseSync } = require('node:sqlite');
+    const src = new DatabaseSync('data/trainer.db', { readOnly: true });
+    src.exec("VACUUM INTO '.dev/data-verify2/trainer.db'");
+    ```
+    另外这个环境下**沙箱会拦 `rm`/`unlink`**（会试图走回收站然后失败），坏掉的副本删不掉——
+    所以别在同一个目录里反复重做，直接换一个新目录（`verify-team.mjs` 支持
+    `ACM_TRAINER_VERIFY_DIR=.dev/data-verify2` 覆盖）。
 
 ## 已经做过的事（按版本）
 
@@ -210,20 +298,31 @@ platform/native_id/native_contest/native_rating）、
 
 - **1.0.5**：新主题「赛博朋克」（网格扫描线底纹 + 五处霓虹动态 + prefers-reduced-motion 总开关）；
   「界面模块」开关补齐后加的 5 个页面（17 项）；修成长页表格列宽与做题记录时间显示 Invalid Date
+- **未发布（工作区）**：新页「团队训练」——建队 + 加成员（贴 CF/AtCoder/洛谷 handle）；
+  队内按知识方向自动分工（八方向不重叠地主攻 + 每人 2 个副方向补短板）；
+  团队总览表（rating / 已解 / 近七天 / 强项 / 待补）；团队排题（每人 N 道、队内不撞题、
+  难度按各自水平铺开）。后端 `assignAxes` / `buildTeamPlans`，接口 `/api/team/*`，
+  三张新表。**还没写更新说明、没发版。**
 
 ## 没做 / 可以接着做
 
-1. **让用户完整跑一次推题模型**（设置 → 推题模型 → 开始训练，默认 300 场、十几分钟）。
+1. **团队功能发布**：现在只差写 `outputs/release-notes-vX.Y.Z.md` + 改 version + 打 tag。
+   发布后可以考虑的下一步（用户当时问过「是不是要上云端」，选了「先本地、留云端接口」）：
+   - 给团队数据留导出/导入的 JSON 结构（队伍 + 分工 + 成员 handle），为以后同步做准备；
+   - `settings` / `problem_lists` 目前没有 handle 维度，多人共用一份设置在队伍场景下会串，
+     真要多人用就得给它们加人/队维度；
+   - 进度汇总现在只到「已解 / 近七天 / 强项 / 待补」，还没做「按队伍方向看整体覆盖」的图。
+2. **让用户完整跑一次推题模型**（设置 → 推题模型 → 开始训练，默认 300 场、十几分钟）。
    目前界面显示「还没训练过推题模型」；门槛写在 `lib/model.js`：AUC ≥ 0.75 且明显优于
    「只看难度差」的基线才启用，赢不了就继续用内置规则（这是设计，不要放宽）。
-2. 用户提过但一直没做的：**语音输入**（当时没说清要什么，需要问）、**自动检查更新**（现在是
+3. 用户提过但一直没做的：**语音输入**（当时没说清要什么，需要问）、**自动检查更新**（现在是
    手动点「检查更新」）、**Mac 版**。
-3. 「我的题单」还能往下做：今日卡片／训练计划里直接「存成题单」、题单导出成 CSV/Markdown 文件、
+4. 「我的题单」还能往下做：今日卡片／训练计划里直接「存成题单」、题单导出成 CSV/Markdown 文件、
    题单内的随机一道。
-4. 宣传：B 站发过宣传版和 v0.1.3 更新版；v0.1.7 的更新视频、封面、简介都做好了
+5. 宣传：B 站发过宣传版和 v0.1.3 更新版；v0.1.7 的更新视频、封面、简介都做好了
    （`.dev\make-video-v017.mjs`、`dist\ACM训练台-v0.1.7更新.mp4`、`outputs\v0.1.7-视频简介.md`），
    发不发看用户；素材同时放在 `C:\Users\summer\Documents\Codex\2026-09-20\new-chat\outputs\video-assets`。
-5. **主题现在有五套**（暗色／亮色／灰色／护眼／赛博），`public/style.css` 顶部是变量块，
+6. **主题现在有五套**（暗色／亮色／灰色／护眼／赛博），`public/style.css` 顶部是变量块，
    加新主题照抄一块改颜色即可；样式里凡是 `[data-theme='dark'], [data-theme='gray']` 这种
    列举写法的选择器，记得把新主题名也加进去（比如 `--danger` 那两处）。
    赛博那套除了变量，文件末尾还有一大段氛围/动画（网格底纹、流动光带、扫光、glitch）。

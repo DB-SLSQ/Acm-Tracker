@@ -582,6 +582,90 @@
         </details>
       </section>
 
+      <section class="panel hidden" id="panel-team">
+        <div class="panel-head">
+          <h2>团队训练</h2>
+          <p>
+            一支队伍几个人一起练，最怕的是三个人的题单高度重叠——弱项都差不多，一起去补同一块，
+            结果卡在同样的地方。这里先把八个知识方向「分」给队员：一个人主攻一两块深挖，
+            其他人的主攻错开；每个人再带一两个副方向保证不偏科。排题时队员之间的题不会重复。
+          </p>
+        </div>
+
+        <!-- 队伍选择 -->
+        <div class="team-toolbar">
+          <select id="team-select"></select>
+          <button class="btn" id="team-new">新建队伍</button>
+          <button class="btn" id="team-rename">改名</button>
+          <button class="btn danger" id="team-delete">删除队伍</button>
+        </div>
+
+        <div id="team-empty" class="team-empty hidden">
+          <p>还没有队伍。点上面的「新建队伍」，然后把队友的 Codeforces / AtCoder 账号加进来。</p>
+        </div>
+
+        <div id="team-body" class="hidden">
+          <!-- 成员管理 -->
+          <div class="team-section">
+            <div class="team-section-head">
+              <h3>队员</h3>
+              <div class="team-add">
+                <input id="team-member-input" type="text" placeholder="账号（CF / AtCoder 用户名）"
+                       autocomplete="off" />
+                <select id="team-member-role">
+                  <option value="member">队员</option>
+                  <option value="leader">队长</option>
+                  <option value="coach">教练</option>
+                </select>
+                <button class="btn primary" id="team-add-member">加入</button>
+              </div>
+            </div>
+            <div id="team-members" class="team-members"></div>
+          </div>
+
+          <!-- 分工 -->
+          <div class="team-section">
+            <div class="team-section-head">
+              <h3>队内分工</h3>
+              <button class="btn" id="team-reassign">重新分配方向</button>
+            </div>
+            <p class="hint">
+              按每个人「相对自己水平」的强弱来分：谁在哪块特别突出就主攻哪块。分完会钉住，
+              之后排题都按这份分工走，方向不会练到一半漂掉。
+            </p>
+            <div id="team-assignment" class="team-assignment"></div>
+          </div>
+
+          <!-- 进度总览 -->
+          <div class="team-section">
+            <h3>进度总览</h3>
+            <div id="team-overview" class="team-overview"></div>
+          </div>
+
+          <!-- 团队排题 -->
+          <div class="team-section">
+            <div class="team-section-head">
+              <h3>团队排题</h3>
+              <div class="team-plan-controls">
+                <label>每人
+                  <input id="team-per-member" type="number" min="1" max="50" value="6" />
+                  道
+                </label>
+                <label>目标分
+                  <input id="team-target" type="number" min="800" max="4000" step="50" value="1900" />
+                </label>
+                <button class="btn primary" id="team-generate">排题</button>
+              </div>
+            </div>
+            <p class="hint">
+              每个人排到的题会跟着他自己的水平走（分低的不会全是超纲题），四档难度轮着来，
+              而且<b>全队不重复</b>。标「主攻」的是他负责的那块，标「副」的是补短板用的。
+            </p>
+            <div id="team-plan" class="team-plan"></div>
+          </div>
+        </div>
+      </section>
+
       <section class="panel" id="panel-settings">
         <div class="panel-head">
           <h2>设置</h2>

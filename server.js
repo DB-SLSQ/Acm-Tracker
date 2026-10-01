@@ -11,9 +11,12 @@ import * as db from './lib/db.js';
 import {
   ATCODER_SHARE,
   LUOGU_SHARE,
+  assignAxes,
   buildPlan,
+  buildTeamPlans,
   deriveProgress,
   problemCode,
+  problemKey,
   problemUrl,
   rankFocusTags,
   toClientProblem,
@@ -1834,6 +1837,216 @@ async function handleVirtual(url) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 团队模式
+//
+// 队伍不出现在任何鉴权路径上：这本来就是本机单人使用的程序，队伍的「成员」
+// 就是这个程序里已经加载过的那些 handle。所以所有 /api/team/* 接口都不校验
+// 权限，谁调用都能读写——这不是疏忽，而是设计。真要多人用（同一个程序被
+// 三个人的浏览器同时打开），那是下一步上云端才需要解决的事，
+// 到那时这里会换成真正的会话校验。
+// ---------------------------------------------------------------------------
+
+/** 把队伍里的 handle 补全成「成员 + 知识画像 + 进度摘要」，供分工和总览用。 */
+function teamMembersWithProfiles(teamId, settings) {
+  const members = db.listTeamMembers(teamId);
+  return members.map((member) => {
+    const user = db.getUser(member.handleKey);
+    const submissions = db.getSubmissions(member.handleKey);
+    const { solved } = deriveProgress(submissions);
+    const solvedProblems = [];
+    for (const problem of db.getAllProblems()) {
+      const key = problemKey(problem.contestId, problem.index);
+      const entry = solved.get(key);
+      if (!entry) continue;
+      solvedProblems.push({
+        ...problem,
+        solvedAt: entry.at,
+      });
+    }
+    const floor = user?.rating
+      ? Math.max(0, user.rating - (Number.isFinite(settings.floorGap) ? settings.floorGap : 400))
+      : 0;
+    const tagProfile = buildTagProfile(solvedProblems, { floor });
+    const profile = buildKnowledgeProfile(solvedProblems, tagProfile, { floor });
+    return {
+      handleKey: member.handleKey,
+      display: user?.displayHandle || member.handleKey,
+      role: member.role,
+      rating: user?.rating ?? null,
+      maxRating: user?.maxRating ?? null,
+      solvedCount: solved.size,
+      profile: profile.map((entry) => ({
+        axis: entry.axis,
+        count: entry.count,
+        representative: entry.representative,
+        gapVsSelf: entry.gapVsSelf,
+        confidence: entry.confidence,
+      })),
+    };
+  });
+}
+
+async function handleTeamOverview(teamId, settings) {
+  const team = db.getTeam(teamId);
+  if (!team) return { status: 404, body: { error: '队伍不存在' } };
+  const members = teamMembersWithProfiles(teamId, settings);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const weekAgo = nowSeconds - 7 * 24 * 3600;
+
+  const overview = members.map((member) => {
+    const submissions = db.getSubmissions(member.handleKey);
+    const { solved } = deriveProgress(submissions);
+    let recent = 0;
+    for (const entry of solved.values()) {
+      if (entry.at && entry.at >= weekAgo) recent += 1;
+    }
+    // 最近一次提交时间：界面上用「几天没动了」来提示谁掉队了。
+    // getDailyActivity 返回的是 { solved: {日期: 条数}, submissions: {...} } 两个对象，
+    // 不是数组——按日期排一下取最后一天。
+    const activity = db.getDailyActivity(member.handleKey);
+    const days = Object.keys(activity.solved ?? {}).sort();
+    const lastActive = days.length ? days[days.length - 1] : null;
+    return {
+      handleKey: member.handleKey,
+      display: member.display,
+      role: member.role,
+      rating: member.rating,
+      maxRating: member.maxRating,
+      solvedCount: member.solvedCount,
+      solvedThisWeek: recent,
+      lastActive,
+      // 最强的两块和最弱的两块，总览页上一眼能看出谁擅长什么、缺什么
+      strengths: [...member.profile]
+        .filter((entry) => entry.count > 0)
+        .sort((a, b) => (b.gapVsSelf ?? 0) - (a.gapVsSelf ?? 0))
+        .slice(0, 2)
+        .map((entry) => ({ axis: entry.axis, gapVsSelf: Math.round(entry.gapVsSelf ?? 0) })),
+      weaknesses: [...member.profile]
+        .sort((a, b) => (a.gapVsSelf ?? 0) - (b.gapVsSelf ?? 0))
+        .slice(0, 2)
+        .map((entry) => ({ axis: entry.axis, gapVsSelf: Math.round(entry.gapVsSelf ?? 0) })),
+    };
+  });
+
+  return {
+    status: 200,
+    body: {
+      team,
+      members: overview,
+      // 分工也一并带上：界面的「分工矩阵」要显示每个方向归谁，
+      // 光有成员画像算不出来（分工是钉住的结果，不是现算的）。
+      assignment: ensureAssignmentView(teamId, members),
+    },
+  };
+}
+
+/**
+ * 读这份队伍的分工；一次都没分过（或者成员变过）就现场分一份存下来。
+ *
+ * 为什么放在「看总览」的时候也算一次：分工矩阵是团队页最核心的一块，
+ * 第一次进来如果是空的，用户根本不知道该点哪个按钮。自动分一份不是
+ * 擅自替用户决定——「重新分配」按钮一直都在，不满意点一下就重算。
+ */
+function ensureAssignmentView(teamId, members) {
+  const list = members ?? [];
+  if (!list.length) return [];
+
+  const saved = db.listTeamAssignments(teamId);
+  const memberKeys = new Set(list.map((m) => m.handleKey));
+  // 现有成员里只要有一个没分工，就整份重算：不然新加的人会一直显示「待分配」
+  const covered =
+    saved.length > 0 && list.every((m) => saved.some((s) => s.handleKey === m.handleKey));
+  const stale = saved.some((s) => !memberKeys.has(s.handleKey));
+
+  let assignment = saved;
+  if (!covered || stale) {
+    const allocation = assignAxes(list);
+    assignment = allocation.byMember.flatMap((m) => [
+      ...m.main.map((axis) => ({ handleKey: m.handleKey, axis, kind: 'main' })),
+      ...m.sub.map((axis) => ({ handleKey: m.handleKey, axis, kind: 'sub' })),
+    ]);
+    db.saveTeamAssignments(teamId, assignment);
+  }
+
+  const displayOf = new Map(list.map((m) => [m.handleKey, m.display]));
+  return list.map((m) => ({
+    handleKey: m.handleKey,
+    display: displayOf.get(m.handleKey) ?? m.handleKey,
+    main: assignment
+      .filter((s) => s.handleKey === m.handleKey && s.kind === 'main')
+      .map((s) => s.axis),
+    sub: assignment
+      .filter((s) => s.handleKey === m.handleKey && s.kind === 'sub')
+      .map((s) => s.axis),
+  }));
+}
+
+/**
+ * 团队排题：GET /api/team/:id/plan
+ *
+ * 先按现有的分工（team_assignments）给每人排题；没有分工就现场算一份并存下来。
+ * 排题是纯 CPU 的（实测三人各 8 道约 44ms），同步做就行，不用排队。
+ */
+function handleTeamPlan(teamId, url, settings) {
+  const team = db.getTeam(teamId);
+  if (!team) return { status: 404, body: { error: '队伍不存在' } };
+  const perMember = Math.min(50, Math.max(1, Number(url.searchParams.get('perMember') || 8)));
+  const target = Number(url.searchParams.get('target') || 1900);
+
+  const members = teamMembersWithProfiles(teamId, settings);
+  if (!members.length) {
+    return { status: 200, body: { team, assignment: null, members: [], note: '队伍里还没有成员' } };
+  }
+
+  // 分工：和总览页共用同一份逻辑（没分过就自动分一份存下来），
+  // 保证「看总览」和「点排题」看到的是同一套方向，不会两处不一致。
+  const byMember = ensureAssignmentView(teamId, members);
+
+  const profileByKey = new Map(members.map((m) => [m.handleKey, m]));
+  const planningMembers = byMember.map((alloc) => {
+    const info = profileByKey.get(alloc.handleKey);
+    const submissions = db.getSubmissions(alloc.handleKey);
+    const { solved } = deriveProgress(submissions);
+    return {
+      handleKey: alloc.handleKey,
+      display: info?.display ?? alloc.handleKey,
+      rating: info?.rating ?? target,
+      main: alloc.main,
+      sub: alloc.sub,
+      solved,
+    };
+  });
+
+  const blocked = new Set();
+  for (const member of planningMembers) {
+    for (const entry of db.listBlockedProblems(member.handleKey)) {
+      blocked.add(problemKey(entry.contestId, entry.index));
+    }
+  }
+
+  const result = buildTeamPlans(planningMembers, {
+    problems: db.getAllProblems(),
+    target,
+    perMember,
+    // settings 里没设过就是 null（表示"用默认值"），走的还是单人版同一个换算
+    tagShare: normalizeTagShare(settings.tagShare),
+    blocked,
+  });
+
+  return {
+    status: 200,
+    body: {
+      team,
+      target,
+      perMember,
+      assignment: byMember,
+      members: result.members,
+      note: `按队内分工排题：每人 ${perMember} 道，队内不重复。`,
+    },
+  };
+}
+
 async function route(req, res, url) {
   const { pathname } = url;
 
@@ -2594,6 +2807,118 @@ async function route(req, res, url) {
       const message = error instanceof cf.CfError ? error.message : `生成计划失败：${error.message}`;
       return sendError(res, 502, message);
     }
+  }
+
+  // ---- 团队模式 ----
+  // 队伍列表 / 新建。路径故意做得平，不带 :id，因为前端只有「选哪支队」一个动作。
+  if (pathname === '/api/team' && req.method === 'GET') {
+    return sendJson(res, 200, { teams: db.listTeams() });
+  }
+
+  if (pathname === '/api/team' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const team = db.createTeam(body?.name);
+      return sendJson(res, 201, { team });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // /api/team/:id[/...] 的公共前缀解析。子路径用 '/' 切，teamId 是随机串不含 '/'。
+  if (pathname.startsWith('/api/team/')) {
+    const rest = pathname.slice('/api/team/'.length);
+    const [teamId, sub] = [rest.split('/')[0], rest.split('/')[1] ?? ''];
+
+    if (!teamId) return sendError(res, 400, '缺少队伍 id');
+
+    if (!sub && req.method === 'GET') {
+      const result = await handleTeamOverview(teamId, readSettings());
+      return sendJson(res, result.status, result.body);
+    }
+
+    if (!sub && req.method === 'DELETE') {
+      if (!db.getTeam(teamId)) return sendError(res, 404, '队伍不存在');
+      db.deleteTeam(teamId);
+      return sendJson(res, 200, { ok: true });
+    }
+
+    if (!sub && req.method === 'PATCH') {
+      try {
+        const body = await readJsonBody(req);
+        if (!db.renameTeam(teamId, body?.name)) return sendError(res, 404, '队伍不存在');
+        return sendJson(res, 200, { team: db.getTeam(teamId) });
+      } catch (error) {
+        return sendError(res, 400, error.message);
+      }
+    }
+
+    // 成员增删
+    if (sub === 'members' && req.method === 'POST') {
+      try {
+        const body = await readJsonBody(req);
+        if (!db.getTeam(teamId)) return sendError(res, 404, '队伍不存在');
+        const handleKey = db.normalizeHandle(body?.handle);
+        if (!handleKey) return sendError(res, 400, '请填写成员账号');
+        // 顺带把这个人加载进来：不然新加的成员没有 rating、没有知识画像，
+        // 分工时会被当成"什么都不会"的新号，分到的方向会很难看。
+        try {
+          await loadUser(handleKey);
+        } catch (error) {
+          // 抓不到也不挡着加人：可以先加进来，之后联网再同步。
+          // 但要把原因回给前端，免得用户以为加成功了却什么都没有。
+          db.addTeamMember(teamId, handleKey, body?.role);
+          return sendJson(res, 201, {
+            member: { handleKey, role: body?.role ?? 'member' },
+            warning: `成员已加入，但抓取 ${handleKey} 的数据失败：${error.message}`,
+          });
+        }
+        db.addTeamMember(teamId, handleKey, body?.role);
+        return sendJson(res, 201, { member: { handleKey, role: body?.role ?? 'member' } });
+      } catch (error) {
+        return sendError(res, 400, error.message);
+      }
+    }
+
+    if (sub === 'members' && req.method === 'DELETE') {
+      const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
+      if (!handleKey) return sendError(res, 400, '缺少 handle');
+      if (!db.removeTeamMember(teamId, handleKey)) return sendError(res, 404, '该成员不在队伍里');
+      return sendJson(res, 200, { ok: true });
+    }
+
+    // 重算分工（成员或数据变了之后手动触发）
+    if (sub === 'assign' && req.method === 'POST') {
+      const settings = readSettings();
+      const members = teamMembersWithProfiles(teamId, settings);
+      if (!db.getTeam(teamId)) return sendError(res, 404, '队伍不存在');
+      if (!members.length) return sendError(res, 400, '队伍里还没有成员');
+      const allocation = assignAxes(members);
+      db.saveTeamAssignments(
+        teamId,
+        allocation.byMember.flatMap((m) => [
+          ...m.main.map((axis) => ({ handleKey: m.handleKey, axis, kind: 'main' })),
+          ...m.sub.map((axis) => ({ handleKey: m.handleKey, axis, kind: 'sub' })),
+        ]),
+      );
+      return sendJson(res, 200, {
+        assignment: allocation.byMember.map((m) => ({
+          ...m,
+          display: members.find((x) => x.handleKey === m.handleKey)?.display ?? m.handleKey,
+        })),
+      });
+    }
+
+    if (sub === 'plan' && req.method === 'GET') {
+      try {
+        const result = handleTeamPlan(teamId, url, readSettings());
+        return sendJson(res, result.status, result.body);
+      } catch (error) {
+        return sendError(res, 500, `团队排题失败：${error.message}`);
+      }
+    }
+
+    return sendError(res, 404, '接口不存在');
   }
 
   if (pathname === '/api/progress' && req.method === 'POST') {
