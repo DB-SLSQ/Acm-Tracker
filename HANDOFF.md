@@ -9,14 +9,11 @@
 
 ## 一句话现状
 
-**v1.0.5 已发布**（标签 `v1.0.5`，GitHub Actions 自动建了 Release，附件是安装包）；
-在这之上工作区里又加了**「团队训练」这一页（未发布）**，改动集中在 6 个文件：
-`lib/db.js` / `lib/plan.js` / `server.js` / `public/index.html` / `public/app.js` / `public/style.css`。
-验证脚本 `.dev\verify-team.mjs` 17 项全通过，五套主题截图人工核对过。**还没写更新说明、没发版。**
-
-`main` 分支和远端同步到了 1.0.5；桌面上装的那份是 1.0.5；安装包在
-`D:\Acm-Tracker\dist\ACM Trainer Setup 1.0.5.exe`。
-（桌面上还留了一份 1.0.5 之前的备份 `ACM Trainer.bak-104`，确认新版没问题后可以删。）
+**v1.0.6 已写完并本机打包**，新增整页「团队训练」（建队、三平台加人、队内分工、团队排题）。
+`main` 已经推到远端（`ec027e7`），安装包在 `D:\Acm-Tracker\dist\ACM Trainer Setup 1.0.6.exe`，
+桌面那份也换成了 1.0.6（旧的备份在 `ACM Trainer.bak-105`）。
+**注意：还没打 tag、没发 GitHub Release**——本机 GitHub 令牌只有读权限，发 Release 必须走
+tag + Actions。要发版时补上 tag 就行（`outputs/release-notes-v1.0.6.md` 已经写好了）。
 
 工作区里有两份**别人的**未跟踪文档（`outputs/notes/energy-intervals-status.md`、
 `outputs/视频简介-下半年-上海见乐山见.md`），不是这个项目的活，别顺手 `git add -A` 带上去。
@@ -123,8 +120,7 @@ electron/main.js       桌面入口：起服务 + 开窗口，打包后数据目
 3. `server.js`：在 `route()` 里加接口；数据尽量走 `allProblems()`（有缓存）或 `db.xxx`
 4. 需要新表就在 `lib/db.js` 的建表块里加 `CREATE TABLE IF NOT EXISTS`（老库升级靠 `db.exec`）
 
-现在的导航（19 页，比 1.0.5 多了「团队训练」）：
-当前水平 / 目标设置 / 训练计划 / **团队训练** / 训练日程 / 补题队列 / 题库 / 历年比赛 / 拼好题 / 我的题单 /
+现在的导航（19 页，比 1.0.5 多了「团队训练」）：当前水平 / 目标设置 / 训练计划 / **团队训练** / 训练日程 / 补题队列 / 题库 / 历年比赛 / 拼好题 / 我的题单 /
 能力画像 / 成长 / 做题记录 / 活动记录 / 比赛日历 / 虚拟参赛 / 平台数据 / 帮助 / 设置。
 
 数据表（31 张，其中 `sqlite_sequence` 是 SQLite 自带的）：`problems`（题库缓存，含
@@ -137,7 +133,7 @@ platform/native_id/native_contest/native_rating）、
 `problem_lists` + `problem_list_items`（我的题单）、
 `teams` + `team_members` + `team_assignments`（团队训练，见下节）。
 
-## 团队训练（本轮新加，未发布）
+## 团队训练（1.0.6 新加）
 
 给 ACM 队伍三人各自分配方向和题目，避免三人练重。**数据层天然是按人隔离的**：`progress`、
 `plan_snapshots`、`submissions`、`users` 等 17 张表的主键第一维就是 `handle_key`，所以团队模式
@@ -349,12 +345,12 @@ generateTeamPlan() / renderTeam()`，页面在 `#panel-team`，样式在 `public
 
 - **1.0.5**：新主题「赛博朋克」（网格扫描线底纹 + 五处霓虹动态 + prefers-reduced-motion 总开关）；
   「界面模块」开关补齐后加的 5 个页面（17 项）；修成长页表格列宽与做题记录时间显示 Invalid Date
-- **未发布（工作区）**：新页「团队训练」——建队 + 加成员（**弹框里分别填 CF / AtCoder / 洛谷账号，
+- **1.0.6**：新页「团队训练」——建队 + 加成员（**弹框里分别填 CF / AtCoder / 洛谷账号，
   一次抓三个平台**，缺哪个平台会明确标出来并可「补抓平台数据」）；
   队内按知识方向自动分工（八方向不重叠地主攻 + 每人 2 个副方向补短板）；
   团队总览表（rating / 已解 / **数据来源** / 近七天 / 强项 / 待补）；团队排题（每人 N 道、
   队内不撞题、难度按各自水平铺开）。后端 `assignAxes` / `buildTeamPlans` / `syncMemberPlatforms`，
-  接口 `/api/team/*`，三张新表。**还没写更新说明、没发版。**
+  接口 `/api/team/*`，三张新表。本机已打包换桌面，**未打 tag / 未发 Release**。
 
 ## 没做 / 可以接着做
 
