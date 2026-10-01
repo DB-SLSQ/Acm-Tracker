@@ -55,7 +55,7 @@ node_modules\electron\dist\electron.exe .dev\verify-tracker-pages.mjs # 题库 +
 这些脚本都用 `ACM_TRAINER_DATA_DIR=.dev/data-verify`（开发库的副本），
 **不会动用户的真实数据**；要重跑先 `Copy-Item data\trainer.db .dev\data-verify\trainer.db -Force`。
 
-团队功能的验证脚本是 `.dev\verify-team.mjs`（17 项 + 五套主题截图 + 整页图 `team-full.png`）：
+团队功能的验证脚本是 `.dev\verify-team.mjs`（24 项 + 五套主题截图 + 整页图和弹框截图）：
 
 ```powershell
 # 重跑前刷一份副本：用 VACUUM INTO，别用 cp（原因见坑 22）
@@ -65,7 +65,8 @@ $env:ACM_TRAINER_VERIFY_DIR='.dev/data-verify2'
 node_modules\electron\dist\electron.exe .dev\verify-team.mjs
 ```
 
-（默认数据目录还是 `.dev\data-verify`；`ACM_TRAINER_VERIFY_DIR` 是给副本坏掉时换目录用的。）
+（默认数据目录还是 `.dev\data-verify`；`ACM_TRAINER_VERIFY_DIR` 是给副本坏掉时换目录用的。
+`VACUUM INTO` 不会覆盖已存在的文件，重做前得先把旧文件删掉——删不掉就换个目录名。）
 
 发布流程（改完要发版时）：
 
@@ -168,15 +169,54 @@ team_assignments(team_id, handle_key, axis, kind, updated_at) -- PK(team_id, han
 
 **接口**（`server.js`，都挂在 `/api/team` 下）：`GET/POST /api/team`（列表/建队）、
 `GET/PATCH/DELETE /api/team/:id`（总览/改名/删队）、`POST /api/team/:id/members`、
+`POST /api/team/:id/refresh`（补抓平台数据）、
 `DELETE /api/team/:id/members?handle=X`、`POST /api/team/:id/assign`（重算分工）、
 `GET /api/team/:id/plan`（团队排题）。总览接口会顺带返回 `assignment`，
 **没分过或成员变了就现场分一份存下来**，保证前端的分工矩阵永远不为空。
 
+### 加成员怎么抓数据（三平台）
+
+**这件事只是「加人」流程的一部分，但很容易踩错，单独说清楚。**
+
+加成员**不是只抓 CF**：`POST /api/team/:id/members` 收 `{handle, role, atcoder, luogu}`，
+走 `syncMemberPlatforms(handleKey, {atcoderAccount, luoguAccount})` 一次抓三个平台：
+
+| 平台 | 怎么抓 | 走哪个函数 |
+|---|---|---|
+| Codeforces | 必抓（`handle_key` 本身就是 CF 号） | `loadUser()` → `cf.getUser` + `getAllSubmissions` |
+| AtCoder | 填了用户名才抓 | `ensureAtcoderCatalog()` + `syncAtcoderSubmissions()` |
+| 洛谷 | 填了 UID 才抓 | `fetchLuogu(uid)` + `db.appendLuoguSolved()` |
+
+要点：
+
+- **每个平台单独 try**：一个平台挂了（比如洛谷设了隐私、AtCoder 用户名写错）不影响另外两个，
+  失败原因收在 `sync.errors` 里，用 `describeSyncResult()` 拼成一句话回给前端
+  （形如 `tourist 已加入：CF 3039 题 / AtCoder 600 题 / 洛谷 0 题；洛谷 失败（这位用户把练习数据设成了私密…）`）。
+- **先落库再加人**：`db.addTeamMember()` 在抓取之前调用。抓取要十几秒（洛谷练习页 + AtCoder 全量提交），
+  中途出错不该让「加人」整个失败——人先在里面，缺的平台之后补。
+- **洛谷是按 UID 抓公开页**（`luogu.com.cn/user/{uid}/practice`），不是抓登录态，
+  所以能分别统计 a、b 各自的洛谷数据。对方开了隐私会明确报错，不会静默算成 0。
+- **账号存进 `team_members.atcoder_account` / `luogu_account`**，用来：
+  ① 界面显示「这个人还缺哪个平台」；② 以后增量刷新不用再问一遍账号。
+  重复加人时这两个字段只在传了值的时候覆盖（不会把上次填的清掉）。
+- **`POST /api/team/:id/refresh`** 是补抓入口：可以只传 `handle`（用已存的账号重抓），
+  也可以带 `atcoder` / `luogu` 覆盖。队员卡片上「补抓平台数据」按钮走的就是它。
+
+**为什么这事重要**：知识画像只吃得到已有平台的题。只抓 CF 的人，画像里看不到他 AtCoder / 洛谷
+练的东西，`assignAxes` 分方向时会把他算得比实际弱，容易把好手分到边角。所以界面上对缺平台
+**必须显眼**（卡片上标签标灰 + 总览表「数据来源」列 + 一行 warn 提醒），不能让它静默发生。
+
 前端在 `public/app.js`：`state.team` + `loadTeams() / loadTeamDetail() / createTeam() /
-addTeamMember() / reassignAxes() / generateTeamPlan() / renderTeam()`，页面在
-`#panel-team`，样式在 `public/style.css` 末尾（全走 CSS 变量，五套主题自动适配）。
+teamMemberDialog() / submitTeamMember() / resyncTeamMember() / reassignAxes() /
+generateTeamPlan() / renderTeam()`，页面在 `#panel-team`，样式在 `public/style.css` 末尾
+（全走 CSS 变量，五套主题自动适配）。
 分工矩阵的数据源要用 `team.plan?.assignment ?? detail.assignment`——**成员画像里没有
 「他主攻哪块」，只能从 assignment 拿**（这里踩过一次坑，矩阵全显示「待分配」）。
+
+**加人弹框**：点「加入…」弹的是自绘浮层 `#team-member-dialog`（项目里没有模态组件，
+照现有做法拼的，没引入 `<dialog>`）。三个平台输入框 + 角色下拉，CF 必填。
+弹框的样式类前缀是 `tm-`（`#tm-cf` / `#tm-atcoder` / `#tm-luogu` / `#tm-role`），
+跟团队页的 `team-` 前缀区分开，免得跟列表里的元素撞名。
 
 **没做的**：上云端（用户明确选了「先本地，留云端接口」，本轮只做本地）；
 `settings` 和 `problem_lists` 这两张表没有 handle 维度，还没按人/按队隔离。
@@ -276,6 +316,17 @@ addTeamMember() / reassignAxes() / generateTeamPlan() / renderTeam()`，页面�
     另外这个环境下**沙箱会拦 `rm`/`unlink`**（会试图走回收站然后失败），坏掉的副本删不掉——
     所以别在同一个目录里反复重做，直接换一个新目录（`verify-team.mjs` 支持
     `ACM_TRAINER_VERIFY_DIR=.dev/data-verify2` 覆盖）。
+23. **团队三人分工的「副方向」允许和别人主攻重叠，主攻不允许**。三个人的时候八个方向正好被
+    主攻占满，副方向若也要求「不重叠」会一个都分不出来（`assignAxes` 第一版副方向恒为空）。
+    副方向的语义是「补自己最短板」，不是「再占一块地」。
+24. **`import('../server.js')` 不会用 `PORT` 环境变量监听**。`PORT` 只在模块加载时定
+    `DEFAULT_PORT`，真正 listen 要靠 `startServer({ port })`。测试脚本里写了
+    `process.env.PORT = '5392'` 然后等 1.5 秒去 fetch，只会得到 `ECONNREFUSED`。
+    另外**后台起的 server 在这个沙箱里会被收拾掉**——接口测试要在同一个进程里
+    `await startServer()` 再 fetch，别用 `node server.js &`。
+25. **测试库被前一次跑坏之后，`VACUUM INTO` 也会失败**（报 `disk I/O error` 或
+    `output file already exists`）。删除被沙箱拦着，所以修不好——直接换一个新目录名重来，
+    别在原地反复试。
 
 ## 已经做过的事（按版本）
 
@@ -298,20 +349,22 @@ addTeamMember() / reassignAxes() / generateTeamPlan() / renderTeam()`，页面�
 
 - **1.0.5**：新主题「赛博朋克」（网格扫描线底纹 + 五处霓虹动态 + prefers-reduced-motion 总开关）；
   「界面模块」开关补齐后加的 5 个页面（17 项）；修成长页表格列宽与做题记录时间显示 Invalid Date
-- **未发布（工作区）**：新页「团队训练」——建队 + 加成员（贴 CF/AtCoder/洛谷 handle）；
+- **未发布（工作区）**：新页「团队训练」——建队 + 加成员（**弹框里分别填 CF / AtCoder / 洛谷账号，
+  一次抓三个平台**，缺哪个平台会明确标出来并可「补抓平台数据」）；
   队内按知识方向自动分工（八方向不重叠地主攻 + 每人 2 个副方向补短板）；
-  团队总览表（rating / 已解 / 近七天 / 强项 / 待补）；团队排题（每人 N 道、队内不撞题、
-  难度按各自水平铺开）。后端 `assignAxes` / `buildTeamPlans`，接口 `/api/team/*`，
-  三张新表。**还没写更新说明、没发版。**
+  团队总览表（rating / 已解 / **数据来源** / 近七天 / 强项 / 待补）；团队排题（每人 N 道、
+  队内不撞题、难度按各自水平铺开）。后端 `assignAxes` / `buildTeamPlans` / `syncMemberPlatforms`，
+  接口 `/api/team/*`，三张新表。**还没写更新说明、没发版。**
 
 ## 没做 / 可以接着做
 
 1. **团队功能发布**：现在只差写 `outputs/release-notes-vX.Y.Z.md` + 改 version + 打 tag。
    发布后可以考虑的下一步（用户当时问过「是不是要上云端」，选了「先本地、留云端接口」）：
-   - 给团队数据留导出/导入的 JSON 结构（队伍 + 分工 + 成员 handle），为以后同步做准备；
+   - 给团队数据留导出/导入的 JSON 结构（队伍 + 分工 + 成员各平台账号），为以后同步做准备；
    - `settings` / `problem_lists` 目前没有 handle 维度，多人共用一份设置在队伍场景下会串，
      真要多人用就得给它们加人/队维度；
-   - 进度汇总现在只到「已解 / 近七天 / 强项 / 待补」，还没做「按队伍方向看整体覆盖」的图。
+   - 进度汇总现在只到「已解 / 数据来源 / 近七天 / 强项 / 待补」，还没做「按队伍方向看整体覆盖」的图；
+   - 加人时如果只填了 CF，可以做得更主动些（比如直接提示「建议补 AtCoder，谁谁只抓到一半画像」）。
 2. **让用户完整跑一次推题模型**（设置 → 推题模型 → 开始训练，默认 300 场、十几分钟）。
    目前界面显示「还没训练过推题模型」；门槛写在 `lib/model.js`：AUC ≥ 0.75 且明显优于
    「只看难度差」的基线才启用，赢不了就继续用内置规则（这是设计，不要放宽）。

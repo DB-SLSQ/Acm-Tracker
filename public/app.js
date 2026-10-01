@@ -1586,28 +1586,10 @@ async function deleteTeam() {
   }
 }
 
-async function addTeamMember() {
-  const input = $('team-member-input');
-  const handle = input.value.trim();
-  if (!handle) return;
-  const role = $('team-member-role').value;
-  const teamId = state.team.current;
-  state.team.busy = true;
-  renderTeam();
-  try {
-    // 加人会联网抓一次这个账号的数据，慢，状态栏要说清在等什么
-    setStatus(`正在读取 ${handle} 的数据…`, { busy: true });
-    const result = await postJson(`/api/team/${teamId}/members`, { handle, role });
-    input.value = '';
-    setStatus(result.warning ? result.warning : `${handle} 已加入队伍`);
-    await loadTeamDetail(teamId, { keepPlan: true });
-  } catch (error) {
-    setStatus(`加入失败：${error.message}`);
-    state.team.error = error.message;
-  } finally {
-    state.team.busy = false;
-    renderTeam();
-  }
+/** 「加入」按钮改成开弹框：三个平台分开填，不然只能抓到 CF。 */
+function addTeamMember() {
+  if (!state.team.current) return;
+  teamMemberDialog();
 }
 
 async function removeTeamMember(handle) {
@@ -1681,6 +1663,159 @@ const TEAM_AXES = [
   '贪心与思维',
 ];
 
+/**
+ * 总览表下面那行提醒：谁缺平台。
+ * 缺平台不是小毛病——知识画像只吃得到已有平台的题，缺一个平台的人会被算得偏弱，
+ * 分方向时容易把好手分到边角。所以这里明确点出「谁缺什么、去哪补」。
+ */
+function overviewPlatformWarning(members) {
+  const gaps = [];
+  for (const m of members) {
+    const counts = m.platformCounts ?? {};
+    const missing = [];
+    if (!counts.atcoder) missing.push('AtCoder');
+    if (!counts.luogu) missing.push('洛谷');
+    if (missing.length) gaps.push({ name: m.display, missing, key: m.handleKey });
+  }
+  if (!gaps.length) return '';
+  return `<p class="team-warn">
+    ${gaps
+      .map((g) => `<b>${escapeHtml(g.name)}</b> 缺 ${g.missing.map((x) => escapeHtml(x)).join(' 和 ')} 数据`)
+      .join('；')}
+    。缺的平台会让知识画像只反映剩下的平台，分方向时会被算得偏弱——点队员卡片上的
+    「补抓平台数据」补上。
+  </p>`;
+}
+
+/** 加队员的小弹框：CF 必填，AtCoder / 洛谷选填。 */
+function teamMemberDialog() {
+  // 不用 <dialog>：项目里其他地方都是自己拼的浮层，跟着现有做法省得样式不一致
+  const existing = $('team-member-dialog');
+  if (existing) existing.remove();
+
+  const wrap = document.createElement('div');
+  wrap.id = 'team-member-dialog';
+  wrap.className = 'team-dialog-backdrop';
+  wrap.innerHTML = `
+    <div class="team-dialog" role="dialog" aria-modal="true" aria-labelledby="team-dialog-title">
+      <h3 id="team-dialog-title">加入队员</h3>
+      <p class="hint">三个平台分开填。只填 CF 也能加，但队内分工是按各方向的做题情况算的，
+        平台少了画像会偏，建议能填的都填。</p>
+      <label class="team-field">
+        <span>Codeforces 用户名 <b class="req">必填</b></span>
+        <input id="tm-cf" type="text" placeholder="例如 tourist" autocomplete="off" />
+      </label>
+      <label class="team-field">
+        <span>AtCoder 用户名 <em>选填</em></span>
+        <input id="tm-atcoder" type="text" placeholder="例如 chokudai" autocomplete="off" />
+      </label>
+      <label class="team-field">
+        <span>洛谷 UID <em>选填</em></span>
+        <input id="tm-luogu" type="text" placeholder="主页地址里的数字，例如 123456" autocomplete="off" />
+      </label>
+      <label class="team-field">
+        <span>队内角色</span>
+        <select id="tm-role">
+          <option value="member">队员</option>
+          <option value="leader">队长</option>
+          <option value="coach">教练</option>
+        </select>
+      </label>
+      <div class="team-dialog-actions">
+        <button type="button" class="btn" id="tm-cancel">取消</button>
+        <button type="button" class="btn primary" id="tm-confirm">加入并抓取数据</button>
+      </div>
+      <p class="hint team-dialog-note" id="tm-note"></p>
+    </div>`;
+
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.addEventListener('click', (event) => {
+    if (event.target === wrap) close();
+  });
+  $('tm-cancel').addEventListener('click', close);
+  $('tm-confirm').addEventListener('click', () => submitTeamMember(close));
+  $('tm-cf').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') submitTeamMember(close);
+  });
+  $('tm-cf').focus();
+}
+
+/** 提交加人表单。抓取可能要十几秒，所以按钮要禁用并说明在等什么。 */
+async function submitTeamMember(close) {
+  const teamId = state.team.current;
+  if (!teamId) return;
+  const handle = $('tm-cf').value.trim();
+  if (!handle) {
+    $('tm-note').textContent = 'Codeforces 用户名是必填的。';
+    $('tm-cf').focus();
+    return;
+  }
+  const atcoder = $('tm-atcoder').value.trim();
+  const luogu = $('tm-luogu').value.trim();
+  const role = $('tm-role').value;
+
+  const confirm = $('tm-confirm');
+  const note = $('tm-note');
+  confirm.disabled = true;
+  confirm.textContent = '抓取中…';
+  const waiting = ['CF'];
+  if (atcoder) waiting.push('AtCoder');
+  if (luogu) waiting.push('洛谷');
+  note.textContent = `正在读取 ${waiting.join(' / ')} 的数据，洛谷和 AtCoder 可能要十几秒…`;
+
+  try {
+    const result = await postJson(`/api/team/${teamId}/members`, {
+      handle,
+      role,
+      atcoder: atcoder || undefined,
+      luogu: luogu || undefined,
+    });
+    close();
+    setStatus(result.message ?? `${handle} 已加入队伍`);
+    await loadTeamDetail(teamId, { keepPlan: true });
+  } catch (error) {
+    note.textContent = `加入失败：${error.message}`;
+    confirm.disabled = false;
+    confirm.textContent = '加入并抓取数据';
+  }
+}
+
+/** 补抓某个成员缺的平台数据。 */
+async function resyncTeamMember(handleKey) {
+  const teamId = state.team.current;
+  if (!teamId) return;
+  const atcoder = window.prompt(
+    `补抓 AtCoder 数据：填 ${handleKey} 的 AtCoder 用户名（留空则跳过）`,
+    '',
+  );
+  if (atcoder === null) return;
+  const luogu = window.prompt(
+    `补抓洛谷数据：填 ${handleKey} 的洛谷 UID（主页地址里的数字，留空则跳过）`,
+    '',
+  );
+  if (luogu === null) return;
+  if (!atcoder.trim() && !luogu.trim()) return;
+
+  state.team.busy = true;
+  renderTeam();
+  setStatus(`正在补抓 ${handleKey} 的平台数据…`, { busy: true });
+  try {
+    const result = await postJson(`/api/team/${teamId}/refresh`, {
+      handle: handleKey,
+      atcoder: atcoder.trim(),
+      luogu: luogu.trim(),
+    });
+    setStatus(result.message ?? `${handleKey} 数据已更新`);
+    await loadTeamDetail(teamId, { keepPlan: true });
+  } catch (error) {
+    setStatus(`补抓失败：${error.message}`);
+  } finally {
+    state.team.busy = false;
+    renderTeam();
+  }
+}
+
 function renderTeam() {
   const team = state.team;
   const select = $('team-select');
@@ -1724,6 +1859,26 @@ function renderTeam() {
         const last = m.lastActive
           ? `${m.lastActive} 还在动`
           : '还没有做题记录';
+        const accounts = m.accounts ?? {};
+        // 平台覆盖：缺哪个平台就把标签标灰——画像只有 CF 的题，分方向时会被看扁，
+        // 所以这件事必须显眼，不能让用户以为「已解 0」就是真的没做过。
+        const counts = m.platformCounts ?? {};
+        const chips = [
+          { key: 'codeforces', label: 'CF', count: counts.codeforces ?? 0 },
+          { key: 'atcoder', label: 'AtCoder', count: counts.atcoder ?? 0 },
+          { key: 'luogu', label: '洛谷', count: counts.luogu ?? 0 },
+        ]
+          .map((p) => {
+            const missing = p.count === 0;
+            const title = missing
+              ? p.key === 'codeforces'
+                ? '没有 CF 提交记录'
+                : `没有${p.label}数据：${p.key === 'atcoder' ? '加人时填 AtCoder 用户名' : '加人时填洛谷 UID'}后可抓`
+              : `${p.label} 通过 ${p.count} 题`;
+            return `<span class="platform-chip${missing ? ' missing' : ''}" title="${escapeHtml(title)}">${p.label} ${p.count}</span>`;
+          })
+          .join('');
+        const needFix = (counts.atcoder ?? 0) === 0 || (counts.luogu ?? 0) === 0;
         return `<div class="team-member-card">
           <div class="team-member-top">
             <b>${escapeHtml(m.display)}</b>
@@ -1736,7 +1891,14 @@ function renderTeam() {
             <span>做题 <b>${m.solvedCount}</b></span>
             <span>近 7 天 <b>${m.solvedThisWeek}</b></span>
           </div>
+          <div class="platform-chips">${chips}</div>
           <div class="team-member-last">${escapeHtml(last)}</div>
+          ${needFix
+            ? `<button type="button" class="btn tiny team-resync" data-team-resync="${escapeHtml(m.handleKey)}"
+                       data-team-atcoder="${escapeHtml(accounts.atcoder ?? '')}"
+                       data-team-luogu="${escapeHtml(accounts.luogu ?? '')}"
+                       ${busy ? 'disabled' : ''}>补抓平台数据</button>`
+            : ''}
         </div>`;
       }).join('')
     : '<p class="subtle">还没有队员。在上面输入账号，点「加入」。</p>';
@@ -1777,7 +1939,7 @@ function renderTeam() {
   // ---- 进度总览 ----
   $('team-overview').innerHTML = members.length
     ? `<table class="team-table">
-        <thead><tr><th>队员</th><th>rating</th><th>累计做题</th><th>近 7 天</th><th>强项</th><th>待补</th></tr></thead>
+        <thead><tr><th>队员</th><th>rating</th><th>累计做题</th><th>数据来源</th><th>近 7 天</th><th>强项</th><th>待补</th></tr></thead>
         <tbody>${members
           .map((m) => {
             const st = (m.strengths ?? [])
@@ -1786,17 +1948,30 @@ function renderTeam() {
             const wk = (m.weaknesses ?? [])
               .map((s) => `<span class="axis-chip weak">${escapeHtml(s.axis)}</span>`)
               .join('');
+            const counts = m.platformCounts ?? {};
+            const src = [
+              { key: 'codeforces', label: 'CF' },
+              { key: 'atcoder', label: 'AT' },
+              { key: 'luogu', label: 'LG' },
+            ]
+              .map((p) => {
+                const n = counts[p.key] ?? 0;
+                return `<span class="src-dot${n ? ' on' : ''}" title="${p.label} ${n} 题">${p.label}</span>`;
+              })
+              .join('');
             return `<tr>
               <td>${escapeHtml(m.display)}</td>
               <td>${m.rating ?? '—'}</td>
               <td>${m.solvedCount}</td>
+              <td><div class="src-dots">${src}</div></td>
               <td>${m.solvedThisWeek}</td>
               <td>${st || '<span class="subtle">—</span>'}</td>
               <td>${wk || '<span class="subtle">—</span>'}</td>
             </tr>`;
           })
           .join('')}</tbody>
-      </table>`
+      </table>
+      ${overviewPlatformWarning(members)}`
     : '<p class="subtle">还没有队员。</p>';
 
   // ---- 团队排题结果 ----
@@ -1965,13 +2140,17 @@ $('team-member-input')?.addEventListener('keydown', (event) => {
 });
 $('team-reassign')?.addEventListener('click', reassignAxes);
 $('team-generate')?.addEventListener('click', generateTeamPlan);
-// 移出队员：事件委托，队员卡片是动态渲染的
+// 移出队员 / 补抓平台：事件委托，队员卡片是动态渲染的
 $('team-members')?.addEventListener('click', (event) => {
-  const button = event.target.closest('[data-team-remove]');
-  if (!button) return;
-  const handle = button.dataset.teamRemove;
-  if (!window.confirm(`把 ${handle} 移出队伍？\n\n只移出这支队伍，他的训练数据不动。`)) return;
-  removeTeamMember(handle);
+  const removeButton = event.target.closest('[data-team-remove]');
+  if (removeButton) {
+    const handle = removeButton.dataset.teamRemove;
+    if (!window.confirm(`把 ${handle} 移出队伍？\n\n只移出这支队伍，他的训练数据不动。`)) return;
+    removeTeamMember(handle);
+    return;
+  }
+  const resyncButton = event.target.closest('[data-team-resync]');
+  if (resyncButton) resyncTeamMember(resyncButton.dataset.teamResync);
 });
 
 // ---------- 拼好题：一场 CF + 一场 AtCoder ----------

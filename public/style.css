@@ -3472,3 +3472,160 @@ body.compact .panel-head h2 {
   background: color-mix(in srgb, var(--accent-alt) 22%, transparent);
   color: var(--text-dim);
 }
+
+/* ---------- 团队训练：加人弹框 + 平台覆盖 ---------- */
+/* 加人弹框。项目里没有现成的模态组件，这里按最小可用写一层：
+   半透明遮罩 + 居中卡片，背景用 --bg-overlay（和上方的下拉浮层同一套色）。 */
+.team-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.team-dialog {
+  width: 100%;
+  max-width: 420px;
+  padding: 20px 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--bg-raise);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+
+.team-dialog h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.team-dialog .hint {
+  margin: 0 0 14px;
+}
+
+.team-field {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.team-field > span {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.team-field .req {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  background: color-mix(in srgb, var(--danger, #e24b4a) 20%, transparent);
+  color: var(--danger, #e24b4a);
+}
+
+.team-field em {
+  margin-left: 4px;
+  font-size: 11px;
+  font-style: normal;
+  color: var(--text-faint);
+}
+
+.team-field input,
+.team-field select {
+  width: 100%;
+}
+
+.team-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.team-dialog-note {
+  margin: 10px 0 0;
+  min-height: 16px;
+}
+
+.team-dialog-note:empty {
+  display: none;
+}
+
+/* 队员卡片上的平台标签：抓到数据的正常显示，一个题都没有的标灰，
+   点它能看出「这个人还缺哪个平台」。 */
+.platform-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 6px 0 2px;
+}
+
+.platform-chip {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-soft);
+}
+
+.platform-chip.missing {
+  border-style: dashed;
+  border-color: var(--border);
+  color: var(--text-faint);
+  background: transparent;
+}
+
+.btn.tiny {
+  margin-top: 8px;
+  padding: 3px 10px;
+  font-size: 11px;
+}
+
+/* 总览表的「数据来源」列：每个平台一个小圆点，有数据的亮、没数据的暗 */
+.src-dots {
+  display: flex;
+  gap: 5px;
+}
+
+.src-dot {
+  min-width: 30px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  text-align: center;
+  color: var(--text-faint);
+  background: var(--bg-soft);
+  border: 1px solid transparent;
+}
+
+.src-dot.on {
+  color: var(--ok-text);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+
+/* 总览下面的「谁缺平台」提醒。用 warn 色，因为缺平台会直接影响分方向的结果 */
+.team-warn {
+  margin: 10px 0 0;
+  padding: 9px 12px;
+  border-left: 3px solid var(--warn);
+  border-radius: 0 8px 8px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+
+.team-warn b {
+  color: var(--text);
+  font-weight: 500;
+}

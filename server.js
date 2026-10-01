@@ -1876,6 +1876,10 @@ function teamMembersWithProfiles(teamId, settings) {
       rating: user?.rating ?? null,
       maxRating: user?.maxRating ?? null,
       solvedCount: solved.size,
+      // 各平台各自统计了多少题。前端拿它标「这个人还缺哪个平台」——
+      // 缺平台会让知识画像偏窄（只有 CF 的题），分方向时会把人看扁。
+      platforms: memberPlatformCounts(member.handleKey),
+      accounts: { atcoder: member.atcoderAccount, luogu: member.luoguAccount },
       profile: profile.map((entry) => ({
         axis: entry.axis,
         count: entry.count,
@@ -1885,6 +1889,76 @@ function teamMembersWithProfiles(teamId, settings) {
       })),
     };
   });
+}
+
+/** 一个账号在三个平台各通过了多少题。用来判断画像是否受「缺平台」影响。 */
+function memberPlatformCounts(handleKey) {
+  const counts = { codeforces: 0, atcoder: 0, luogu: 0 };
+  const seen = { codeforces: new Set(), atcoder: new Set(), luogu: new Set() };
+  for (const row of db.getSubmissions(handleKey)) {
+    if (row.verdict !== 'OK' && row.verdict !== 'AC') continue;
+    const platform = counts[row.platform] === undefined ? 'codeforces' : row.platform;
+    const key = problemKey(row.contestId, row.index);
+    if (seen[platform].has(key)) continue;
+    seen[platform].add(key);
+    counts[platform] += 1;
+  }
+  return counts;
+}
+
+/**
+ * 按成员提供的账号，把三个平台的数据都抓一遍。
+ * CF 是必有的（handle_key 就是 CF 号）；AtCoder / 洛谷只有填了账号才抓。
+ * 每个平台单独 try：一个平台挂了不该影响另外两个，缺哪个就记在 missing 里回给前端。
+ */
+async function syncMemberPlatforms(handleKey, { atcoderAccount = null, luoguAccount = null } = {}) {
+  const result = { codeforces: null, atcoder: null, luogu: null, errors: {} };
+
+  try {
+    await loadUser(handleKey);
+    result.codeforces = memberPlatformCounts(handleKey).codeforces;
+  } catch (error) {
+    result.errors.codeforces = error.message;
+  }
+
+  if (atcoderAccount) {
+    try {
+      await ensureAtcoderCatalog({});
+      const sync = await syncAtcoderSubmissions(handleKey, normalizeAtcoderUser(atcoderAccount), { force: true });
+      result.atcoder = sync.total ?? memberPlatformCounts(handleKey).atcoder;
+    } catch (error) {
+      result.errors.atcoder = error.message;
+    }
+  }
+
+  if (luoguAccount) {
+    try {
+      const stats = await fetchLuogu(luoguAccount);
+      const passed = stats.extra?.solved ?? [];
+      if (passed.length) db.appendLuoguSolved(handleKey, passed);
+      if (stats.extra) delete stats.extra.solved;
+      db.savePlatformStats({ ...stats, handleKey });
+      result.luogu = passed.length;
+    } catch (error) {
+      result.errors.luogu = error.message;
+    }
+  }
+
+  result.counts = memberPlatformCounts(handleKey);
+  return result;
+}
+
+/** 把抓取结果翻译成一句人话，回给前端做状态栏提示。 */
+function describeSyncResult(handle, sync, verb = '已加入') {
+  const labels = { codeforces: 'CF', atcoder: 'AtCoder', luogu: '洛谷' };
+  const ok = [];
+  for (const platform of ['codeforces', 'atcoder', 'luogu']) {
+    const n = sync.counts?.[platform];
+    if (typeof n === 'number') ok.push(`${labels[platform]} ${n} 题`);
+  }
+  const failed = Object.entries(sync.errors ?? {}).map(([platform, message]) => `${labels[platform]} 失败（${message}）`);
+  const head = `${handle} ${verb}：${ok.join(' / ')}`;
+  return failed.length ? `${head}；${failed.join('；')}` : head;
 }
 
 async function handleTeamOverview(teamId, settings) {
@@ -1916,6 +1990,9 @@ async function handleTeamOverview(teamId, settings) {
       solvedCount: member.solvedCount,
       solvedThisWeek: recent,
       lastActive,
+      // 各平台各多少题、绑的是哪个平台的账号：界面靠它标「这个人还缺哪个平台」
+      platformCounts: member.platforms,
+      accounts: member.accounts,
       // 最强的两块和最弱的两块，总览页上一眼能看出谁擅长什么、缺什么
       strengths: [...member.profile]
         .filter((entry) => entry.count > 0)
@@ -2860,21 +2937,23 @@ async function route(req, res, url) {
         if (!db.getTeam(teamId)) return sendError(res, 404, '队伍不存在');
         const handleKey = db.normalizeHandle(body?.handle);
         if (!handleKey) return sendError(res, 400, '请填写成员账号');
-        // 顺带把这个人加载进来：不然新加的成员没有 rating、没有知识画像，
-        // 分工时会被当成"什么都不会"的新号，分到的方向会很难看。
-        try {
-          await loadUser(handleKey);
-        } catch (error) {
-          // 抓不到也不挡着加人：可以先加进来，之后联网再同步。
-          // 但要把原因回给前端，免得用户以为加成功了却什么都没有。
-          db.addTeamMember(teamId, handleKey, body?.role);
-          return sendJson(res, 201, {
-            member: { handleKey, role: body?.role ?? 'member' },
-            warning: `成员已加入，但抓取 ${handleKey} 的数据失败：${error.message}`,
-          });
-        }
-        db.addTeamMember(teamId, handleKey, body?.role);
-        return sendJson(res, 201, { member: { handleKey, role: body?.role ?? 'member' } });
+        const atcoderAccount = String(body?.atcoder ?? '').trim() || null;
+        const luoguAccount = String(body?.luogu ?? '').trim() || null;
+
+        // 先把人记进队伍，再抓数据：抓取可能要十几秒（洛谷练习页 + AtCoder 提交记录），
+        // 中途出错也不该让「加人」这件事整个失败——人先在里面，缺的平台按提示补。
+        db.addTeamMember(teamId, handleKey, body?.role, { atcoderAccount, luoguAccount });
+
+        const sync = await syncMemberPlatforms(handleKey, { atcoderAccount, luoguAccount });
+        const member = db.listTeamMembers(teamId).find((item) => item.handleKey === handleKey) ?? null;
+        const failures = Object.keys(sync.errors ?? {});
+        return sendJson(res, 201, {
+          member,
+          platformCounts: sync.counts,
+          // 有平台没抓成功就把原因带上，免得用户以为三平台都齐了
+          warning: failures.length ? describeSyncResult(handleKey, sync) : null,
+          message: describeSyncResult(handleKey, sync),
+        });
       } catch (error) {
         return sendError(res, 400, error.message);
       }
@@ -2885,6 +2964,35 @@ async function route(req, res, url) {
       if (!handleKey) return sendError(res, 400, '缺少 handle');
       if (!db.removeTeamMember(teamId, handleKey)) return sendError(res, 404, '该成员不在队伍里');
       return sendJson(res, 200, { ok: true });
+    }
+
+    // 补抓某个成员的数据。加人时某个平台挂了、或者过了几天数据旧了，点一下重来。
+    // body 里可以带 atcoder / luogu 覆盖已存的账号（第一次没填的也在这里补）。
+    if (sub === 'refresh' && req.method === 'POST') {
+      try {
+        const body = await readJsonBody(req);
+        const handleKey = db.normalizeHandle(body?.handle);
+        if (!handleKey) return sendError(res, 400, '缺少成员 handle');
+        const member = db.listTeamMembers(teamId).find((item) => item.handleKey === handleKey);
+        if (!member) return sendError(res, 404, '该成员不在队伍里');
+
+        const atcoderAccount = body?.atcoder !== undefined ? String(body.atcoder).trim() || null : member.atcoderAccount;
+        const luoguAccount = body?.luogu !== undefined ? String(body.luogu).trim() || null : member.luoguAccount;
+        if (atcoderAccount !== member.atcoderAccount || luoguAccount !== member.luoguAccount) {
+          db.addTeamMember(teamId, handleKey, member.role, { atcoderAccount, luoguAccount });
+        }
+
+        const sync = await syncMemberPlatforms(handleKey, { atcoderAccount, luoguAccount });
+        const updated = db.listTeamMembers(teamId).find((item) => item.handleKey === handleKey) ?? null;
+        return sendJson(res, 200, {
+          member: updated,
+          platformCounts: sync.counts,
+          warning: Object.keys(sync.errors ?? {}).length ? describeSyncResult(handleKey, sync, '已更新') : null,
+          message: describeSyncResult(handleKey, sync, '已更新'),
+        });
+      } catch (error) {
+        return sendError(res, 400, error.message);
+      }
     }
 
     // 重算分工（成员或数据变了之后手动触发）

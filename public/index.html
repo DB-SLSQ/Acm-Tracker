@@ -610,16 +610,17 @@
             <div class="team-section-head">
               <h3>队员</h3>
               <div class="team-add">
-                <input id="team-member-input" type="text" placeholder="账号（CF / AtCoder 用户名）"
+                <input id="team-member-input" type="text" placeholder="Codeforces 用户名"
                        autocomplete="off" />
-                <select id="team-member-role">
-                  <option value="member">队员</option>
-                  <option value="leader">队长</option>
-                  <option value="coach">教练</option>
-                </select>
-                <button class="btn primary" id="team-add-member">加入</button>
+                <button class="btn primary" id="team-add-member">加入…</button>
               </div>
             </div>
+            <p class="hint">
+              点「加入」会弹出小框，让你填这个人的 <b>Codeforces</b>、<b>AtCoder</b>、
+              <b>洛谷</b>账号——三个平台分开填，填了的会一起抓回来，不填就先跳过（之后在
+              队员卡片上点「补抓平台数据」也能补）。
+              只抓 CF 的话，这个人缺的方向会被算错，分工会把他看扁。
+            </p>
             <div id="team-members" class="team-members"></div>
           </div>
 
