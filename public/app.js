@@ -1542,8 +1542,15 @@ async function loadTeamDetail(id, { keepPlan = false } = {}) {
 }
 
 async function createTeam() {
-  const name = window.prompt('给队伍起个名字', '我的队伍');
-  if (name === null) return;
+  const name = await askDialog({
+    title: '新建队伍',
+    hint: '给队伍起个名字，比如「ACM 集训队」或你们学校的队名。',
+    value: '我的队伍',
+    placeholder: '队伍名字',
+    confirmText: '创建',
+    allowEmpty: false,
+  });
+  if (name === null || !name.trim()) return;
   try {
     const { team } = await postJson('/api/team', { name: name.trim() });
     state.team.current = team.id;
@@ -1557,7 +1564,12 @@ async function createTeam() {
 async function renameTeam() {
   const current = state.team.teams.find((t) => t.id === state.team.current);
   if (!current) return;
-  const name = window.prompt('改个队名', current.name);
+  const name = await askDialog({
+    title: '改队名',
+    value: current.name,
+    confirmText: '保存',
+    allowEmpty: false,
+  });
   if (name === null || !name.trim()) return;
   try {
     await postJson(`/api/team/${current.id}`, { name: name.trim() }, 'PATCH');
@@ -1687,6 +1699,80 @@ function overviewPlatformWarning(members) {
   </p>`;
 }
 
+/**
+ * 自己实现的 prompt——**Electron 里 `window.prompt()` 会直接抛
+ * "prompt() is not supported."**（`alert` / `confirm` 是支持的，唯独 prompt 被砍了）。
+ * 所以在桌面版里凡是走 prompt 的入口都「点了没反应」，控制台里才看得到那个异常。
+ * 网页版能跑、桌面版不能，就是踩在这里。
+ *
+ * 返回 Promise：确定给字符串（可能是空串），取消或点遮罩给 null。
+ * 用法：`const name = await askDialog({ title: '给队伍起个名字', value: '我的队伍' });`
+ *      `if (name === null) return;`
+ */
+function askDialog({
+  title = '请输入',
+  hint = '',
+  value = '',
+  placeholder = '',
+  confirmText = '确定',
+  allowEmpty = true,
+} = {}) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'team-dialog-backdrop ask-dialog-backdrop';
+    wrap.innerHTML = `
+      <div class="team-dialog" role="dialog" aria-modal="true">
+        <h3>${escapeHtml(title)}</h3>
+        ${hint ? `<p class="hint">${hint}</p>` : ''}
+        <label class="team-field">
+          <input id="ask-input" type="text" autocomplete="off"
+                 placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}" />
+        </label>
+        <div class="team-dialog-actions">
+          <button type="button" class="btn" id="ask-cancel">取消</button>
+          <button type="button" class="btn primary" id="ask-ok">${escapeHtml(confirmText)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+
+    let done = false;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      document.removeEventListener('keydown', onKey, true);
+      wrap.remove();
+      resolve(result);
+    };
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        finish(null);
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        finish($('ask-input').value);
+      }
+    };
+    // Esc / Enter 挂在 document 上：没人点输入框时也能关掉
+    document.addEventListener('keydown', onKey, true);
+    wrap.addEventListener('click', (event) => {
+      if (event.target === wrap) finish(null);
+    });
+    $('ask-cancel').addEventListener('click', () => finish(null));
+    $('ask-ok').addEventListener('click', () => {
+      const text = $('ask-input').value;
+      // 不允许留空时（比如队名）就留在框里，别把空值放回去
+      if (!allowEmpty && !text.trim()) {
+        $('ask-input').focus();
+        return;
+      }
+      finish(text);
+    });
+    const input = $('ask-input');
+    input.focus();
+    input.select();
+  });
+}
+
 /** 加队员的小弹框：CF 必填，AtCoder / 洛谷选填。 */
 function teamMemberDialog() {
   // 不用 <dialog>：项目里其他地方都是自己拼的浮层，跟着现有做法省得样式不一致
@@ -1785,15 +1871,17 @@ async function submitTeamMember(close) {
 async function resyncTeamMember(handleKey) {
   const teamId = state.team.current;
   if (!teamId) return;
-  const atcoder = window.prompt(
-    `补抓 AtCoder 数据：填 ${handleKey} 的 AtCoder 用户名（留空则跳过）`,
-    '',
-  );
+  const atcoder = await askDialog({
+    title: '补抓 AtCoder 数据',
+    hint: `填 <b>${escapeHtml(handleKey)}</b> 的 AtCoder 用户名，留空则跳过 AtCoder。`,
+    placeholder: 'AtCoder 用户名',
+  });
   if (atcoder === null) return;
-  const luogu = window.prompt(
-    `补抓洛谷数据：填 ${handleKey} 的洛谷 UID（主页地址里的数字，留空则跳过）`,
-    '',
-  );
+  const luogu = await askDialog({
+    title: '补抓洛谷数据',
+    hint: `填 <b>${escapeHtml(handleKey)}</b> 的洛谷 UID（主页地址里的数字），留空则跳过洛谷。`,
+    placeholder: '例如 123456',
+  });
   if (luogu === null) return;
   if (!atcoder.trim() && !luogu.trim()) return;
 

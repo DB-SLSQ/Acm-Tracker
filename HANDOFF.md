@@ -9,11 +9,13 @@
 
 ## 一句话现状
 
-**v1.0.6 已写完并本机打包**，新增整页「团队训练」（建队、三平台加人、队内分工、团队排题）。
-`main` 已经推到远端（`ec027e7`），安装包在 `D:\Acm-Tracker\dist\ACM Trainer Setup 1.0.6.exe`，
-桌面那份也换成了 1.0.6（旧的备份在 `ACM Trainer.bak-105`）。
-**注意：还没打 tag、没发 GitHub Release**——本机 GitHub 令牌只有读权限，发 Release 必须走
-tag + Actions。要发版时补上 tag 就行（`outputs/release-notes-v1.0.6.md` 已经写好了）。
+**v1.0.7 已写完并本机打包**。这是个修 bug 的版本：1.0.6 里「新建队伍」「改名」
+「补抓平台数据」在桌面版点了没反应（根因见坑 26 —— Electron 没有 `window.prompt`），
+现在换成自绘弹框了。团队训练的其他部分沿用 1.0.6。
+
+**注意：v1.0.6 和 v1.0.7 都还没打 tag、没发 GitHub Release**——本机 GitHub 令牌只有读权限，
+发 Release 必须走 tag + Actions。要发版时补上 tag 就行（`outputs/release-notes-v1.0.6.md`
+和 `outputs/release-notes-v1.0.7.md` 都已经写好了）。
 
 工作区里有两份**别人的**未跟踪文档（`outputs/notes/energy-intervals-status.md`、
 `outputs/视频简介-下半年-上海见乐山见.md`），不是这个项目的活，别顺手 `git add -A` 带上去。
@@ -330,6 +332,18 @@ generateTeamPlan() / renderTeam()`，页面在 `#panel-team`，样式在 `public
 25. **测试库被前一次跑坏之后，`VACUUM INTO` 也会失败**（报 `disk I/O error` 或
     `output file already exists`）。删除被沙箱拦着，所以修不好——直接换一个新目录名重来，
     别在原地反复试。
+26. **Electron 里没有 `window.prompt()`——调用会直接抛 `prompt() is not supported.`**
+    （`alert` / `confirm` 正常，唯独 `prompt` 被移除了）。要命的是**网页版能跑、桌面版不能**，
+    所以「浏览器里试过没问题」完全挡不住这个坑。症状是按钮点了「毫无反应」，
+    异常只出现在控制台（`Uncaught (in promise) Error: prompt() is not supported.`）。
+    项目里现在用自绘的 `askDialog()`（`public/app.js`，返回 Promise，取消给 `null`）统一替代，
+    `teamMemberDialog` 那套浮层样式可以直接复用。**以后再也不要用 `window.prompt`。**
+    排查手法：`.dev/repro-new-team.mjs` 会打印 `typeof window.prompt` 和真实调用结果。
+27. **改前端一定要在 Electron 里点一遍，不能只跑 `node --check` 或开网页版看。**
+    这次 `1.0.6` 的「新建队伍」就是死在坑 26 上，而 `.dev/verify-team.mjs` 当时是 24/24 全过——
+    因为验证脚本从头到尾走的是接口建队（`POST /api/team`），**根本没点过那个按钮**。
+    教训：验证要覆盖「用户实际点的那条路径」，接口通了不等于按钮通了。
+    现在 `verify-team.mjs` 里加了「点新建 → 截屏 → 取消 → 确认建成」这一整段。
 
 ## 已经做过的事（按版本）
 

@@ -118,6 +118,14 @@ npm.cmd run sync       # 手动刷新题库
   `executeJavaScript('loadTeams()')` 会 `is not defined`。`executeJavaScript` 的返回值还必须
   可结构化克隆（返回 `undefined` / DOM 对象会报 `Script failed to execute`），顶层 `await`
   要包在 async IIFE 里。
+- **绝对不要用 `window.prompt()`——Electron 里它直接抛 `prompt() is not supported.`**
+  （`alert` / `confirm` 正常，只有 `prompt` 被移除）。这个异常的恶劣之处在于：**网页版完全正常**，
+  所以「浏览器里点过没问题」挡不住它；桌面版的表现是按钮点了毫无反应，只在控制台留一行异常。
+  要问用户一个值就用 `public/app.js` 里的 `askDialog({title, hint, value, confirmText, allowEmpty})`，
+  它返回 Promise、取消给 `null`，样式复用 `teamMemberDialog` 那套浮层。
+- **改前端界面后必须在 Electron 里真点一遍，不能只跑 `node --check` 或看网页版。**
+  `.dev/verify-team.mjs` 曾经 24/24 全过，而「新建队伍」其实是坏的——因为验证走的是接口建队
+  （`POST /api/team`），从没点过那个按钮。**接口通了不等于按钮通了**，验证要覆盖用户实际点的路径。
 - **隐藏窗口（`show:false`）的 `capturePage()` 只能拿到已绘制帧**：滚动后再截不可靠，
   截长页面就开一个够高的窗口一次装下整页（团队页用了 1440×2400）。
 - **排题要防同一分值被反复取满**：洛谷每个难度档只有一个分值，光「取最接近理想分」会让整份
