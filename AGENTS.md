@@ -104,6 +104,14 @@ npm.cmd run sync       # 手动刷新题库
 - **在 shell 里跑 Electron 验证脚本**要先 `unset ELECTRON_RUN_AS_NODE`（否则 `require('electron')` 是 undefined），
   并且要显式关硬件加速（`disableHardwareAcceleration()` + `disable-gpu` / `in-process-gpu` 等），
   否则 GPU 进程崩了页面加载会 `ERR_FAILED`。
+- **伪元素（`::before` / `::after`）的动画不在 `el.getAnimations()` 里**：要验就得看
+  `getComputedStyle(el, '::before').animationName`，或者多帧截图比哈希。改伪元素规则时
+  一定要连着定位属性（`position: absolute` / `left` / `width`）一起改，漏掉就掉回静态流变成整宽色块。
+- **`lib/plan.js` 的 `toClientProblem` 是字段白名单**：数据库查出来的字段不会自动到前端，
+  新字段要手动补进白名单（漏了就是前端 `Invalid Date` 这种症状）。
+- **长表格列宽用 `table-layout: fixed` + `colgroup`**：表头短、数据长的表格靠 `min-width`
+  调不动（表头和数据行各算各的）。改表头文字要连列宽一起改，否则会退化成「一字一行竖排」。
+- **CSS 改动的验证方式是截图**，`public/app.js` / `index.html` 的改动用 `.dev\*.mjs` 走一遍页面。
 
 ## 宣传素材
 

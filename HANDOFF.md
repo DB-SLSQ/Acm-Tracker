@@ -9,9 +9,10 @@
 
 ## 一句话现状
 
-**v1.0.4 已经写完、打包、发布**（标签 `v1.0.4`，GitHub Actions 自动建了 Release，附件是安装包）。
-`main` 分支干净、和远端同步；桌面上装的那份也是 1.0.4；安装包在
-`C:\Users\summer\Desktop\ACM Trainer Setup 1.0.4.exe`，也在 `D:\Acm-Tracker\dist\` 下。
+**v1.0.5 已经写完、打包、发布**（标签 `v1.0.5`，GitHub Actions 自动建了 Release，附件是安装包）。
+`main` 分支干净、和远端同步；桌面上装的那份也是 1.0.5；安装包在
+`D:\Acm-Tracker\dist\ACM Trainer Setup 1.0.5.exe`。
+（桌面上还留了一份 1.0.5 之前的备份 `ACM Trainer.bak-104`，确认新版没问题后可以删。）
 
 工作区里有两份**别人的**未跟踪文档（`outputs/notes/energy-intervals-status.md`、
 `outputs/视频简介-下半年-上海见乐山见.md`），不是这个项目的活，别顺手 `git add -A` 带上去。
@@ -172,6 +173,21 @@ platform/native_id/native_contest/native_rating）、
        `disable-gpu-compositing`、`in-process-gpu`、`no-sandbox`、`disable-dev-shm-usage`。
     参考 `.dev\shot-themes.mjs`（五套主题截图）和 `.dev\sweep-cyber.mjs`（赛博下 18 页全扫）。
     仓库里老的 `.dev\ui-sweep.mjs`、`.dev\run-selftest.mjs` 没加这些，在本环境跑不起来。
+14. **CSS 伪元素动画不在 `el.getAnimations()` 里**。验证 `::before` / `::after` 的动画要么看
+    `getComputedStyle(el, '::before').animationName`，要么多帧截图比哈希。用 `getAnimations()`
+    查赛博主题的五个动画会一个都查不到，误判成「没生效」。
+15. **改伪元素规则（`::before` / `::after`）时一定要带上定位属性**。只改 `background` / `animation`
+    而把 `position: absolute; left: 0; width: 2px` 漏掉，元素会掉回静态流变成整宽色块。
+    这个坑犯过两次（侧栏光带、菜单扫光），改完必须截图确认。
+16. **`lib/plan.js` 的 `toClientProblem` 是字段白名单**。数据库查出来的字段不会自动带到前端，
+    新加字段（如 `first_ac`）必须在白名单里补一行，否则前端拿到 `undefined`。典型症状是
+    「做题记录」页所有日期显示 `Invalid Date`。前端展示日期再兜个 `|| '—'` 更稳。
+17. **成长页那张比赛表格用 `table-layout: fixed` + `colgroup` 定列宽**。表头文字短、
+    数据行有长日期，靠 `min-width` 调不动（表头和数据行的列宽会各算各的）。要改表头文字时，
+    务必连 `colgroup` 的列宽一起看，不然又会退化成「一字一行竖排」。
+18. **打包时沙箱会拦批量删除**（`SAFE_DELETE_BULK_CONFIRM_REQUIRED`）：electron-builder 清理
+    `dist\win-unpacked\locales`（78 个文件 > 50）会被拦下。手动 `rm -rf dist/win-unpacked` 后
+    重跑即可；有时删 `__uninstaller.exe` 也会被拦，但产物其实已经生成完了，手动清残留就行。
 
 ## 已经做过的事（按版本）
 
@@ -192,6 +208,9 @@ platform/native_id/native_contest/native_rating）、
 - **1.0.4**：新页「我的题单」（贴题号或链接就能成题单、逐题勾进度、拼好题一键存）；
   历年比赛里做过/没做过改成实心 vs 空心两种形态，并标出整场状态
 
+- **1.0.5**：新主题「赛博朋克」（网格扫描线底纹 + 五处霓虹动态 + prefers-reduced-motion 总开关）；
+  「界面模块」开关补齐后加的 5 个页面（17 项）；修成长页表格列宽与做题记录时间显示 Invalid Date
+
 ## 没做 / 可以接着做
 
 1. **让用户完整跑一次推题模型**（设置 → 推题模型 → 开始训练，默认 300 场、十几分钟）。
@@ -201,31 +220,14 @@ platform/native_id/native_contest/native_rating）、
    手动点「检查更新」）、**Mac 版**。
 3. 「我的题单」还能往下做：今日卡片／训练计划里直接「存成题单」、题单导出成 CSV/Markdown 文件、
    题单内的随机一道。
-4. **新加的 5 个页面（题库／历年比赛／拼好题／我的题单／帮助）已经补进设置里的「界面模块」开关**
-   （`public/app.js` 的 `MODULE_META`，现在共 17 项）。
-
-## 还没发的改动（在 main 工作区里，未 commit）
-
-- 补进 `MODULE_META` 的 5 项（见上一条）
-- 新增第五套主题 **「赛博朋克」**（`data-theme='cyber'`）：深紫黑底 + 品红/青双霓虹，
-  变量定义在 `public/style.css` 的 `[data-theme='cyber']`，霓虹细节在文件末尾那段；
-  切换入口在两处——侧栏底部那组按钮、以及设置页新增的「外观」区块。
-  `applyAppearance` 现在遍历所有 `.theme-btn[data-theme-value]`，所以两处高亮自动同步。
-  加了主题后侧栏按钮会折行，`.side-foot .theme-btn` 的内边距收窄过。
-- 修了两个既有 bug：成长页那张表的列宽（一字一行竖排）、
-  做题记录页时间列显示 `Invalid Date`（`toClientProblem` 没带 `firstAcAt`）。
-5. 宣传：B 站发过宣传版和 v0.1.3 更新版；v0.1.7 的更新视频、封面、简介都做好了
+4. 宣传：B 站发过宣传版和 v0.1.3 更新版；v0.1.7 的更新视频、封面、简介都做好了
    （`.dev\make-video-v017.mjs`、`dist\ACM训练台-v0.1.7更新.mp4`、`outputs\v0.1.7-视频简介.md`），
    发不发看用户；素材同时放在 `C:\Users\summer\Documents\Codex\2026-09-20\new-chat\outputs\video-assets`。
-6. **成长页底部「每场比赛：赛前两周练了多少」那张表**已经修好了（列宽、表头、日期都正常）。
-   修的时候注意：那张表用 `table-layout: fixed` + `colgroup` 定比例，
-   写死在 `public/app.js` 的渲染里；改表头文字要同时看列宽够不够。
-7. **`toClientProblem`（`lib/plan.js`）是字段白名单**：往里加新字段要记得在转换里也列一遍，
-   否则后端查出来了、前端拿到 undefined。做题记录的「Invalid Date」就是这么来的
-   （`db.recentlySolved` 查了 `first_ac`，但转换时没带出来）。
-8. **主题现在有五套**（暗色／亮色／灰色／护眼／赛博），`public/style.css` 顶部是变量块，
+5. **主题现在有五套**（暗色／亮色／灰色／护眼／赛博），`public/style.css` 顶部是变量块，
    加新主题照抄一块改颜色即可；样式里凡是 `[data-theme='dark'], [data-theme='gray']` 这种
    列举写法的选择器，记得把新主题名也加进去（比如 `--danger` 那两处）。
+   赛博那套除了变量，文件末尾还有一大段氛围/动画（网格底纹、流动光带、扫光、glitch）。
+
 
 ## 数据安全（这条最重要）
 
