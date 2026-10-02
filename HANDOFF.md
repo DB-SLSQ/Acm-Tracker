@@ -9,11 +9,13 @@
 
 ## 一句话现状
 
-**v1.0.8 已写完并本机打包**，新增：比赛日历接**牛客**赛程，新页「**待补题**」（手加题目或链接、
-自动收进训练日程里过期没打勾的题、能增删改）。tag `v1.0.6` / `v1.0.7` 都已推上去，GitHub Release
-由 Actions 生成、exe 附件在线。用户桌面那份在 1.0.7（1.0.8 要等确认后再覆盖，因为 exe 被占用时
-覆盖不了）。**1.0.8 还没打 tag**——发版就三步：升版本号 → 写 `outputs/release-notes-v1.0.8.md` →
-`git tag v1.0.8 && git push origin v1.0.8`（前两步已经做完了）。
+**v1.0.9 已写完**，修的是「赛博主题下点左侧菜单项，那一条会变窄」——实际是塌成 16px
+（根因见坑 31：`<button>` 上 `display:flex` + `overflow:hidden` 会让 Chromium 把内容高度算成 0），
+裁剪改用 `overflow: clip` 即可，其余四个主题没这条声明所以一直没露头。
+
+**1.0.8 和 1.0.9 都还没打 tag**。发版就三步：升版本号 → 写 `outputs/release-notes-vX.Y.Z.md` →
+`git tag vX.Y.Z && git push origin vX.Y.Z`。tag `v1.0.6` / `v1.0.7` 已在线，GitHub Release
+由 Actions 生成、exe 附件在线。用户桌面那份现在是 1.0.8。
 
 > 1.0.7 那次只覆盖了 `app.asar`，`ACM Trainer.exe` 的文件版本号还写着 1.0.6，不影响运行。
 
@@ -433,6 +435,18 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
     看起来像「卡住了」。末尾补一句 `;true;` 就好。验证脚本里改 `window.confirm`
     是为了绕开 Electron 的原生模态框（它会卡住渲染进程，脚本永远等不到下一步）。
 
+31. **`<button>` 上 `display: flex` + `overflow: hidden` 会把内容高度算成 0**。
+    Chromium 的老毛病，实测 Electron 44 仍在。赛博主题给当前菜单项加 `overflow: hidden`
+    裁那道扫光，结果被点中那一条塌成 **16px**——正好等于上下 padding，内容高度被判成 0，
+    文字被裁掉一截，用户看到的现象是「点一下左侧菜单项，这一条就变窄了」。
+    另外四个主题没给菜单项加 overflow，所以只有赛博主题中招。
+    修法是裁剪改用 **`overflow: clip`**：一样裁在圆角内，但不创建滚动容器、不重算布局高度
+    （`visible` 也能恢复高度，但扫光会溢出到侧栏右边）。
+    定位手法值得记：先量 `getBoundingClientRect()` 找异常项（高度 16 vs 41.5），
+    再逐条内联覆盖（`it.style.overflow='visible'` 等）做排除法——一次就能锁定是哪条声明。
+    `verify-cyber-motion.mjs` 末尾加了「逐项点击 + 断言每条高度一致」把它钉住，
+    并把 `overflow` 改回 `hidden` 反跑过一遍，确认这条断言真能报错（不是假防守）。
+
 ## 已经做过的事（按版本）
 
 - **0.1.5–0.1.6**：左侧菜单分页布局、今日任务卡片（做题手感 / 赛前热身 / 复盘卡 / 补一个方向）、
@@ -468,7 +482,11 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
   自动收进训练日程里过期还没打勾的题、勾进度 / 改题名链接备注 / 删除全都能用，
   删掉的自动题不会再被收回来（`makeup_dismissed`）。两张新表。
   验证：`.dev/verify-makeup.mjs` 48 项 + `.dev/verify-makeup-ui.mjs` 25 项全过、零控制台报错。
-  **还没打 tag**。
+- **1.0.9**：修赛博主题下点左侧菜单项「变窄」——菜单项是 `<button>`，Chromium 对
+  `display:flex` + `overflow:hidden` 会把内容高度算成 0，被点中那一条塌成 16px、文字被裁掉一截
+  （见坑 31）；裁剪改用 `overflow: clip`。`.dev/verify-cyber-motion.mjs` 末尾加了
+  「逐项点击 + 断言每条高度一致」把它钉住。
+  **1.0.8 / 1.0.9 都还没打 tag**。
 
 ## 没做 / 可以接着做
 

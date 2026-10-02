@@ -149,6 +149,12 @@ npm.cmd run sync       # 手动刷新题库
   而且要**在同一个进程里** `await startServer()` 再 fetch——后台 `node server.js &`
   起的进程在这个沙箱里会被收拾掉，测试会撞 `ECONNREFUSED`。
 - **CSS 改动的验证方式是截图**，`public/app.js` / `index.html` 的改动用 `.dev\*.mjs` 走一遍页面。
+- **`<button>` 上别用 `overflow: hidden`，要裁就用 `overflow: clip`。** Chromium（实测 Electron 44）
+  碰到「button + `display:flex` + `overflow:hidden`」会把**内容高度算成 0**，整条塌成只剩上下 padding
+  的高度——赛博主题的当前菜单项就这么塌成 16px，用户看到的是「点一下菜单项变窄了」（HANDOFF 坑 31）。
+  `clip` 一样裁在圆角内，但不创建滚动容器、不重算布局高度。定位这类「某个盒子尺寸不对」的问题，
+  先量 `getBoundingClientRect()` 找出异常项，再用**内联逐条覆盖**（`el.style.overflow='visible'` 等）
+  做排除法，一次就能锁定是哪条声明。
 - **牛客赛程只认 `/acm/calendar/contest`**（不是 `/acm/contest/calendar`，那个返回 HTML），
   必须带 Referer，时间是**毫秒**，一次只给一个月（取本月 + 下月），返回里还有 CF/AtCoder
   要按 `ojName` 过滤，否则日历里重复两行。

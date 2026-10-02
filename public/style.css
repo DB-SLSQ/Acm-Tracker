@@ -2948,7 +2948,12 @@ body.compact .panel-head h2 {
 
 [data-theme='cyber'] .side-item.active {
   position: relative;
-  overflow: hidden;
+  /* 裁剪扫光用的是 clip，不能换回 hidden。
+     菜单项是 <button>，而 Chromium 遇到「button + display:flex + overflow:hidden」
+     会把内容高度算成 0：整条塌成只剩上下 padding 的 16px，文字被裁掉一截，
+     看着就像菜单项点一下「变窄」了（其余主题没有 overflow 就没这毛病）。
+     clip 同样能把扫光裁在圆角内，但不创建滚动容器、不重算布局高度。 */
+  overflow: clip;
   background: linear-gradient(90deg, rgba(255, 45, 149, 0.2), rgba(0, 229, 255, 0.07));
   color: #fff;
   box-shadow: inset 2px 0 0 var(--accent-alt), 0 0 12px rgba(255, 45, 149, 0.22);
