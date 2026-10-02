@@ -1189,6 +1189,179 @@ function defaultListName(count) {
   return `题单 ${now.getMonth() + 1}/${now.getDate()} ${pad(now.getHours())}:${pad(now.getMinutes())} · ${count} 题`;
 }
 
+// ---------- 待补题：一行一题的文字解析 ----------
+
+/** 从链接认出是哪家 OJ。认不出来就 other（照样能存，只是没角标）。 */
+function platformOfUrl(url) {
+  const text = String(url).toLowerCase();
+  if (text.includes('codeforces.com')) return 'codeforces';
+  if (text.includes('atcoder.jp')) return 'atcoder';
+  if (text.includes('luogu.com.cn')) return 'luogu';
+  if (text.includes('nowcoder.com')) return 'nowcoder';
+  return 'other';
+}
+
+/** 链接丢掉协议、www、查询参数和结尾斜杠，用来当「同一道题」的判断依据。 */
+function normalizeMakeupUrl(url) {
+  return String(url)
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/^www\./i, '')
+    .replace(/[?#].*$/, '')
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
+/**
+ * 从一行链接里找题目在题库里的对应条目（找得到就补上难度和题名）。
+ * 牛客的题本站没抓过，必然找不到，这是预期内的——所以才允许只存链接。
+ */
+function matchBankProblem(url) {
+  const index = problemCodeIndex();
+  const cf = url.match(
+    /codeforces\.com\/(?:problemset\/problem|contest)\/(\d+)\/(?:problem\/)?([A-Za-z]\d?)/,
+  );
+  if (cf) {
+    const contestId = Number(cf[1]);
+    const idx = cf[2].toUpperCase();
+    const problem = index.get(`${contestId}${idx}`);
+    if (problem) return problem;
+    return { contestId, index: idx };
+  }
+
+  const at = url.match(/atcoder\.jp\/contests\/([a-z0-9_]+)\/tasks\/([a-z0-9_]+)/i);
+  if (at) {
+    const problem = index.get(at[2].toUpperCase());
+    if (problem) return problem;
+    return { nativeId: at[2], platform: 'atcoder' };
+  }
+
+  const lg = url.match(/luogu\.com\.cn\/problem\/([A-Za-z]+\d+)/i);
+  if (lg) {
+    const problem = index.get(lg[1].toUpperCase());
+    if (problem) return problem;
+    return { nativeId: lg[1], platform: 'luogu' };
+  }
+  return null;
+}
+
+/**
+ * 把用户填的一行行文本变成待补题条目。
+ *
+ * 和「我的题单」那个 parseProblemText 是两回事：那个只认题库里有的题，对不上就报
+ * 未识别；这里必须允许「题库里没有的题」——牛客的题本站根本没抓过，用户贴个牛客
+ * 链接、或者干脆只写个题名，都得能存下来。所以顺序是：
+ *   1) 行里有链接 → 按链接认平台；能对上题库的顺手补难度和题名
+ *   2) 没有链接 → 整行当题名，再拿题号去题库索引试一把（「2173A」「ABC476D」这种）
+ *   3) 都对不上 → 就存原文当题名，平台记 other，一样能用
+ */
+function parseMakeupInput(text) {
+  const index = problemCodeIndex();
+  const items = [];
+
+  for (const rawLine of String(text ?? '').split(/\r?\n/)) {
+    const line = rawLine.trim().replace(/^[-*•]\s*/, '');
+    if (!line) continue;
+
+    const urlMatch = line.match(/https?:\/\/\S+/);
+    if (urlMatch) {
+      const url = urlMatch[0].replace(/[，。、,)]+$/, '');
+      const tail = line.replace(urlMatch[0], '').trim();
+      const platform = platformOfUrl(url);
+      const bank = matchBankProblem(url);
+
+      const problemKey = bank?.contestId != null && bank?.index ? problemKeyOf(bank) : null;
+      items.push({
+        title: bank?.name || tail || titleFromUrl(url, platform),
+        url,
+        platform: bank?.platform ?? platform,
+        problemKey,
+        rating: bank?.rating ?? null,
+        dedupeKey: problemKey ? `pk:${problemKey}` : `url:${normalizeMakeupUrl(url)}`,
+      });
+      continue;
+    }
+
+    // 没链接：整行当题名，顺手拿题号去题库里碰一下
+    const bare = line.match(/\b(ABC|ARC|AGC)(\d{2,3})([A-Z])\b|\bCF(\d+)([A-Z]\d?)\b|\b([PB]\d{3,5})\b|\b(\d{1,4})([A-Z]\d?)\b/i);
+    if (bare) {
+      const code = bare[1]
+        ? `${bare[1].toUpperCase()}${String(bare[2]).padStart(3, '0')}${bare[3].toUpperCase()}`
+        : bare[4]
+          ? `${bare[4]}${bare[5].toUpperCase()}`
+          : (bare[6] ?? `${bare[7]}${bare[8]}`).toUpperCase();
+      const problem = index.get(code);
+      if (problem) {
+        const key = problemKeyOf(problem);
+        items.push({
+          title: problem.name || line,
+          url: problemUrl(problem),
+          platform: problem.platform ?? 'codeforces',
+          problemKey: key,
+          rating: problem.rating ?? null,
+          dedupeKey: `pk:${key}`,
+        });
+        continue;
+      }
+    }
+
+    items.push({
+      title: line.slice(0, 200),
+      url: null,
+      platform: 'other',
+      problemKey: null,
+      rating: null,
+      dedupeKey: `title:${line.toLowerCase().slice(0, 200)}`,
+    });
+  }
+  return items;
+}
+
+const problemKeyOf = (problem) => problemKey(problem.contestId, problem.index);
+
+/**
+ * 光有链接、又对不上题库时，从链接里抠一个能认出来的题名。
+ * 不做这一步的话，牛客链接会变成「牛客题目」这种，一列看下来分不清谁是谁。
+ */
+function titleFromUrl(url, platform) {
+  const ncContest = url.match(/nowcoder\.com\/acm\/contest\/(\d+)(?:\/([A-Za-z]\d*))?/i);
+  if (ncContest) {
+    return ncContest[2]
+      ? `牛客 ${ncContest[1]} ${ncContest[2].toUpperCase()}`
+      : `牛客比赛 ${ncContest[1]}`;
+  }
+  const ncProblem = url.match(/nowcoder\.com\/acm\/problem\/(\d+)/i);
+  if (ncProblem) return `牛客题目 ${ncProblem[1]}`;
+  try {
+    const tail = new URL(url).pathname.split('/').filter(Boolean).pop();
+    if (tail) return `${platformLabel(platform)} ${decodeURIComponent(tail)}`;
+  } catch {
+    /* 不是个合法 URL，走下面的兜底 */
+  }
+  return `${platformLabel(platform)}题目`;
+}
+
+function platformLabel(platform) {
+  return (
+    { codeforces: 'Codeforces', atcoder: 'AtCoder', luogu: '洛谷', nowcoder: '牛客' }[platform] ?? '这道'
+  );
+}
+
+/** 给待补题列表补上「做过了吗」——题库里对得上的题，在 CF/洛谷提交记录里查一下。 */
+function decorateMakeupItems(items, handleKey) {
+  if (!handleKey) return items;
+  let solved;
+  try {
+    solved = deriveProgress(db.getSubmissions(handleKey)).solved;
+  } catch {
+    return items;
+  }
+  return items.map((item) => ({
+    ...item,
+    solved: item.problemKey ? solved.has(item.problemKey) : false,
+  }));
+}
+
 /**
  * 拼好题：一场没打过的 CF + 一场没打过的 AtCoder，凑成一套。
  *
@@ -1486,16 +1659,23 @@ function decorateContest(contest) {
 
 /** 比赛日历：未来一段时间内已公布赛程的 Codeforces 比赛。 */
 /**
- * 洛谷 / AtCoder 的赛程。
+ * 洛谷 / AtCoder / 牛客的赛程。
  *
- * 这两家都不给「官方赛程接口」：AtCoder 只能抓 /contests/ 那张 HTML 表，
- * 洛谷有 _contentOnly=1 的半公开 JSON。都缓存 12 小时，只在打开比赛日历、
- * 缓存过期时才请求；抓不到就退回上一次的缓存，页面照常用 Codeforces 的赛程。
+ * 这三家都不给「官方赛程接口」：AtCoder 只能抓 /contests/ 那张 HTML 表，
+ * 洛谷有 _contentOnly=1 的半公开 JSON，牛客走它自己的比赛日历接口（要带 Referer）。
+ * 都缓存 12 小时，只在打开比赛日历、缓存过期时才请求；抓不到就退回上一次的缓存，
+ * 页面照常用 Codeforces 的赛程。
  * 失败也记一个「尝试时间」，半小时内不重复试，免得断网时每次打开都等几秒。
  */
 const EXTERNAL_CONTEST_CACHE_MS = 1000 * 60 * 60 * 12;
 const EXTERNAL_RETRY_MS = 1000 * 60 * 30;
 const CALENDAR_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) acm-trainer';
+
+const EXTERNAL_SOURCES = {
+  luogu: fetchLuoguContests,
+  atcoder: fetchAtCoderContests,
+  nowcoder: fetchNowcoderContests,
+};
 
 async function loadExternalContests(source) {
   const key = `external_contests_${source}`;
@@ -1507,7 +1687,7 @@ async function loadExternalContests(source) {
 
   db.metaSet(`${key}_attempted_at`, Date.now());
   try {
-    const list = source === 'luogu' ? await fetchLuoguContests() : await fetchAtCoderContests();
+    const list = await EXTERNAL_SOURCES[source]();
     if (list.length) {
       db.metaSet(key, JSON.stringify(list));
       db.metaSet(`${key}_updated_at`, Date.now());
@@ -1645,14 +1825,83 @@ function formatRatedRange(text) {
   return `${low}~${high}`;
 }
 
+/**
+ * 牛客赛程：走它首页「全网比赛日历」那个 XHR。
+ *
+ * 几个实测出来的要点（2026-10 核对过）：
+ *  - 必须带 Referer，裸请求会被风控挡成 HTML 首页；
+ *  - 只认路径 `/acm/calendar/contest`。长得几乎一样的 `/acm/contest/calendar`
+ *    返回的是 HTML 页面，拿它 JSON.parse 会直接炸；
+ *  - month 是「年-月」，补不补零都行（2026-9 和 2026-09 一样能出数据）；
+ *  - startTime / endTime 是**毫秒**，和别处（秒）不一样，换算时别无脑复用。
+ *
+ * 这个接口会把 Codeforces、AtCoder 一起返回（它就是个聚合日历），这里只留 NowCoder
+ * 的——那两家本站已经各自抓过，照单全收会在日历里变成两行。
+ * 一次只返回一个月，跨月的那几天（比如窗口从 10/28 看到 11/10）就是空的，
+ * 所以固定取「本月 + 下月」两份。
+ */
+async function fetchNowcoderContests() {
+  const months = nowcoderMonths();
+  const batches = await Promise.all(months.map(fetchNowcoderMonth));
+  const seen = new Set();
+  const result = [];
+
+  for (const row of batches.flat()) {
+    if (row?.ojName !== 'NowCoder') continue;
+    const startMs = Number(row.startTime);
+    const endMs = Number(row.endTime);
+    if (!row.contestName || !Number.isFinite(startMs) || !Number.isFinite(endMs)) continue;
+    const id = `nowcoder-${row.contestId ?? row.link}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result.push({
+      id,
+      name: String(row.contestName).trim(),
+      startTime: Math.floor(startMs / 1000),
+      durationSeconds: Math.max(0, Math.floor((endMs - startMs) / 1000)),
+      // link 里带着 ?from=acm_calendar 的追踪参数，去掉更干净
+      url: String(row.link ?? '').replace(/\?.*$/, '') || `https://ac.nowcoder.com/acm/contest/${row.contestId}`,
+      source: 'nowcoder',
+    });
+  }
+  return result;
+}
+
+/** 牛客日历一个月只给一个月的量，取本月和下月，够覆盖任意 14~60 天的窗口。 */
+function nowcoderMonths(base = Date.now()) {
+  const date = new Date(base);
+  const pad = (value) => String(value).padStart(2, '0');
+  const list = [];
+  for (let i = 0; i < 2; i += 1) {
+    const cursor = new Date(date.getFullYear(), date.getMonth() + i, 1);
+    list.push(`${cursor.getFullYear()}-${pad(cursor.getMonth() + 1)}`);
+  }
+  return list;
+}
+
+async function fetchNowcoderMonth(month) {
+  const url = `https://ac.nowcoder.com/acm/calendar/contest?token=&month=${month}&_=${Date.now()}`;
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': CALENDAR_UA,
+      Referer: 'https://ac.nowcoder.com/acm/contest/vip-index',
+      Accept: 'application/json, text/plain, */*',
+    },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = await response.json();
+  return Array.isArray(payload?.data) ? payload.data : [];
+}
+
 async function handleCalendar(url) {
   const days = Math.min(60, Math.max(1, Number(url.searchParams.get('days') || 14)));
   const rawHandle = url.searchParams.get('handle');
   const contestsState = await ensureContests();
-  // 洛谷和 AtCoder 的赛程：抓不到就只用 Codeforces 的，不影响页面
-  const [luogu, atcoder] = await Promise.all([
+  // 洛谷、AtCoder、牛客的赛程：抓不到就只用 Codeforces 的，不影响页面
+  const [luogu, atcoder, nowcoder] = await Promise.all([
     loadExternalContests('luogu'),
     loadExternalContests('atcoder'),
+    loadExternalContests('nowcoder'),
   ]);
 
   const now = Math.floor(Date.now() / 1000);
@@ -1690,11 +1939,12 @@ async function handleCalendar(url) {
   });
 
   // 外面的赛程只保留「还没结束、且在时间窗里」的
-  const externalRows = [...luogu, ...atcoder]
+  const externalRows = [...luogu, ...atcoder, ...nowcoder]
     .filter((contest) => {
       if (contest.startTime + contest.durationSeconds <= now) return false;
-      // AtCoder 和 Codeforces 一样只看一周内；洛谷按用户选的窗口
-      return contest.source === 'luogu' ? contest.startTime <= until : contest.startTime <= weekAhead;
+      // AtCoder 和 Codeforces 一样只看一周内；洛谷、牛客的赛程公布得早，按用户选的窗口来
+      const nearTerm = contest.source === 'atcoder';
+      return contest.startTime <= (nearTerm ? weekAhead : until);
     })
     .map((contest) => ({
       id: contest.id,
@@ -1703,12 +1953,14 @@ async function handleCalendar(url) {
       division:
         contest.source === 'luogu'
           ? '洛谷'
-          : contest.ratedLabel ?? 'AtCoder',
+          : contest.source === 'nowcoder'
+            ? '牛客'
+            : contest.ratedLabel ?? 'AtCoder',
       source: contest.source,
       startTime: contest.startTime,
       durationSeconds: contest.durationSeconds,
       url: contest.url,
-      // 这两家不区分 Div.，也就没有「适合你的组别」这个判断
+      // 这三家不区分 Div.，也就没有「适合你的组别」这个判断
       fit: null,
     }));
 
@@ -1716,7 +1968,7 @@ async function handleCalendar(url) {
     contestsState,
     now,
     days,
-    sources: ['cf', 'luogu', 'atcoder'],
+    sources: ['cf', 'luogu', 'atcoder', 'nowcoder'],
     upcoming: [...cfRows, ...externalRows].sort((a, b) => a.startTime - b.startTime),
   };
 }
@@ -3264,6 +3516,120 @@ async function route(req, res, url) {
     } catch (error) {
       return sendError(res, 400, error.message);
     }
+  }
+
+  // ---------- 待补题 ----------
+  // 一张自己攒的待办清单。和「补题队列」的区别：队列是从提交记录自动捞的
+  // 「提交过但没过」，这里可以手加（题名或链接都行），也会把训练日程里过了日子
+  // 还没打勾的题自动收进来。
+
+  if (pathname === '/api/makeup' && req.method === 'GET') {
+    const handleKey = db.normalizeHandle(url.searchParams.get('handle')) ?? '';
+    const status = url.searchParams.get('status') ?? 'all';
+    const items = db.listMakeupProblems(handleKey, { status });
+    return sendJson(res, 200, {
+      total: items.length,
+      status,
+      items: decorateMakeupItems(items, handleKey),
+    });
+  }
+
+  // 手加：一行一题，题目链接或者光写个题名都行
+  if (pathname === '/api/makeup' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle) ?? '';
+      const parsed = parseMakeupInput(body.text ?? '');
+      if (!parsed.length) {
+        return sendError(res, 400, '没认出来任何题目，写个题名、或者把题目链接贴进来都行');
+      }
+      const note = String(body.note ?? '').trim().slice(0, 500) || null;
+      const { added, skipped } = db.addMakeupProblems(
+        handleKey,
+        parsed.map((item) => ({ ...item, note, origin: 'manual' })),
+      );
+      return sendJson(res, 200, {
+        added,
+        skipped,
+        parsed: parsed.length,
+        items: decorateMakeupItems(db.listMakeupProblems(handleKey), handleKey),
+      });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 自动收题：把训练日程里「日子过了但还没打勾」的题收进来。
+  // 日程是前端按计划排出来的（buildSchedule 在 public/schedule.js），服务端没有这份数据，
+  // 所以由前端算好报上来；这里只负责去重入库。
+  if (pathname === '/api/makeup/collect' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle) ?? '';
+      const rows = Array.isArray(body.items) ? body.items.slice(0, 300) : [];
+      const items = rows
+        .map((row) => {
+          const key = String(row?.problemKey ?? '').trim();
+          if (!key) return null;
+          const dash = key.lastIndexOf('-');
+          const contestId = Number(key.slice(0, dash));
+          const idx = key.slice(dash + 1);
+          return {
+            dedupeKey: `pk:${key}`,
+            problemKey: key,
+            title: String(row.title ?? key).slice(0, 200),
+            url: row.url
+              ? String(row.url).slice(0, 500)
+              : Number.isFinite(contestId)
+                ? problemUrl(contestId, idx)
+                : null,
+            platform: String(row.platform ?? 'codeforces'),
+            rating: row.rating ?? null,
+            planDate: row.date ? String(row.date).slice(0, 10) : null,
+            origin: 'auto',
+          };
+        })
+        .filter(Boolean);
+      const { added, skipped } = db.addMakeupProblems(handleKey, items);
+      return sendJson(res, 200, { added, skipped, scanned: rows.length });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 一键清掉「已补」的（保留还没补的）
+  if (pathname === '/api/makeup/clear-done' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle) ?? '';
+      const removed = db.clearMakeupDone(handleKey);
+      return sendJson(res, 200, {
+        removed,
+        items: decorateMakeupItems(db.listMakeupProblems(handleKey), handleKey),
+      });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 改一条（题名 / 链接 / 备注 / 平台 / 难度 / 状态）
+  const makeupPath = pathname.match(/^\/api\/makeup\/(\d+)$/);
+  if (makeupPath && (req.method === 'PATCH' || req.method === 'PUT')) {
+    try {
+      const body = await readJsonBody(req);
+      const updated = db.updateMakeupProblem(Number(makeupPath[1]), body);
+      if (!updated) return sendError(res, 404, '这条待补题已经不在了，刷新一下看看');
+      return sendJson(res, 200, { item: updated });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 删一条（自动收进来的会记一笔「别再收我」，下次不会再冒出来）
+  if (makeupPath && req.method === 'DELETE') {
+    const removed = db.deleteMakeupProblem(Number(makeupPath[1]));
+    if (!removed) return sendError(res, 404, '这条待补题已经不在了，刷新一下看看');
+    return sendJson(res, 200, { ok: true });
   }
 
   // 「今天补一个方向」：临时往某一天塞几道指定方向的题，不占计划配额。

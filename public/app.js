@@ -71,6 +71,16 @@ const state = {
   reviewSort: 'stale',
   // 补题队列里被隐藏的题数（题库里查不到的，只报个数）
   reviewMissing: 0,
+  // 待补题：自己攒的清单（手加 + 自动收进来的没做完的）
+  makeup: {
+    loaded: false,
+    items: [],
+    status: 'todo',
+    editing: false,
+    // 自动收题只在「需要收的内容变了」时才打一次接口，避免每次重排日程都发请求
+    collectedSig: null,
+    collectedCount: 0,
+  },
   // 成长报告
   growth: null,
   // 多账号
@@ -1374,6 +1384,322 @@ $('review-list').addEventListener('click', async (event) => {
     showHint(error.message, true);
   }
 });
+
+// ---------- 待补题 ----------
+// 一张自己攒的待办清单。和上面那个「补题队列」不是一回事：
+//   补题队列 = 从提交记录里自动捞的「提交过但没过」，数据在 submissions 里，做出来自动出队；
+//   待补题   = 手加的（题名或链接都行，牛客这种本站没题库的题也能加）+ 自动收进来的
+//              「训练日程里过了日子还没打勾」的题，删掉之后不会再被收回来。
+// 所以这一页在没有训练计划时也能单独当待办用。
+
+const MAKEUP_PLATFORM_LABELS = {
+  codeforces: 'Codeforces',
+  atcoder: 'AtCoder',
+  luogu: '洛谷',
+  nowcoder: '牛客',
+  other: '自定义',
+};
+
+async function loadMakeup({ keepStatus = true } = {}) {
+  if (!keepStatus) state.makeup.status = 'todo';
+  // 先把日程里该收的收进来再拉列表，省得「刚打开怎么少了几道」
+  await collectMakeupFromSchedule();
+  try {
+    const query = new URLSearchParams({ status: state.makeup.status });
+    if (state.handle) query.set('handle', state.handle);
+    const data = await getJson(`/api/makeup?${query}`);
+    state.makeup.items = data.items ?? [];
+    state.makeup.loaded = true;
+    renderMakeup();
+    markViewReady('panel-makeup');
+  } catch (error) {
+    $('makeup-summary').textContent = `待补题读取失败：${error.message}`;
+  }
+}
+
+function renderMakeup() {
+  const box = $('makeup-list');
+  if (!box) return;
+  const items = state.makeup.items ?? [];
+  const todo = items.filter((item) => item.status === 'todo').length;
+  const done = items.length - todo;
+
+  const autoCount = items.filter((item) => item.origin === 'auto').length;
+  const statusText = { todo: '待补', done: '已补', all: '全部' }[state.makeup.status] ?? '待补';
+  $('makeup-summary').textContent = items.length
+    ? `当前看的是「${statusText}」，${items.length} 道（待补 ${todo} · 已补 ${done}）${
+        autoCount ? `，其中 ${autoCount} 道是从训练日程自动收进来的` : ''
+      }。`
+    : state.makeup.status === 'todo'
+      ? '待补清单是空的。点「添加题目」可以贴链接或写题名；点「收进没做完的」会把训练日程里过期没打勾的题收进来。'
+      : '这里还没有内容，切到「待补」看看。';
+
+  document.querySelectorAll('#makeup-tabs [data-makeup-status]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.makeupStatus === state.makeup.status);
+  });
+  $('makeup-clear-done').disabled = done === 0;
+
+  box.innerHTML = items.length
+    ? items.map(makeupRow).join('')
+    : '<p class="subtle">没有内容。点「添加题目」加一道试试。</p>';
+}
+
+function makeupRow(item) {
+  // 题号：题库里对得上的存的是 1555-D 这种 key，显示时去掉横线
+  const code = item.problemKey ? item.problemKey.replace('-', '') : '';
+  const title = item.url
+    ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a>`
+    : escapeHtml(item.title);
+  const meta = [
+    item.origin === 'auto' ? '日程收进' : null,
+    item.planDate ? `原定 ${formatMonthDay(item.planDate)}` : null,
+    item.note ? escapeHtml(item.note) : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return `<div class="makeup-row${item.status === 'done' ? ' done' : ''}">
+    <input type="checkbox" ${item.status === 'done' ? 'checked' : ''} data-makeup-toggle="${item.id}"
+           title="勾上表示已经补完了" />
+    <span class="record-code">${code ? escapeHtml(code) : '—'}</span>
+    <span class="makeup-name">
+      ${title}
+      <span class="makeup-src src-${item.platform}">${MAKEUP_PLATFORM_LABELS[item.platform] ?? '自定义'}</span>
+      ${item.solved && item.status !== 'done' ? '<span class="makeup-ok" title="你在提交记录里已经通过这道题了">已通过</span>' : ''}
+    </span>
+    <span>${ratingBadge(item.rating)}</span>
+    <span class="makeup-meta">${meta}</span>
+    <button type="button" class="btn small" data-makeup-edit="${item.id}">编辑</button>
+    <button type="button" class="btn small" data-makeup-del="${item.id}">删除</button>
+  </div>`;
+}
+
+$('makeup-tabs')?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-makeup-status]');
+  if (!button) return;
+  state.makeup.status = button.dataset.makeupStatus;
+  loadMakeup();
+});
+
+$('makeup-add')?.addEventListener('click', () => toggleMakeupEditor(true));
+$('makeup-cancel')?.addEventListener('click', () => toggleMakeupEditor(false));
+
+function toggleMakeupEditor(open) {
+  const editor = $('makeup-editor');
+  if (!editor) return;
+  editor.classList.toggle('hidden', !open);
+  if (open) {
+    $('makeup-note').value = '';
+    const text = $('makeup-text');
+    text.value = '';
+    text.focus();
+  }
+}
+
+$('makeup-save')?.addEventListener('click', async () => {
+  const text = $('makeup-text').value.trim();
+  if (!text) {
+    $('makeup-text').focus();
+    return;
+  }
+  const note = $('makeup-note').value.trim();
+  setStatus('正在添加…', { busy: true });
+  try {
+    const data = await postJson('/api/makeup', { handle: state.handle, text, note });
+    setStatus('');
+    toggleMakeupEditor(false);
+    // 加完切到「待补」才看得见刚加的东西（已补页是空的，容易让人以为没加上）
+    state.makeup.status = 'todo';
+    await loadMakeup();
+    const skipped = data.skipped ? `，${data.skipped} 道已经在清单里了` : '';
+    showHint(`加了 ${data.added} 道${skipped}。`);
+  } catch (error) {
+    setStatus('');
+    showHint(error.message, true);
+  }
+});
+
+$('makeup-collect')?.addEventListener('click', async () => {
+  setStatus('正在收题…', { busy: true });
+  state.makeup.collectedSig = null; // 手动点就强制重算一次
+  const added = await collectMakeupFromSchedule({ force: true });
+  setStatus('');
+  await loadMakeup();
+  showHint(
+    added ? `收进来 ${added} 道没做完的题。` : '没有新收进来的：日程里过了日子还没打勾的题都在清单里了。',
+  );
+});
+
+$('makeup-clear-done')?.addEventListener('click', async () => {
+  try {
+    const data = await postJson('/api/makeup/clear-done', { handle: state.handle });
+    state.makeup.items = data.items ?? [];
+    renderMakeup();
+    showHint(`清掉了 ${data.removed} 道已补的题。`);
+  } catch (error) {
+    showHint(error.message, true);
+  }
+});
+
+$('makeup-list')?.addEventListener('click', async (event) => {
+  const editButton = event.target.closest('[data-makeup-edit]');
+  const delButton = event.target.closest('[data-makeup-del]');
+  const toggle = event.target.closest('[data-makeup-toggle]');
+
+  try {
+    if (toggle) {
+      const id = Number(toggle.dataset.makeupToggle);
+      await postJson(
+        `/api/makeup/${id}`,
+        { status: toggle.checked ? 'done' : 'todo' },
+        'PATCH',
+      );
+      await loadMakeup();
+      return;
+    }
+
+    if (editButton) {
+      const id = Number(editButton.dataset.makeupEdit);
+      const item = state.makeup.items.find((row) => row.id === id);
+      if (!item) return;
+      const next = await makeupEditDialog(item);
+      if (!next) return;
+      await postJson(`/api/makeup/${id}`, next, 'PATCH');
+      await loadMakeup();
+      showHint('改好了。');
+      return;
+    }
+
+    if (delButton) {
+      const id = Number(delButton.dataset.makeupDel);
+      const item = state.makeup.items.find((row) => row.id === id);
+      if (!item) return;
+      const ok = window.confirm(`把「${item.title}」从待补题里删掉？`);
+      if (!ok) return;
+      await postJson(`/api/makeup/${id}`, {}, 'DELETE');
+      await loadMakeup();
+      showHint(
+        item.origin === 'auto'
+          ? '删掉了。这道是自动收进来的，删了之后不会再收回来。'
+          : '删掉了。',
+      );
+    }
+  } catch (error) {
+    showHint(error.message, true);
+  }
+});
+
+/** 改一道待补题：题名 / 链接 / 备注。和加队员那个弹框同一种做法。 */
+function makeupEditDialog(item) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.id = 'makeup-edit-dialog';
+    wrap.className = 'team-dialog-backdrop';
+    wrap.innerHTML = `
+      <div class="team-dialog" role="dialog" aria-modal="true">
+        <h3>改这道题</h3>
+        <label class="team-field">
+          <span>题名</span>
+          <input id="mk-title" type="text" value="${escapeHtml(item.title)}" />
+        </label>
+        <label class="team-field">
+          <span>链接 <em>选填</em></span>
+          <input id="mk-url" type="text" placeholder="https://…" value="${escapeHtml(item.url ?? '')}" />
+        </label>
+        <label class="team-field">
+          <span>备注 <em>选填</em></span>
+          <input id="mk-note" type="text" placeholder="例如：卡在第三步，看题解" value="${escapeHtml(item.note ?? '')}" />
+        </label>
+        <div class="team-dialog-actions">
+          <button type="button" class="btn" id="mk-cancel">取消</button>
+          <button type="button" class="btn primary" id="mk-ok">保存</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+
+    let done = false;
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      document.removeEventListener('keydown', onKey, true);
+      wrap.remove();
+      resolve(result);
+    };
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        finish(null);
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    wrap.addEventListener('click', (event) => {
+      if (event.target === wrap) finish(null);
+    });
+    $('mk-cancel').addEventListener('click', () => finish(null));
+    $('mk-ok').addEventListener('click', () => {
+      const title = $('mk-title').value.trim();
+      if (!title) {
+        $('mk-title').focus();
+        return;
+      }
+      finish({
+        title,
+        url: $('mk-url').value.trim(),
+        note: $('mk-note').value.trim(),
+      });
+    });
+    $('mk-title').focus();
+  });
+}
+
+/**
+ * 自动收题：把训练日程里「日子已经过了、但还没打勾」的题收进待补题。
+ *
+ * 为什么要前端来算：日程（哪天做哪几题）是 buildSchedule 按计划和休息日在浏览器里
+ * 排出来的，服务端并没有这份数据。与其把排期逻辑再抄一份到后端（两份必然会漂），
+ * 不如在这里算好报上去，服务端只管去重入库。
+ *
+ * 每次重排日程都会调到这儿，所以用一个签名挡一道：内容没变就不发请求。
+ * 返回这次新收进来几道。
+ */
+async function collectMakeupFromSchedule({ force = false } = {}) {
+  const days = state.schedule?.days;
+  if (!Array.isArray(days) || !days.length) return 0;
+
+  const today = dateKey(new Date());
+  const overdue = [];
+  for (const day of days) {
+    if (day.date >= today) continue; // days 是按日期升序的，过去的都在前面
+    for (const problem of day.problems ?? []) {
+      const key = `${problem.contestId}-${problem.index}`;
+      if (state.done.has(key)) continue;
+      overdue.push({
+        problemKey: key,
+        title: problem.name ?? key,
+        url: problem.url ?? null,
+        platform: problem.platform ?? 'codeforces',
+        rating: problem.rating ?? null,
+        date: day.date,
+      });
+    }
+  }
+  if (!overdue.length) return 0;
+
+  // 只收最近的 200 道：日程排到 60 周，真按 200 天前一路收进来会把清单淹掉
+  const items = overdue.slice(-200);
+  const sig = items.map((item) => item.problemKey).join(',');
+  if (!force && sig === state.makeup.collectedSig) return 0;
+  state.makeup.collectedSig = sig;
+
+  try {
+    const data = await postJson('/api/makeup/collect', { handle: state.handle, items });
+    return data.added ?? 0;
+  } catch {
+    // 收不上就算了（比如刚好断网），下次重排日程还会再试；签名回退让它可以重试
+    state.makeup.collectedSig = null;
+    return 0;
+  }
+}
 
 /** 做过的题：按首次通过时间从近到远，每次加载 100 道。 */
 function renderSolved() {
@@ -2921,7 +3247,7 @@ async function loadCalendar() {
 }
 
 // 赛程来源的中文名（筛选按钮和每行左边那个小标都用它）
-const SOURCE_LABELS = { cf: 'Codeforces', luogu: '洛谷', atcoder: 'AtCoder' };
+const SOURCE_LABELS = { cf: 'Codeforces', luogu: '洛谷', atcoder: 'AtCoder', nowcoder: '牛客' };
 
 function renderCalendar(data) {
   // 来源筛选：默认全看，点一下只看某一家
@@ -2929,13 +3255,13 @@ function renderCalendar(data) {
   const visible = (data.upcoming ?? []).filter(
     (contest) => source === 'all' || (contest.source ?? 'cf') === source,
   );
-  const bySource = { cf: 0, luogu: 0, atcoder: 0 };
+  const bySource = { cf: 0, luogu: 0, atcoder: 0, nowcoder: 0 };
   for (const contest of data.upcoming ?? []) {
     bySource[contest.source ?? 'cf'] = (bySource[contest.source ?? 'cf'] ?? 0) + 1;
   }
 
   $('calendar-summary').textContent = data.upcoming?.length
-    ? `未来 ${data.days} 天有 ${data.upcoming.length} 场：Codeforces ${bySource.cf} 场 · 洛谷 ${bySource.luogu} 场 · AtCoder ${bySource.atcoder} 场（时间已换算成本机时区）。`
+    ? `未来 ${data.days} 天有 ${data.upcoming.length} 场：Codeforces ${bySource.cf} 场 · 洛谷 ${bySource.luogu} 场 · AtCoder ${bySource.atcoder} 场 · 牛客 ${bySource.nowcoder} 场（时间已换算成本机时区）。`
     : `未来 ${data.days} 天还没有已公布的比赛。各平台一般提前几天放出赛程，过阵子再看看。`;
 
   $('calendar-filter').innerHTML = [
@@ -2943,6 +3269,7 @@ function renderCalendar(data) {
     ['cf', `Codeforces ${bySource.cf}`],
     ['luogu', `洛谷 ${bySource.luogu}`],
     ['atcoder', `AtCoder ${bySource.atcoder}`],
+    ['nowcoder', `牛客 ${bySource.nowcoder}`],
   ]
     .map(
       ([value, label]) =>
@@ -3563,6 +3890,13 @@ function rebuildSchedule() {
   if (!state.selectedDate) state.selectedDate = dateKey(new Date());
   renderSchedule();
   renderTodayCard();
+  // 日程一变就可能多出「过期没打勾」的题，顺手收进待补题。
+  // loadMakeup 里也调了一次（那是给「刚打开这一页」用的），签名挡着不会重复请求。
+  if (state.makeup.loaded) {
+    collectMakeupFromSchedule().then((added) => {
+      if (added) loadMakeup();
+    });
+  }
 }
 
 function renderSchedule() {
@@ -3880,6 +4214,7 @@ const NAV_ITEMS = [
   { id: 'panel-team', label: '团队训练', icon: '👥' },
   { id: 'panel-schedule', label: '训练日程', icon: '🗓' },
   { id: 'panel-review', label: '补题队列', icon: '🧾' },
+  { id: 'panel-makeup', label: '待补题', icon: '📋' },
   { id: 'panel-problems', label: '题库', icon: '📚' },
   { id: 'panel-contests', label: '历年比赛', icon: '🏆' },
   { id: 'panel-mashup', label: '拼好题', icon: '🧩' },
@@ -3949,6 +4284,8 @@ $('side-nav').addEventListener('click', (event) => {
   // 拼好题第一次进来就先拼一套，不用先点按钮
   if (button.dataset.view === 'panel-mashup' && !mashupData) rollMashup();
   if (button.dataset.view === 'panel-lists') loadLists();
+  // 待补题第一次进来先拉一次列表
+  if (button.dataset.view === 'panel-makeup' && !state.makeup.loaded) loadMakeup();
   // 团队页第一次进来先拉一次队伍列表，省得看到空页面
   if (button.dataset.view === 'panel-team' && !state.team.loaded) loadTeams();
 });
@@ -3972,6 +4309,7 @@ const MODULE_META = [
   { id: 'panel-platforms', label: '平台数据' },
   { id: 'panel-records', label: '做题记录' },
   { id: 'panel-review', label: '补题队列' },
+  { id: 'panel-makeup', label: '待补题' },
   { id: 'panel-growth', label: '成长' },
   { id: 'panel-tags', label: '能力画像' },
   { id: 'panel-problems', label: '题库' },

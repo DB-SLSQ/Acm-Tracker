@@ -218,6 +218,40 @@
         <div class="record-list" id="review-list"></div>
       </section>
 
+      <section class="panel hidden" id="panel-makeup">
+        <div class="panel-head">
+          <h2>待补题</h2>
+          <p id="makeup-summary"></p>
+        </div>
+
+        <div class="bank-filters">
+          <div class="makeup-tabs" id="makeup-tabs">
+            <button type="button" class="btn active" data-makeup-status="todo">待补</button>
+            <button type="button" class="btn" data-makeup-status="done">已补</button>
+            <button type="button" class="btn" data-makeup-status="all">全部</button>
+          </div>
+          <button class="btn primary" id="makeup-add">添加题目</button>
+          <button class="btn" id="makeup-collect" title="把训练日程里过了日子还没打勾的题收进来">收进没做完的</button>
+          <button class="btn" id="makeup-clear-done">清空已补</button>
+        </div>
+
+        <div id="makeup-editor" class="lists-editor hidden">
+          <textarea id="makeup-text" rows="6"
+            placeholder="一行一道：题目链接、或者只写题名都行&#10;例如：&#10;https://ac.nowcoder.com/acm/contest/140729/D&#10;牛客小白月赛138 D 期望&#10;2173A"></textarea>
+          <div class="lists-editor-actions">
+            <input id="makeup-note" type="text" placeholder="备注（选填，加给这次新增的每一条）" autocomplete="off" />
+            <button class="btn primary" id="makeup-save">添加</button>
+            <button class="btn" id="makeup-cancel">取消</button>
+          </div>
+          <p class="hint" id="makeup-hint">
+            认得 Codeforces / AtCoder / 洛谷的题号与链接，也会自动补上难度；
+            <b>牛客等本站没有题库的平台</b>，直接贴链接或者写个题名就行，一样能存下来。
+          </p>
+        </div>
+
+        <div class="record-list" id="makeup-list"></div>
+      </section>
+
       <section class="panel hidden" id="panel-problems">
         <div class="panel-head">
           <h2>题库</h2>

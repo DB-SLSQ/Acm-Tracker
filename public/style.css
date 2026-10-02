@@ -2861,6 +2861,11 @@ body.compact .panel-head h2 {
   color: var(--text-dim);
 }
 
+.contest-source.src-nowcoder {
+  background: color-mix(in srgb, #2fbf9b 22%, transparent);
+  color: #2fbf9b;
+}
+
 /* ============ 赛博朋克主题：霓虹与动态 ============
    配色只解决「像不像」，动态和氛围才决定「赛博不赛博」。
    这里分三层：
@@ -3628,4 +3633,105 @@ body.compact .panel-head h2 {
 .team-warn b {
   color: var(--text);
   font-weight: 500;
+}
+
+/* ---- 待补题：一行一道，勾进度 / 改 / 删都在行里 ----
+   和「我的题单」那种 bank-row 的区别：这里每道题还要显示「从哪来的」（自动收的
+   还是手加的）、原定哪天做，所以中间留了一列放备注，右头两个按钮。 */
+.makeup-tabs {
+  display: flex;
+  gap: 6px;
+  margin-right: 4px;
+}
+
+.makeup-row {
+  display: grid;
+  grid-template-columns: 26px 96px 1fr 76px 200px 62px 62px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 13px;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 13px;
+}
+
+/* 补过的压暗，划掉题名，一眼能看出还剩哪些 */
+.makeup-row.done {
+  opacity: 0.58;
+}
+
+.makeup-row.done .makeup-name a {
+  text-decoration: line-through;
+}
+
+.makeup-row .record-code {
+  margin-right: 0;
+}
+
+.makeup-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.makeup-name a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.makeup-name a:hover {
+  color: var(--accent);
+}
+
+/* 来源角标：和比赛日历那边一个路子，按平台分色 */
+.makeup-src {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  vertical-align: middle;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  color: var(--text-dim);
+}
+
+.makeup-src.src-codeforces {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+}
+
+.makeup-src.src-atcoder {
+  background: color-mix(in srgb, #aaaaaa 22%, transparent);
+  color: var(--text-dim);
+}
+
+.makeup-src.src-luogu {
+  background: color-mix(in srgb, #3498db 20%, transparent);
+  color: #5fb3e8;
+}
+
+.makeup-src.src-nowcoder {
+  background: color-mix(in srgb, #2fbf9b 22%, transparent);
+  color: #2fbf9b;
+}
+
+/* 「提交记录里已经通过了」的小提示：不自动改状态，只提醒你一声 */
+.makeup-ok {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  vertical-align: middle;
+  background: color-mix(in srgb, var(--ok) 22%, transparent);
+  color: var(--ok-text);
+}
+
+.makeup-meta {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

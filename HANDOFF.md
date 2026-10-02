@@ -9,14 +9,13 @@
 
 ## 一句话现状
 
-**v1.0.7 已发版**。tag `v1.0.6` / `v1.0.7` 都推上去了，GitHub Release 由 Actions 生成，
-exe 附件在线（v1.0.6 是补发的，两个 Release 发布时间只隔 48 秒）。用户桌面那份也已经换成
-1.0.7——`Desktop\ACM Trainer\resources\app.asar` 里 `package.json` 的 `version` 是 1.0.7；
-`ACM Trainer.exe` 的文件版本号还写着 1.0.6（那次只覆盖了 asar），不影响运行。
+**v1.0.8 已写完并本机打包**，新增：比赛日历接**牛客**赛程，新页「**待补题**」（手加题目或链接、
+自动收进训练日程里过期没打勾的题、能增删改）。tag `v1.0.6` / `v1.0.7` 都已推上去，GitHub Release
+由 Actions 生成、exe 附件在线。用户桌面那份在 1.0.7（1.0.8 要等确认后再覆盖，因为 exe 被占用时
+覆盖不了）。**1.0.8 还没打 tag**——发版就三步：升版本号 → 写 `outputs/release-notes-v1.0.8.md` →
+`git tag v1.0.8 && git push origin v1.0.8`（前两步已经做完了）。
 
-这一版修的是 bug：1.0.6 里「新建队伍」「改名」「补抓平台数据」在桌面版点了没反应
-（根因见坑 26 —— Electron 没有 `window.prompt`），现在换成自绘弹框了。团队训练的其他部分
-沿用 1.0.6。**当前没有任何未提交的代码改动**。
+> 1.0.7 那次只覆盖了 `app.asar`，`ACM Trainer.exe` 的文件版本号还写着 1.0.6，不影响运行。
 
 工作区里有两份**别人的**未跟踪文档（`outputs/notes/energy-intervals-status.md`、
 `outputs/视频简介-下半年-上海见乐山见.md`），不是这个项目的活，别顺手 `git add -A` 带上去。
@@ -68,6 +67,22 @@ node_modules\electron\dist\electron.exe .dev\verify-team.mjs
 （默认数据目录还是 `.dev\data-verify`；`ACM_TRAINER_VERIFY_DIR` 是给副本坏掉时换目录用的。
 `VACUUM INTO` 不会覆盖已存在的文件，重做前得先把旧文件删掉——删不掉就换个目录名。）
 
+待补题 + 牛客赛程的验证脚本有两个：
+
+```powershell
+# ① 纯接口，48 项，几秒钟跑完（用的是 .dev\data-verify-makeup 副本）
+node .dev\verify-makeup.mjs
+
+# ② 真 Electron 里点一遍，25 项 + 截图
+#    *** 第一行不能省 ***：它清空待补题、并把计划起始日推到 20 天前。
+#    不推的话日程里没有「过期没做完」的题，自动收题那条路根本走不到（脚本会检查并提示）
+node .dev\seed-makeup-plan-date.mjs 20
+unset ELECTRON_RUN_AS_NODE
+node_modules\electron\dist\electron.exe .dev\verify-makeup-ui.mjs
+```
+
+（从 Electron 主进程里 spawn 子进程会被沙箱掐掉，所以夹具得在外面先准备好，见坑 29。）
+
 发布流程（改完要发版时）：
 
 1. 改 `package.json` 的 `version`
@@ -101,18 +116,18 @@ node_modules\electron\dist\electron.exe .dev\verify-team.mjs
 ## 代码地图
 
 ```
-server.js              本地服务 + 全部接口（约 3200 行，路由都写在 route() 里；团队接口见下方）
+server.js              本地服务 + 全部接口（约 3600 行，路由都写在 route() 里；团队接口见下方）
 lib/cf.js              Codeforces 官方 API（题目、提交、比赛、rating）
 lib/atcoder.js         AtCoder：Kenkoooo 的题目表 / 难度 / 提交记录 / 用户统计
 lib/luogu.js           洛谷题库：按难度档等距抽页抓取
 lib/platforms.js       洛谷练习页、牛客；fetchLuoguText() 处理洛谷的 cookie 挑战
 lib/plan.js            挑题算法（方向配额、四档均分、难度自适应、deriveProgress；**团队分工与排题也在这**，约 1325 行）
-lib/db.js              node:sqlite 封装：建表、迁移、所有 SQL（约 1900 行）
+lib/db.js              node:sqlite 封装：建表、迁移、所有 SQL（约 1990 行）
 lib/contests.js        比赛分档解析（Div. 1/2/3、Educational…）与适合度判断
 lib/model.js           推题模型（逻辑回归，训练好才启用）
 public/index.html      所有页面（<section class="panel" id="panel-xxx">）
-public/app.js          全部前端逻辑（约 4600 行；导航项是 NAV_ITEMS，页面切换用 showView）
-public/style.css       全部样式（约 3470 行，CSS 变量控制五套主题）
+public/app.js          全部前端逻辑（约 4900 行；导航项是 NAV_ITEMS，页面切换用 showView）
+public/style.css       全部样式（约 3730 行，CSS 变量控制五套主题）
 public/schedule.js     日程排布（按天把题排开，考虑休息日/没空的天）
 public/selftest.html   计划自检页
 electron/main.js       桌面入口：起服务 + 开窗口，打包后数据目录 = %APPDATA%\acm-trainer\data
@@ -126,10 +141,10 @@ electron/main.js       桌面入口：起服务 + 开窗口，打包后数据目
 3. `server.js`：在 `route()` 里加接口；数据尽量走 `allProblems()`（有缓存）或 `db.xxx`
 4. 需要新表就在 `lib/db.js` 的建表块里加 `CREATE TABLE IF NOT EXISTS`（老库升级靠 `db.exec`）
 
-现在的导航（19 页，比 1.0.5 多了「团队训练」）：当前水平 / 目标设置 / 训练计划 / **团队训练** / 训练日程 / 补题队列 / 题库 / 历年比赛 / 拼好题 / 我的题单 /
+现在的导航（20 页，比 1.0.7 多了「待补题」）：当前水平 / 目标设置 / 训练计划 / **团队训练** / 训练日程 / 补题队列 / **待补题** / 题库 / 历年比赛 / 拼好题 / 我的题单 /
 能力画像 / 成长 / 做题记录 / 活动记录 / 比赛日历 / 虚拟参赛 / 平台数据 / 帮助 / 设置。
 
-数据表（31 张，其中 `sqlite_sequence` 是 SQLite 自带的）：`problems`（题库缓存，含
+数据表（33 张，其中 `sqlite_sequence` 是 SQLite 自带的）：`problems`（题库缓存，含
 platform/native_id/native_contest/native_rating）、
 `submissions`、`rating_history`、`users`、`contests`、`atcoder_contests`（比赛 id 映射）、
 `luogu_ids`、`settings`、`meta`（各种缓存 JSON）、`model_samples`、`blocked_problems`、
@@ -137,7 +152,8 @@ platform/native_id/native_contest/native_rating）、
 `plan_swaps`、`plan_defer`、`plan_adjust`、`extra_tasks`（补一个方向）、`schedule_extras`、
 `problem_feedback`（做题手感）、`review_done`、`growth_snapshots`、`known_handles`、
 `problem_lists` + `problem_list_items`（我的题单）、
-`teams` + `team_members` + `team_assignments`（团队训练，见下节）。
+`teams` + `team_members` + `team_assignments`（团队训练，见下节）、
+`makeup_problems` + `makeup_dismissed`（待补题，见下节）。
 
 ## 团队训练（1.0.6 新加）
 
@@ -223,6 +239,57 @@ generateTeamPlan() / renderTeam()`，页面在 `#panel-team`，样式在 `public
 **没做的**：上云端（用户明确选了「先本地，留云端接口」，本轮只做本地）；
 `settings` 和 `problem_lists` 这两张表没有 handle 维度，还没按人/按队隔离。
 
+## 待补题（1.0.8 新加）
+
+一张自己攒的待办清单。**先分清它和「补题队列」的区别**，这两个名字太像，改代码时最容易混：
+
+| | 补题队列（`panel-review`，1.0.9 就有） | 待补题（`panel-makeup`，1.0.8 新加） |
+|---|---|---|
+| 数据从哪来 | `submissions` 里**自动**捞「提交过但没过」 | 手加（题名或链接）+ 自动收进日程里过期没打勾的 |
+| 存在哪 | 不存，每次现算；只存「我不想再看到它」（`review_done`） | 真存，`makeup_problems` 一张表 |
+| 做出来之后 | 自动出队（提交记录变了） | 不会自动出队，只在行上显示一个「已通过」小标签提醒 |
+| 能不能加牛客的题 | 不能（靠 CF 提交记录，牛客不在里面） | **能**，牛客链接或光写题名都行 |
+
+**为什么要有待补题**：用户的原话是「把每天没做完的加进去，用户也可以自己添加题目，要求是添加链接
+也可以添加题目（因为可能有牛客的题）」。核心是**牛客的题本站没有题库**——`problems` 表里没有
+条目，既没难度也没标签，所以：
+
+- 表里 `title` / `url` 各自独立成列，`problem_key` 只为「能对上题库的题」准备（有它才能显示
+  难度、才能在提交记录里查「是不是做过了」）；
+- `dedupe_key` 是「这题是谁」的稳定标识：对得上题库的用 `pk:1555-D`，纯链接的用
+  `url:codeforces.com/problemset/problem/1555/d`，只有题名的用 `title:<小写题名>`。
+  **自动收题每次开机都会重跑**，全靠它保证不重复入库；
+- `makeup_dismissed` 记「手动删掉的自动题」。不记的话下次自动收题又冒出来——
+  用户删了就是不想再看见，删完又回来是最招人烦的那种 bug。
+
+接口（`server.js` 的 `route()`）：
+
+- `GET  /api/makeup?handle=&status=todo|done|all` 列表；能对上题库的会带一个 `solved` 字段
+  （提交记录里已经通过了）
+- `POST /api/makeup` 手加，`text` 一行一题；解析在 `parseMakeupInput()`——
+  先看这行有没有链接（按链接认平台 + 尝试对上题库），没有链接就把整行当题名再拿题号碰一次题库
+- `POST /api/makeup/collect` 自动收题，前端算好报上来（见下）
+- `POST /api/makeup/clear-done` 一键清掉已补的
+- `PATCH /api/makeup/:id` 改（题名/链接/备注/平台/难度/状态）
+- `DELETE /api/makeup/:id` 删
+
+**自动收题为什么放在前端算**：日程（哪天做哪几题）是 `public/schedule.js` 的 `buildSchedule()`
+按计划和休息日在浏览器里排出来的，服务端根本没有这份数据。与其把排期逻辑再抄一份到后端
+（两份必然漂），不如在 `collectMakeupFromSchedule()`（`public/app.js`）里算好报上去，
+服务端只管去重入库。两个触发点：`loadMakeup()`（打开这一页时）和 `rebuildSchedule()`
+（重排日程后，且只在 `makeup.state.loaded` 时才跑）。用一个**签名**（当前所有过期题 key 拼起来）
+挡着，内容没变就不发请求。
+
+前端：`state.makeup` + `loadMakeup() / renderMakeup() / makeupRow() / makeupEditDialog() /
+collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/style.css` 末尾
+（`.makeup-row` 是个 7 列的 grid，`.makeup-src.src-*` 是来源角标，跟比赛日历的 `.contest-source`
+一个路子、按平台分色）。
+
+**验证脚本**：`.dev/verify-makeup.mjs`（纯接口，48 项）和 `.dev/verify-makeup-ui.mjs`
+（真 Electron 里点，25 项）。跑 UI 那个**必须先跑** `.dev/seed-makeup-plan-date.mjs 20`，
+它把副本库里的计划起始日推到 20 天前——不然日程里没有「过期没做完」的题，自动收题那条路
+根本走不到（脚本会检查夹具干不干净，不干净直接退出并提示）。
+
 ## 数据从哪来、口径是什么
 
 | 来源 | 用什么 | 注意 |
@@ -232,6 +299,8 @@ generateTeamPlan() / renderTeam()`，页面在 `#panel-team`，样式在 `public
 | AtCoder 赛程 | `atcoder.jp/contests/` 的 upcoming 表格 | **别改用 Kenkoooo 的 `contests.json`**：实测 2026-09-28 查，那份文件最新一条停在 9/27、未来一场都没有，会把日历搞空。官方表格还带「Rated Range」列，正好用来只列计分场次 |
 | 洛谷题库 | `luogu.com.cn/problem/list`（按难度档等距抽页） | 必须带 cookie（见坑 1） |
 | 洛谷赛程 | `luogu.com.cn/contest/list` | 只保留计分场次：`rated` 是**数字**（官方 3、ICPC 重现赛 1、不计分 0），按数值判断 |
+| 牛客赛程 | `ac.nowcoder.com/acm/calendar/contest` | 必须带 Referer；只认这个路径（`/acm/contest/calendar` 是 HTML 页）；时间是**毫秒**；一次一个月，取本月+下月；返回里也有 CF/AtCoder，要按 `ojName` 过滤 |
+| 牛客练习统计 | `ac.nowcoder.com/acm/contest/profile/{uid}/practice-coding` | 服务端渲染的页面，按「class 带 item 的 div + 后面跟一个 span 标签」抓汇总数字（见 `lib/platforms.js` 的 `fetchNowcoder`） |
 
 ## 踩过的坑（别再踩）
 
@@ -348,6 +417,21 @@ generateTeamPlan() / renderTeam()`，页面在 `#panel-team`，样式在 `public
     因为验证脚本从头到尾走的是接口建队（`POST /api/team`），**根本没点过那个按钮**。
     教训：验证要覆盖「用户实际点的那条路径」，接口通了不等于按钮通了。
     现在 `verify-team.mjs` 里加了「点新建 → 截屏 → 取消 → 确认建成」这一整段。
+28. **牛客的赛程接口只认 `/acm/calendar/contest`，别写到 `/acm/contest/calendar`**。
+    两个路径长得几乎一样，但后者返回的是**整页 HTML**，`JSON.parse` 直接炸。
+    另外：必须带 `Referer: https://ac.nowcoder.com/acm/contest/vip-index`，不带会被风控挡成
+    首页 HTML；`startTime` / `endTime` 是**毫秒**（本站别处都是秒）；一次只给一个月
+    （`month=YYYY-MM`，月补不补零都行），所以固定取本月 + 下月两份再合并去重；
+    返回里 `ojName` 还有 Codeforces / AtCoder，只留 `NowCoder` 的，不然日历里会重复两行。
+29. **Electron 主进程里 `spawnSync` / `spawn` 子进程会被沙箱掐掉**。想从验证脚本里顺手跑一个
+    辅助 Node 脚本（比如准备测试夹具）走不通：实测 `spawnSync` 没有任何输出，
+    连父进程都被 SIGTERM 一起收走（和之前 `git credential fill` 那次一个现象）。
+    要跑辅助脚本就在外面先跑一遍——`.dev/verify-makeup-ui.mjs` 就是这么做的
+    （先 `node .dev/seed-makeup-plan-date.mjs 20`），脚本里再检查夹具干不干净。
+30. **`executeJavaScript` 的返回值里不能有函数**。`window.confirm = () => true;` 这类赋值语句
+    的结果是个函数，克隆不了，整个 `run()` 会 reject，`await` 一抛就把后面的步骤全跳过，
+    看起来像「卡住了」。末尾补一句 `;true;` 就好。验证脚本里改 `window.confirm`
+    是为了绕开 Electron 的原生模态框（它会卡住渲染进程，脚本永远等不到下一步）。
 
 ## 已经做过的事（按版本）
 
@@ -379,6 +463,12 @@ generateTeamPlan() / renderTeam()`，页面在 `#panel-team`，样式在 `public
 - **1.0.7**：修桌面版「新建队伍 / 改名 / 补抓平台数据」点了没反应——根因是 Electron 没有
   `window.prompt`（见坑 26），换成自绘的 `askDialog()`；验证脚本补上「点新建 → 取消 → 建成」
   这条真实点击路径（坑 27）。已发 Release（2026-10-01）。
+- **1.0.8**：比赛日历接**牛客**赛程（来源筛选多一个「牛客 N」按钮，四家一起看）；
+  新页「**待补题**」——手加（题目链接或光写题名都行，**牛客的题也能加**）、
+  自动收进训练日程里过期还没打勾的题、勾进度 / 改题名链接备注 / 删除全都能用，
+  删掉的自动题不会再被收回来（`makeup_dismissed`）。两张新表。
+  验证：`.dev/verify-makeup.mjs` 48 项 + `.dev/verify-makeup-ui.mjs` 25 项全过、零控制台报错。
+  **还没打 tag**。
 
 ## 没做 / 可以接着做
 
@@ -396,10 +486,16 @@ generateTeamPlan() / renderTeam()`，页面在 `#panel-team`，样式在 `public
    手动点「检查更新」）、**Mac 版**。
 4. 「我的题单」还能往下做：今日卡片／训练计划里直接「存成题单」、题单导出成 CSV/Markdown 文件、
    题单内的随机一道。
-5. 宣传：B 站发过宣传版和 v0.1.3 更新版；v0.1.7 的更新视频、封面、简介都做好了
+5. **「待补题」可以接着做的**：① 「排进今天」按钮（现在待补题和 `schedule_extras` 还没打通，
+   要手动复制到日程）；② 批量勾选 / 批量删除（现在一次一行）；③ 从「补题队列」一键转进待补题；
+   ④ 牛客题如果给了链接，可以试着抓一下题面标题（现在是「牛客 140729 D」这种从链接抠的兜底名）；
+   ⑤ 待补题列表按平台/来源筛选（现在只有待补/已补/全部三个 tab）。
+6. 宣传：B 站发过宣传版和 v0.1.3 更新版；v0.1.7 的更新视频、封面、简介都做好了
    （`.dev\make-video-v017.mjs`、`dist\ACM训练台-v0.1.7更新.mp4`、`outputs\v0.1.7-视频简介.md`），
    发不发看用户；素材同时放在 `C:\Users\summer\Documents\Codex\2026-09-20\new-chat\outputs\video-assets`。
-6. **主题现在有五套**（暗色／亮色／灰色／护眼／赛博），`public/style.css` 顶部是变量块，
+   用户后来还让做「1.0.7 宣传视频（抽象搞笑向）」，做到一半（分镜 + `.dev/scenes-v107.html` +
+   `.dev/render-video-v107.mjs` 都写了，卡在限流），**没出成片**，要接着做从这三份文件续。
+7. **主题现在有五套**（暗色／亮色／灰色／护眼／赛博），`public/style.css` 顶部是变量块，
    加新主题照抄一块改颜色即可；样式里凡是 `[data-theme='dark'], [data-theme='gray']` 这种
    列举写法的选择器，记得把新主题名也加进去（比如 `--danger` 那两处）。
    赛博那套除了变量，文件末尾还有一大段氛围/动画（网格底纹、流动光带、扫光、glitch）。
