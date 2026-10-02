@@ -9,13 +9,13 @@
 
 ## 一句话现状
 
-**v1.0.9 已写完**，修的是「赛博主题下点左侧菜单项，那一条会变窄」——实际是塌成 16px
-（根因见坑 31：`<button>` 上 `display:flex` + `overflow:hidden` 会让 Chromium 把内容高度算成 0），
-裁剪改用 `overflow: clip` 即可，其余四个主题没这条声明所以一直没露头。
+**v1.0.9 已写完并已发版（2026-10-02）**，修的是「赛博主题下点左侧菜单项，那一条会变窄」——
+实际是塌成 16px（根因见坑 31：`<button>` 上 `display:flex` + `overflow:hidden` 会让 Chromium
+把内容高度算成 0），裁剪改用 `overflow: clip` 即可，其余四个主题没这条声明所以一直没露头。
 
-**1.0.8 和 1.0.9 都还没打 tag**。发版就三步：升版本号 → 写 `outputs/release-notes-vX.Y.Z.md` →
-`git tag vX.Y.Z && git push origin vX.Y.Z`。tag `v1.0.6` / `v1.0.7` 已在线，GitHub Release
-由 Actions 生成、exe 附件在线。用户桌面那份现在是 1.0.8。
+**v1.0.1 ~ v1.0.9 的 tag 与 GitHub Release 都已在线**（exe 附件由 Actions 打包）。发版就三步：
+升版本号 → 写 `outputs/release-notes-vX.Y.Z.md` → `git tag vX.Y.Z && git push origin vX.Y.Z`。
+用户桌面那份现在是 1.0.9。
 
 > 1.0.7 那次只覆盖了 `app.asar`，`ACM Trainer.exe` 的文件版本号还写着 1.0.6，不影响运行。
 
@@ -485,8 +485,7 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
 - **1.0.9**：修赛博主题下点左侧菜单项「变窄」——菜单项是 `<button>`，Chromium 对
   `display:flex` + `overflow:hidden` 会把内容高度算成 0，被点中那一条塌成 16px、文字被裁掉一截
   （见坑 31）；裁剪改用 `overflow: clip`。`.dev/verify-cyber-motion.mjs` 末尾加了
-  「逐项点击 + 断言每条高度一致」把它钉住。
-  **1.0.8 / 1.0.9 都还没打 tag**。
+  「逐项点击 + 断言每条高度一致」把它钉住。已发 Release（2026-10-02）。
 
 ## 没做 / 可以接着做
 
@@ -512,7 +511,11 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
    （`.dev\make-video-v017.mjs`、`dist\ACM训练台-v0.1.7更新.mp4`、`outputs\v0.1.7-视频简介.md`），
    发不发看用户；素材同时放在 `C:\Users\summer\Documents\Codex\2026-09-20\new-chat\outputs\video-assets`。
    用户后来还让做「1.0.7 宣传视频（抽象搞笑向）」，做到一半（分镜 + `.dev/scenes-v107.html` +
-   `.dev/render-video-v107.mjs` 都写了，卡在限流），**没出成片**，要接着做从这三份文件续。
+   `.dev/render-video-v107.mjs` 都写了，卡在限流），**已于 2026-10-02 出成片**：
+   成片 `dist/ACM训练台-v1.0.7更新.mp4`、封面 `outputs/封面-v1.0.7更新.png`、
+   简介 `outputs/v1.0.7-视频简介.md`。渲染链路是 `.dev/shot-v107.mjs`（先抽帧看画面）→
+   `.dev/render-video-v107.mjs`（TTS 配音 + manifest 时间轴 + Electron 逐帧截图 + ffmpeg 合成），
+   动画都在 `.dev/scenes-v107.html`；10 个分镜、74.9 秒、1920×1080@30fps。
 7. **主题现在有五套**（暗色／亮色／灰色／护眼／赛博），`public/style.css` 顶部是变量块，
    加新主题照抄一块改颜色即可；样式里凡是 `[data-theme='dark'], [data-theme='gray']` 这种
    列举写法的选择器，记得把新主题名也加进去（比如 `--danger` 那两处）。
