@@ -2866,6 +2866,11 @@ body.compact .panel-head h2 {
   color: #2fbf9b;
 }
 
+.contest-source.src-leetcode {
+  background: color-mix(in srgb, #ffa116 24%, transparent);
+  color: #d98600;
+}
+
 /* ============ 赛博朋克主题：霓虹与动态 ============
    配色只解决「像不像」，动态和氛围才决定「赛博不赛博」。
    这里分三层：
@@ -3719,6 +3724,11 @@ body.compact .panel-head h2 {
 .makeup-src.src-nowcoder {
   background: color-mix(in srgb, #2fbf9b 22%, transparent);
   color: #2fbf9b;
+}
+
+.makeup-src.src-leetcode {
+  background: color-mix(in srgb, #ffa116 24%, transparent);
+  color: #d98600;
 }
 
 /* 「提交记录里已经通过了」的小提示：不自动改状态，只提醒你一声 */

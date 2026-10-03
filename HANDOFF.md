@@ -9,13 +9,16 @@
 
 ## 一句话现状
 
-**v1.0.9 已写完并已发版（2026-10-02）**，修的是「赛博主题下点左侧菜单项，那一条会变窄」——
+**v1.0.10 已写完**：比赛日历接了**力扣**（外部来源第四家，前三是洛谷 / AtCoder / 牛客）。
+接口是 `leetcode.cn/contest/api/list/`，一个 GET 全量返回、**按 start_time 倒序**，带 Referer 即可；
+**时间是秒**——牛客是毫秒，别串了。顺带让「待补题」认得 `leetcode.cn/problems/...` 链接。
+
+上一版 **v1.0.9**（2026-10-02 已发版）修的是「赛博主题下点左侧菜单项，那一条会变窄」——
 实际是塌成 16px（根因见坑 31：`<button>` 上 `display:flex` + `overflow:hidden` 会让 Chromium
 把内容高度算成 0），裁剪改用 `overflow: clip` 即可，其余四个主题没这条声明所以一直没露头。
 
 **v1.0.1 ~ v1.0.9 的 tag 与 GitHub Release 都已在线**（exe 附件由 Actions 打包）。发版就三步：
 升版本号 → 写 `outputs/release-notes-vX.Y.Z.md` → `git tag vX.Y.Z && git push origin vX.Y.Z`。
-用户桌面那份现在是 1.0.9。
 
 > 1.0.7 那次只覆盖了 `app.asar`，`ACM Trainer.exe` 的文件版本号还写着 1.0.6，不影响运行。
 
@@ -486,6 +489,11 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
   `display:flex` + `overflow:hidden` 会把内容高度算成 0，被点中那一条塌成 16px、文字被裁掉一截
   （见坑 31）；裁剪改用 `overflow: clip`。`.dev/verify-cyber-motion.mjs` 末尾加了
   「逐项点击 + 断言每条高度一致」把它钉住。已发 Release（2026-10-02）。
+- **1.0.10**：比赛日历接**力扣**（`fetchLeetcodeContests`，走 `leetcode.cn/contest/api/list/`，
+  GET + Referer，一次全量、按 start_time 倒序；**时间是秒**，牛客是毫秒）。筛选按钮变六个
+  （全部 / Codeforces / 洛谷 / AtCoder / 牛客 / 力扣），`EXTERNAL_BADGES` 把角标文案收成一张表。
+  顺带：`platformOfUrl` 认得 `leetcode.cn` / `leetcode.com`，待补题的力扣链接能打出「力扣」角标；
+  页脚数据来源说明补上牛客、力扣。验证 `.dev/verify-leetcode.mjs` 17 项 + 真 Electron 截图。
 
 ## 没做 / 可以接着做
 

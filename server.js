@@ -1198,6 +1198,7 @@ function platformOfUrl(url) {
   if (text.includes('atcoder.jp')) return 'atcoder';
   if (text.includes('luogu.com.cn')) return 'luogu';
   if (text.includes('nowcoder.com')) return 'nowcoder';
+  if (text.includes('leetcode.cn') || text.includes('leetcode.com')) return 'leetcode';
   return 'other';
 }
 
@@ -1659,10 +1660,11 @@ function decorateContest(contest) {
 
 /** 比赛日历：未来一段时间内已公布赛程的 Codeforces 比赛。 */
 /**
- * 洛谷 / AtCoder / 牛客的赛程。
+ * 洛谷 / AtCoder / 牛客 / 力扣的赛程。
  *
- * 这三家都不给「官方赛程接口」：AtCoder 只能抓 /contests/ 那张 HTML 表，
- * 洛谷有 _contentOnly=1 的半公开 JSON，牛客走它自己的比赛日历接口（要带 Referer）。
+ * 这四家都不给「官方赛程接口」：AtCoder 只能抓 /contests/ 那张 HTML 表，
+ * 洛谷有 _contentOnly=1 的半公开 JSON，牛客走它自己的比赛日历接口（要带 Referer），
+ * 力扣走 /contest/api/list/（也要带 Referer）。
  * 都缓存 12 小时，只在打开比赛日历、缓存过期时才请求；抓不到就退回上一次的缓存，
  * 页面照常用 Codeforces 的赛程。
  * 失败也记一个「尝试时间」，半小时内不重复试，免得断网时每次打开都等几秒。
@@ -1675,7 +1677,11 @@ const EXTERNAL_SOURCES = {
   luogu: fetchLuoguContests,
   atcoder: fetchAtCoderContests,
   nowcoder: fetchNowcoderContests,
+  leetcode: fetchLeetcodeContests,
 };
+
+/** 外部平台的角标文案。AtCoder 不在里面——它的角标是「这场对哪个分段计分」。 */
+const EXTERNAL_BADGES = { luogu: '洛谷', nowcoder: '牛客', leetcode: '力扣' };
 
 async function loadExternalContests(source) {
   const key = `external_contests_${source}`;
@@ -1893,15 +1899,64 @@ async function fetchNowcoderMonth(month) {
   return Array.isArray(payload?.data) ? payload.data : [];
 }
 
+/**
+ * 力扣赛程：走 leetcode.cn 的 /contest/api/list/。
+ *
+ * 实测（2026-10-03 核对）：
+ *  - **GET 就行**，返回 `{contests: [...]}`，一次给全量 700 多条、**按 start_time 倒序**
+ *    （最近的排最前），不用像牛客那样按月分页；
+ *  - 必须带 Referer，裸请求容易被风控；
+ *  - start_time / duration 都是**秒**，和牛客的毫秒不一样；duration 实测固定 5400（90 分钟）；
+ *  - 里层还有个 origin_start_time，虚拟赛才会用到，正式赛和 start_time 一样，用不上；
+ *  - 翻了全部 716 条，is_private 和 is_ee_exam_contest **全是 false**，说明这个列表本来
+ *    就只放公开场次；还是留着这两条过滤，万一以后真混进企业笔试赛别漏到日历里。
+ *  - 节奏：周赛固定周日上午 10:30、双周赛隔周周六晚 22:30，所以一周最多两场。
+ */
+async function fetchLeetcodeContests() {
+  const response = await fetch('https://leetcode.cn/contest/api/list/', {
+    headers: {
+      'User-Agent': CALENDAR_UA,
+      Referer: 'https://leetcode.cn/contest/',
+      Accept: 'application/json, text/plain, */*',
+    },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = await response.json();
+  const rows = Array.isArray(payload?.contests) ? payload.contests : [];
+
+  const seen = new Set();
+  const result = [];
+  for (const row of rows) {
+    if (row?.is_private || row?.is_ee_exam_contest) continue;
+    const startTime = Number(row?.start_time);
+    const duration = Number(row?.duration);
+    const slug = String(row?.title_slug ?? '').trim();
+    if (!row?.title || !slug || !Number.isFinite(startTime) || !Number.isFinite(duration)) continue;
+    const id = `leetcode-${row.id ?? slug}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result.push({
+      id,
+      name: String(row.title).trim(),
+      startTime,
+      durationSeconds: Math.max(0, duration),
+      url: `https://leetcode.cn/contest/${slug}/`,
+      source: 'leetcode',
+    });
+  }
+  return result;
+}
+
 async function handleCalendar(url) {
   const days = Math.min(60, Math.max(1, Number(url.searchParams.get('days') || 14)));
   const rawHandle = url.searchParams.get('handle');
   const contestsState = await ensureContests();
-  // 洛谷、AtCoder、牛客的赛程：抓不到就只用 Codeforces 的，不影响页面
-  const [luogu, atcoder, nowcoder] = await Promise.all([
+  // 洛谷、AtCoder、牛客、力扣的赛程：抓不到就只用 Codeforces 的，不影响页面
+  const [luogu, atcoder, nowcoder, leetcode] = await Promise.all([
     loadExternalContests('luogu'),
     loadExternalContests('atcoder'),
     loadExternalContests('nowcoder'),
+    loadExternalContests('leetcode'),
   ]);
 
   const now = Math.floor(Date.now() / 1000);
@@ -1939,7 +1994,7 @@ async function handleCalendar(url) {
   });
 
   // 外面的赛程只保留「还没结束、且在时间窗里」的
-  const externalRows = [...luogu, ...atcoder, ...nowcoder]
+  const externalRows = [...luogu, ...atcoder, ...nowcoder, ...leetcode]
     .filter((contest) => {
       if (contest.startTime + contest.durationSeconds <= now) return false;
       // AtCoder 和 Codeforces 一样只看一周内；洛谷、牛客的赛程公布得早，按用户选的窗口来
@@ -1950,12 +2005,7 @@ async function handleCalendar(url) {
       id: contest.id,
       name: contest.name,
       // AtCoder 顺带把「这场对哪个分段计分」带出来，挑场次时有用
-      division:
-        contest.source === 'luogu'
-          ? '洛谷'
-          : contest.source === 'nowcoder'
-            ? '牛客'
-            : contest.ratedLabel ?? 'AtCoder',
+      division: EXTERNAL_BADGES[contest.source] ?? contest.ratedLabel ?? 'AtCoder',
       source: contest.source,
       startTime: contest.startTime,
       durationSeconds: contest.durationSeconds,
@@ -1968,7 +2018,7 @@ async function handleCalendar(url) {
     contestsState,
     now,
     days,
-    sources: ['cf', 'luogu', 'atcoder', 'nowcoder'],
+    sources: ['cf', 'luogu', 'atcoder', 'nowcoder', 'leetcode'],
     upcoming: [...cfRows, ...externalRows].sort((a, b) => a.startTime - b.startTime),
   };
 }

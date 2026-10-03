@@ -1397,6 +1397,7 @@ const MAKEUP_PLATFORM_LABELS = {
   atcoder: 'AtCoder',
   luogu: '洛谷',
   nowcoder: '牛客',
+  leetcode: '力扣',
   other: '自定义',
 };
 
@@ -3247,7 +3248,7 @@ async function loadCalendar() {
 }
 
 // 赛程来源的中文名（筛选按钮和每行左边那个小标都用它）
-const SOURCE_LABELS = { cf: 'Codeforces', luogu: '洛谷', atcoder: 'AtCoder', nowcoder: '牛客' };
+const SOURCE_LABELS = { cf: 'Codeforces', luogu: '洛谷', atcoder: 'AtCoder', nowcoder: '牛客', leetcode: '力扣' };
 
 function renderCalendar(data) {
   // 来源筛选：默认全看，点一下只看某一家
@@ -3255,13 +3256,13 @@ function renderCalendar(data) {
   const visible = (data.upcoming ?? []).filter(
     (contest) => source === 'all' || (contest.source ?? 'cf') === source,
   );
-  const bySource = { cf: 0, luogu: 0, atcoder: 0, nowcoder: 0 };
+  const bySource = { cf: 0, luogu: 0, atcoder: 0, nowcoder: 0, leetcode: 0 };
   for (const contest of data.upcoming ?? []) {
     bySource[contest.source ?? 'cf'] = (bySource[contest.source ?? 'cf'] ?? 0) + 1;
   }
 
   $('calendar-summary').textContent = data.upcoming?.length
-    ? `未来 ${data.days} 天有 ${data.upcoming.length} 场：Codeforces ${bySource.cf} 场 · 洛谷 ${bySource.luogu} 场 · AtCoder ${bySource.atcoder} 场 · 牛客 ${bySource.nowcoder} 场（时间已换算成本机时区）。`
+    ? `未来 ${data.days} 天有 ${data.upcoming.length} 场：Codeforces ${bySource.cf} 场 · 洛谷 ${bySource.luogu} 场 · AtCoder ${bySource.atcoder} 场 · 牛客 ${bySource.nowcoder} 场 · 力扣 ${bySource.leetcode} 场（时间已换算成本机时区）。`
     : `未来 ${data.days} 天还没有已公布的比赛。各平台一般提前几天放出赛程，过阵子再看看。`;
 
   $('calendar-filter').innerHTML = [
@@ -3270,6 +3271,7 @@ function renderCalendar(data) {
     ['luogu', `洛谷 ${bySource.luogu}`],
     ['atcoder', `AtCoder ${bySource.atcoder}`],
     ['nowcoder', `牛客 ${bySource.nowcoder}`],
+    ['leetcode', `力扣 ${bySource.leetcode}`],
   ]
     .map(
       ([value, label]) =>
