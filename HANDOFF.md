@@ -9,15 +9,21 @@
 
 ## 一句话现状
 
-**v1.0.10 已写完**：比赛日历接了**力扣**（外部来源第四家，前三是洛谷 / AtCoder / 牛客）。
+**v1.0.11 已写完**：修「**CF 上分之后，每日训练的题单会重排**」。
+两个独立原因叠在一起（都在 `lib/plan.js`）：① 题量没被快照钉住，一上分 gap 就变小、
+题量缩水、周数跟着变（见坑 32）；② 按难度排序的比较器不是全序，同分的题在
+「首次生成」和「沿用旧计划」两条路径上顺序不一样（见坑 33）。修完以后，**分数怎么变都不动
+手上的计划，只有点「重新生成计划」才重排**。
+
+上一版 **v1.0.10**：比赛日历接了**力扣**（外部来源第四家，前三是洛谷 / AtCoder / 牛客）。
 接口是 `leetcode.cn/contest/api/list/`，一个 GET 全量返回、**按 start_time 倒序**，带 Referer 即可；
 **时间是秒**——牛客是毫秒，别串了。顺带让「待补题」认得 `leetcode.cn/problems/...` 链接。
 
-上一版 **v1.0.9**（2026-10-02 已发版）修的是「赛博主题下点左侧菜单项，那一条会变窄」——
+再往前 **v1.0.9**（2026-10-02 已发版）修的是「赛博主题下点左侧菜单项，那一条会变窄」——
 实际是塌成 16px（根因见坑 31：`<button>` 上 `display:flex` + `overflow:hidden` 会让 Chromium
 把内容高度算成 0），裁剪改用 `overflow: clip` 即可，其余四个主题没这条声明所以一直没露头。
 
-**v1.0.1 ~ v1.0.9 的 tag 与 GitHub Release 都已在线**（exe 附件由 Actions 打包）。发版就三步：
+**v1.0.1 ~ v1.0.10 的 tag 与 GitHub Release 都已在线**（exe 附件由 Actions 打包）。发版就三步：
 升版本号 → 写 `outputs/release-notes-vX.Y.Z.md` → `git tag vX.Y.Z && git push origin vX.Y.Z`。
 
 > 1.0.7 那次只覆盖了 `app.asar`，`ACM Trainer.exe` 的文件版本号还写着 1.0.6，不影响运行。
@@ -450,6 +456,36 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
     `verify-cyber-motion.mjs` 末尾加了「逐项点击 + 断言每条高度一致」把它钉住，
     并把 `overflow` 改回 `hidden` 反跑过一遍，确认这条断言真能报错（不是假防守）。
 
+32. **计划的「题量」原来没被快照钉住，是拿实时分数现算的**——上分/掉分会让题单重排。
+    快照（`plan_snapshots`）只钉了**题号清单**，题量走的是另一条路：
+    `lib/plan.js` 里 `gap = target - current`、`totalNeeded = round(gap/100*60)`，
+    而 `current` 一直取的是 `user.rating`（实时分）。CF 一上分 gap 就变小、题量缩水、
+    周数跟着变，整条日程往前挤；掉分则反过来排得更多。**题号确实一个没换**，
+    但每天做哪几道全变了，用户看着就是「题单被重排了」。
+    更误导的是界面那句「做过的题会留在原位、自动打勾，不会被换成别的题」——题号是没换，
+    可顺序和题量全变了，提示和事实对不上。
+    修法：`plan_snapshots` 加一列 `rating`，存「生成这份计划时的分数」；
+    沿用旧计划时把它传给 `buildPlan` 的 `currentRating`，题量/阶段数/周数/每档目标分全按它算。
+    老快照没这一列（读出来是 `null`），第一次读到就按**当前实时分**补写——
+    之所以用实时分而不是别的值，是因为 1.0.11 之前题量本来就是按实时分算的，
+    按实时分补写正好等于把用户此刻看到的冻结下来，升级本身不会改动他的计划。
+    附带把「显示用的分」和「算题量用的分」拆开：`buildPlan` 现在额外返回 `userCurrent`
+    （实时分），界面在两者不一致时改口说「计划定下时 X 分 → Y 分……你现在的分数是 Z 分」，
+    免得写成「当前 X 分」而实际不是。
+
+33. **排序比较器必须是「全序」，同分时一定要给 tie-break**。这是 32 之外的另一半原因。
+    计划最后要按难度排一遍再「分层发牌」摊到每一天，同分的题谁在前谁在后，
+    直接决定它落到哪一天。而 `(a, b) => a.rating - b.rating` 这种只比一个字段的比较器，
+    同分的那批会保留**输入顺序**（V8 的 sort 是稳定的），输入顺序在「首次生成」和
+    「沿用旧计划」两条路径上并不一样（后者会把旧题按原顺序提到最前面）——
+    于是题号集合一个没变、每日题单却整体挪了位。
+    实测：`orderByDailyLadder` / `spreadPlatformsByDay` 里同难度的 AtCoder 题成对换位，
+    差异出现在第 33、35、37… 位（偶数位不动），239 道题里换了一批。
+    统一改用 `lib/plan.js` 的 `byDifficultyThenKey`（rating → contestId → index），
+    顺手也给两处选词的 `b.score - a.score` 补上同一个 tie-break，
+    免得「取到哪儿截断」取决于候选集的输入顺序。
+    `.dev/verify-plan-pin.mjs` 里凡是比题单的地方都比「题号 + 顺序」，光比集合抓不到这个。
+
 ## 已经做过的事（按版本）
 
 - **0.1.5–0.1.6**：左侧菜单分页布局、今日任务卡片（做题手感 / 赛前热身 / 复盘卡 / 补一个方向）、
@@ -494,6 +530,16 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
   （全部 / Codeforces / 洛谷 / AtCoder / 牛客 / 力扣），`EXTERNAL_BADGES` 把角标文案收成一张表。
   顺带：`platformOfUrl` 认得 `leetcode.cn` / `leetcode.com`，待补题的力扣链接能打出「力扣」角标；
   页脚数据来源说明补上牛客、力扣。验证 `.dev/verify-leetcode.mjs` 17 项 + 真 Electron 截图。
+- **1.0.11**：修「CF 上分之后每日题单会重排」。两个独立根因（见坑 32 / 33）：
+  ① `plan_snapshots` 原来只钉题号、**题量是拿实时分现算的**（`gap = target - user.rating`），
+     一上分题量就缩水、周数跟着变；现在快照多存一列 `rating`，题量/阶段/周数/每档目标分
+     全按「生成那天钉住的分」算，老快照第一次读到按当前分补写一次。
+  ② 按难度排序的比较器不是全序（只比 rating），同分题在两条挑选路径上顺序不同，
+     题号集合没变但每日题单整体挪位；统一改用 `byDifficultyThenKey`（rating → contestId → index）。
+  界面顺带把「显示用的分」和「算题量用的分」拆开：`plan.userCurrent`（实时分）和
+  `plan.current`（计划基准分）不一致时，摘要改口说「计划定下时 X 分 → Y 分……你现在的分数是 Z 分」。
+  验证 `.dev/verify-plan-pin.mjs` **37 项**（含两次反向验证：分别撤掉钉分数、撤掉 tie-break，
+  确认断言真会红）+ 项目自带计划自检 14 项 + 真 Electron 两态截图（`.dev/shot-plan-pin.mjs`）。
 
 ## 没做 / 可以接着做
 

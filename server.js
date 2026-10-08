@@ -524,6 +524,19 @@ async function handlePlan(url) {
   const previous = db.getPlanSnapshot(handleKey, targetRounded);
   const reusable = !force && previous && previous.signature === signature ? previous : null;
 
+  // 钉住题量：题量（多少题 / 几周 / 每档目标分）按「生成这份计划时的分数」算，
+  // 不再看实时分数。否则一上分 gap 就变小、题量跟着缩水，周数一变整条日程往前挤，
+  // 看着就像题单被重排了——而题号其实一个没换。掉分同理，还排得更多。
+  // 老快照没存过分数（rating 为 null），按当前分补写一次，题号一个不动。
+  let pinnedRating = reusable?.rating ?? null;
+  if (reusable && pinnedRating == null) {
+    const live = user?.rating && user.rating > 0 ? user.rating : null;
+    if (live != null) {
+      db.setPlanSnapshotRating(handleKey, targetRounded, live);
+      pinnedRating = Math.round(live);
+    }
+  }
+
   // 要重挑的时候（第一次、换了设置、点了重新生成），顺便看要不要按表现挪区间。
   // 评估用的是重挑之前那份计划：你把它做到什么程度了，才算得出来。
   const adjust = reusable
@@ -562,6 +575,8 @@ async function handlePlan(url) {
       // 按最近一轮的表现整体挪过的练习区间
       // 再加上「做题手感」反馈：秒了的多就往上挪，看题解的多就往下挪（最多 ±50）
       bandShift: adjust.shift + db.feedbackShift(handleKey),
+      // 题量按这个分数算：沿用旧计划时用当初钉住的分数，重挑时用实时分数（下面会存下来）
+      currentRating: pinnedRating,
     });
 
   if (!reusable) {
@@ -573,6 +588,8 @@ async function handlePlan(url) {
         index: stage.index,
         keys: stage.problems.map((problem) => `${problem.contestId}-${problem.index}`),
       })),
+      // 连同「生成时的分数」一起存：以后沿用这份计划时题量就按它算
+      user?.rating && user.rating > 0 ? user.rating : null,
     );
   } else {
     plan.generatedAt = reusable.createdAt;

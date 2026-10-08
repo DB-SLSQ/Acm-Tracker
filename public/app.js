@@ -584,9 +584,21 @@ function renderPlan(plan) {
   const progressLine = doneCount
     ? `已完成 ${doneCount}/${totalPlanned} 题${autoCount ? `（其中 ${autoCount} 题是提交记录里已经通过的，自动打勾）` : ''}。`
     : '';
+  // 计划是按「生成那天的分数」钉住题量的：上分/掉分不会自动重排（否则日程会整体往前挤）。
+  // 所以这里的分数有两套：plan.current 是计划自己的基准，plan.userCurrent 是你此刻的真实分。
+  // 两者不一样时，句式换成「计划定下时 X 分 → Y 分」，免得写成「当前 X 分」而实际上不是。
+  const liveRating = Number.isFinite(plan.userCurrent) ? Math.round(plan.userCurrent) : null;
+  const drift = liveRating != null && liveRating !== plan.current ? liveRating - plan.current : 0;
+  const planBasis = drift
+    ? `计划定下时 ${plan.current} 分 → ${plan.target} 分（${direction}）。`
+    : `当前 ${plan.current} 分 → 目标 ${plan.target} 分（${direction}）。`;
+  const driftLine = drift
+    ? `你现在的分数是 ${liveRating} 分（${drift > 0 ? '+' : ''}${drift}）。计划不会自己变——想按现在的分数重挑一批，点右上角「重新生成计划」。`
+    : '';
   $('plan-summary').textContent =
-    `当前 ${plan.current} 分 → 目标 ${plan.target} 分（${direction}）。` +
+    planBasis +
     `按每周 ${plan.weekly} 题估算，全程约 ${plan.totalNeeded} 题、${plan.weeks} 周，分 ${plan.stages} 个阶段推进。` +
+    driftLine +
     progressLine;
 
   // 「按天看」时整块换成按天分组的折叠列表，其它（摘要、说明）不变
