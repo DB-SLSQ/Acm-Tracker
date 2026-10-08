@@ -9,7 +9,7 @@
 
 ## 一句话现状
 
-**v1.0.11 已写完**：修「**CF 上分之后，每日训练的题单会重排**」。
+**v1.0.11 已发版（2026-10-08）**：修「**CF 上分之后，每日训练的题单会重排**」。
 两个独立原因叠在一起（都在 `lib/plan.js`）：① 题量没被快照钉住，一上分 gap 就变小、
 题量缩水、周数跟着变（见坑 32）；② 按难度排序的比较器不是全序，同分的题在
 「首次生成」和「沿用旧计划」两条路径上顺序不一样（见坑 33）。修完以后，**分数怎么变都不动
@@ -23,10 +23,15 @@
 实际是塌成 16px（根因见坑 31：`<button>` 上 `display:flex` + `overflow:hidden` 会让 Chromium
 把内容高度算成 0），裁剪改用 `overflow: clip` 即可，其余四个主题没这条声明所以一直没露头。
 
-**v1.0.1 ~ v1.0.10 的 tag 与 GitHub Release 都已在线**（exe 附件由 Actions 打包）。发版就三步：
+**v1.0.1 ~ v1.0.11 的 tag 与 GitHub Release 都已在线**（exe 附件由 Actions 打包）。发版就三步：
 升版本号 → 写 `outputs/release-notes-vX.Y.Z.md` → `git tag vX.Y.Z && git push origin vX.Y.Z`。
 
-> 1.0.7 那次只覆盖了 `app.asar`，`ACM Trainer.exe` 的文件版本号还写着 1.0.6，不影响运行。
+> **用户桌面那份现在是 1.0.11**（装在 `C:\Users\summer\Desktop\ACM Trainer\`）。
+> 部署方式：关掉在跑的进程 → `npm.cmd run build -- --dir` 出 `dist\win-unpacked` →
+> **整个目录覆盖**过去 → 删掉 `win-unpacked`。
+> 1.0.7 / 1.0.9 那两次只换了 `app.asar`，也能跑，但 `ACM Trainer.exe` 里嵌的 asar
+> 校验哈希会跟新 asar 对不上；现在 Electron 有 asar integrity，**整目录覆盖更保险**。
+> 旧 asar 会留一份 `resources\app.asar.bak-1.0.9` 备用（回滚就改名换回去）。
 
 工作区里有两份**别人的**未跟踪文档（`outputs/notes/energy-intervals-status.md`、
 `outputs/视频简介-下半年-上海见乐山见.md`），不是这个项目的活，别顺手 `git add -A` 带上去。
@@ -540,6 +545,7 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
   `plan.current`（计划基准分）不一致时，摘要改口说「计划定下时 X 分 → Y 分……你现在的分数是 Z 分」。
   验证 `.dev/verify-plan-pin.mjs` **37 项**（含两次反向验证：分别撤掉钉分数、撤掉 tie-break，
   确认断言真会红）+ 项目自带计划自检 14 项 + 真 Electron 两态截图（`.dev/shot-plan-pin.mjs`）。
+  已发 Release（2026-10-08），桌面那份也换成了 1.0.11。
 
 ## 没做 / 可以接着做
 
