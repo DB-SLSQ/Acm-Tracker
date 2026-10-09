@@ -5022,9 +5022,13 @@ $('atcoder-sync').addEventListener('click', async () => {
     renderPlatformCards();
     saveSettings({ atcoderUid: account });
     const added = data.submissions?.added ?? 0;
+    const local = data.result?.localSolved;
     hint.textContent =
       `同步成功：题库 ${data.catalog?.count ?? '?'} 道题，这次写入 ${added} 条提交记录，` +
-      `累计通过 ${data.result?.solved ?? '?'} 道。`;
+      `AtCoder 累计通过 ${data.result?.solved ?? '?'} 道` +
+      (local != null
+        ? `；其中 ${local} 道在本地题库里（只有这部分能排进计划）。`
+        : '。');
     // 记录变了，把计划重新拉一次：做过的题会自动打勾、也不会再推荐
     if (state.planData) generatePlan(false, { scroll: false });
   } catch (error) {

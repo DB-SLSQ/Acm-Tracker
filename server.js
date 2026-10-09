@@ -3020,15 +3020,21 @@ async function route(req, res, url) {
       const handleKey = db.normalizeHandle(rawHandle);
 
       const submissions = await syncAtcoderSubmissions(handleKey, account, { force: true });
-      // Kenkoooo 的用户总览：排名这种要全站数据才算得出来，顺手抓一次
+      // Kenkoooo 的用户总览：排名要全站数据才算得出来，顺手抓一次。
+      // 它的 accepted_count 也一并拿来当「通过题目」——那才是 AtCoder 全站去重的 AC 题数。
       let overview = null;
       try {
         overview = await fetchAtcoderUserInfo(account);
       } catch {
-        // 拿不到就不显示这几项，同步本身不受影响
+        // 拿不到就退回本地口径，同步本身不受影响
       }
+      // 本地这份只收了能排进计划的题（ABC/ARC/AGC、且在题库里、难度达线），
+      // ABC-A/B/C 这类签到题和各种非标准赛（PAST、典型 90…）都不进来，
+      // 所以它天然比真实 AC 数小一大截，只能当「题库内已做」，不能当总量。
+      const localSolved = submissions.total;
       const stats = {
-        通过题目: submissions.total,
+        通过题目: overview?.acceptedCount ?? localSolved,
+        题库内已做: localSolved,
         提交记录: db.getSubmissions(handleKey).filter((row) => row.platform === 'atcoder').length,
       };
       if (overview) {
@@ -3044,7 +3050,15 @@ async function route(req, res, url) {
       });
 
       return sendJson(res, 200, {
-        result: { platform: 'atcoder', account, solved: submissions.total, stats },
+        result: {
+          platform: 'atcoder',
+          account,
+          // 界面上「累计通过」说的是真实 AC 题数
+          solved: stats['通过题目'],
+          // 本地题库里能排进计划的那些，另说
+          localSolved,
+          stats,
+        },
         catalog,
         submissions,
         platforms: db.listPlatformStats(),
