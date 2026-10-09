@@ -22,6 +22,8 @@ const state = {
   // 外观
   theme: 'dark',
   palette: 'green',
+  // 左侧菜单栏宽度（px；null = 用默认值 SIDE_W_DEFAULT）
+  sidebarWidth: null,
   // 日程
   restDays: [],
   dayOff: {},
@@ -283,6 +285,74 @@ function bindAppearance() {
   // 侧栏那组一直存在；设置页那组在面板里，一起绑上
   $('theme-switch')?.addEventListener('click', onClick);
   $('theme-switch-settings')?.addEventListener('click', onClick);
+}
+
+/* ---------- 侧栏宽度：可拖 ---------- */
+
+const SIDE_W_MIN = 96;
+const SIDE_W_MAX = 320;
+const SIDE_W_DEFAULT = 132;
+// 超过这个宽度就翻成「宽态」：每格从「图标在上、字在下」改成横向一排
+const SIDE_W_WIDE = 176;
+
+/** 把宽度夹进合法区间，写到 <html> 的 --side-w 上，返回实际生效的值。 */
+function applySideWidth(width) {
+  const value = Math.round(
+    Math.min(SIDE_W_MAX, Math.max(SIDE_W_MIN, Number(width) || SIDE_W_DEFAULT)),
+  );
+  document.documentElement.style.setProperty('--side-w', `${value}px`);
+  if (value >= SIDE_W_WIDE) document.documentElement.dataset.sideWide = '1';
+  else delete document.documentElement.dataset.sideWide;
+  return value;
+}
+
+/** 侧栏右边缘那条竖线：按住左右拉改宽度，松手存一次，双击回默认。 */
+function bindSideResizer() {
+  const handle = $('side-resizer');
+  const sidebar = $('sidebar');
+  if (!handle || !sidebar) return;
+
+  let dragging = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    dragging = true;
+    startX = event.clientX;
+    startWidth = sidebar.getBoundingClientRect().width;
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      /* 指针已经失效（或事件是合成出来的）时忽略，不影响拖动 */
+    }
+    document.body.classList.add('resizing-side');
+    event.preventDefault();
+  });
+
+  handle.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    state.sidebarWidth = applySideWidth(startWidth + (event.clientX - startX));
+  });
+
+  const finish = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('resizing-side');
+    try {
+      handle.releasePointerCapture(event.pointerId);
+    } catch {
+      /* 指针已经没了也无所谓 */
+    }
+    saveSettings({ sidebarWidth: state.sidebarWidth });
+  };
+  handle.addEventListener('pointerup', finish);
+  handle.addEventListener('pointercancel', finish);
+
+  handle.addEventListener('dblclick', () => {
+    state.sidebarWidth = applySideWidth(SIDE_W_DEFAULT);
+    saveSettings({ sidebarWidth: state.sidebarWidth });
+  });
 }
 
 function formatClock(totalSeconds) {
@@ -5177,6 +5247,10 @@ async function restoreSession() {
     }
   }
   applyAppearance();
+  // 上次拖出来的侧栏宽度（没存过就用默认）。用户要是已经在拖了就别覆盖他
+  if (state.sidebarWidth === null) {
+    state.sidebarWidth = applySideWidth(settings?.sidebarWidth ?? SIDE_W_DEFAULT);
+  }
   state.compact = Boolean(settings?.compact);
   document.body.classList.toggle('compact', state.compact);
   bindDataTools();
@@ -5491,6 +5565,7 @@ $('remind-off').addEventListener('click', () => {
 });
 
 bindAppearance();
+bindSideResizer();
 // 冷启动时先把「今天」卡片摆出来；还没生成计划的话它会提示去生成
 renderTodayCard();
 restoreSession();

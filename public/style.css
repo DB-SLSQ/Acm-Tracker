@@ -3769,7 +3769,7 @@ body.compact .panel-head h2 {
 /* 20 个入口摊成一列的话 900px 高的屏幕放不下，得滚动才能摸到「设置」；
    排成两列刚好一屏装完，宽度还是比原来的 240px 窄一半。 */
 .sidebar {
-  width: 132px;
+  width: var(--side-w, 132px);
   padding: 14px 8px 12px;
   gap: 8px;
 }
@@ -4435,4 +4435,65 @@ body.compact .panel-head h2 {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text-faint);
+}
+
+/* ============================================================
+   侧栏宽度可拖
+   手柄骑在侧栏右边缘，按住左右拉即可；双击回到默认宽度。
+   宽度写进 CSS 变量 --side-w（JS 设），并存在设置里。
+   ============================================================ */
+
+.side-resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 9px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 20;
+  touch-action: none;
+}
+
+/* 平时隐形的，hover 或正在拖时才亮出一条线，免得平时凭空多一道竖杠 */
+.side-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.side-resizer:hover::after,
+body.resizing-side .side-resizer::after {
+  opacity: 1;
+}
+
+/* 拖动过程中别把标题文字一起选上，光标保持左右箭头 */
+body.resizing-side {
+  user-select: none;
+  cursor: col-resize;
+}
+
+/* 拖宽以后每格也跟着变宽，把「图标在上 / 字在下」改成横向一排，
+   否则两列各自居中会显得很空 */
+html[data-side-wide='1'] .side-nav {
+  gap: 5px;
+}
+
+html[data-side-wide='1'] .side-item {
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 9px 11px;
+  text-align: left;
+}
+
+html[data-side-wide='1'] .side-item .lbl {
+  font-size: 11.5px;
 }

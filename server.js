@@ -353,6 +353,8 @@ function readSettings() {
       remindAt: raw.remind_at ?? null,
       // 今日卡片是否显示「补一个方向」（默认显示）
       extraAxis: raw.extra_axis !== '0',
+      // 左侧菜单栏宽度（像素；null = 用前端默认值）
+      sidebarWidth: raw.sidebar_width === undefined ? null : Number(raw.sidebar_width),
       // 上一次提醒是哪天（'YYYY-MM-DD'），避免同一天反复弹
       remindLast: raw.remind_last ?? null,
       updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
@@ -2567,6 +2569,14 @@ async function route(req, res, url) {
       // 记「今天已经提醒过」，防止同一天重复弹
       if (body.remindLast !== undefined) {
         patch.remind_last = String(body.remindLast ?? '').slice(0, 10);
+      }
+      // 左侧菜单栏宽度：拖动边缘调完存下来，下次打开还是这个宽度
+      if (body.sidebarWidth !== undefined) {
+        const value = Number(body.sidebarWidth);
+        if (!Number.isFinite(value) || value < 96 || value > 320) {
+          return sendError(res, 400, '侧栏宽度请填 96 到 320 之间的数字');
+        }
+        patch.sidebar_width = String(Math.round(value));
       }
       db.saveSettings(patch);
       return sendJson(res, 200, { settings: readSettings() });
