@@ -21,22 +21,32 @@
         <div class="side-foot">
           <!-- 多账号：切换只改当前用哪个账号，数据按账号分开存 -->
           <select class="handle-switch" id="handle-switch" title="切换账号"></select>
-          <div class="theme-switch" id="theme-switch">
-            <button type="button" class="theme-btn" data-theme-value="dark">暗色</button>
-            <button type="button" class="theme-btn" data-theme-value="light">亮色</button>
-            <button type="button" class="theme-btn" data-theme-value="gray">灰色</button>
-            <button type="button" class="theme-btn" data-theme-value="eye">护眼</button>
-            <button type="button" class="theme-btn" data-theme-value="cyber">赛博</button>
+          <!-- 导轨里放不下文字，这五个按钮退化成色点：每点一个就是那套主题的主色 -->
+          <div class="theme-switch theme-dots" id="theme-switch">
+            <button type="button" class="theme-btn" data-theme-value="dark" title="暗色" style="--dot:#2ee6c8">暗色</button>
+            <button type="button" class="theme-btn" data-theme-value="light" title="亮色" style="--dot:#2f6fed">亮色</button>
+            <button type="button" class="theme-btn" data-theme-value="gray" title="灰色" style="--dot:#6f9bff">灰色</button>
+            <button type="button" class="theme-btn" data-theme-value="eye" title="护眼" style="--dot:#4a9e6f">护眼</button>
+            <button type="button" class="theme-btn" data-theme-value="cyber" title="赛博" style="--dot:#f45bd0">赛博</button>
           </div>
-          <button type="button" class="qq-pill" id="qq-toggle" title="点击显示群二维码">
-            <span class="qq-badge">群</span>交流群 1124017564
+          <button type="button" class="qq-pill" id="qq-toggle" title="交流群 1124017564 · 点击显示二维码">
+            <span class="qq-badge">群</span><span class="qq-text">交流群 1124017564</span>
           </button>
           <div class="topbar-status" id="status">未连接</div>
         </div>
       </aside>
 
       <main class="main" id="main">
-      <section class="panel" id="panel-overview">
+      <!-- 吸顶栏：左边是当前页的名字，右边是目标爬升轨道 -->
+      <header class="tb" id="tb">
+        <div class="tb-left">
+          <span class="tb-eyebrow">ACM 训练台</span>
+          <h2 class="tb-title" id="tb-title">当前水平</h2>
+        </div>
+        <div class="tb-goal" id="tb-goal"></div>
+      </header>
+
+      <section class="panel cockpit-panel" id="panel-overview">
         <div class="panel-head">
           <h2>账号与当前水平</h2>
           <p id="overview-handle"></p>
@@ -55,10 +65,24 @@
             只读公开数据（rating、提交记录），不需要密码。第一次要下载全站题库，等十几秒。
           </span>
         </div>
-        <div class="stats" id="stats"></div>
-        <div class="chart" id="rating-chart"></div>
-        <div id="warmup-card" class="hidden"></div>
-        <div class="today-card hidden" id="today-card"></div>
+
+        <!-- 平台战绩：每个平台一格，填了账号就统计过题数 -->
+        <div class="platform-band" id="platform-band"></div>
+
+        <div class="cockpit">
+          <div class="cockpit-main">
+            <div class="stats" id="stats"></div>
+            <div class="chart" id="rating-chart"></div>
+            <div id="warmup-card" class="hidden"></div>
+            <div class="today-card hidden" id="today-card"></div>
+          </div>
+          <aside class="cockpit-rail">
+            <div class="rail-card" id="rail-progress"></div>
+            <div class="rail-card" id="rail-week"></div>
+            <div class="rail-card" id="rail-review"></div>
+            <div class="rail-card" id="rail-contests"></div>
+          </aside>
+        </div>
       </section>
 
       <section class="panel hidden" id="panel-target">

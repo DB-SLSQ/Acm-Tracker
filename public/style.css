@@ -3,31 +3,33 @@
 
 :root,
 [data-theme='dark'] {
-  --bg: #0f1115;
-  --bg-glow: #17202e;
-  --bg-soft: #161a21;
-  --bg-raise: #1c212a;
-  --bg-topbar: rgba(15, 17, 21, 0.82);
-  --bg-overlay: rgba(18, 24, 34, 0.96);
-  --bg-track: #10151d;
-  --border: #262d38;
-  --border-strong: #364152;
-  --text: #e6e9ef;
-  --text-dim: #98a2b3;
-  --text-faint: #5c6675;
-  --accent: #4c8dff;
-  --accent-hover: #3f7de6;
-  --accent-soft: #1d2c46;
-  --accent-text: #9cc0ff;
-  --accent-alt: #7c5cff;
-  --ok: #38b26b;
-  --ok-text: #79d19a;
-  --warn: #e0a92b;
-  --warn-text: #e0a92b;
-  --card-gradient: linear-gradient(180deg, #1b2534, #1c212a);
-  --card-border: #33507a;
-  --hm-empty: #21262e;
-  --badge-text: #0f1115;
+  /* 深空底 + 电光青：底色压得更暗、更冷，主色从蓝换成青，
+     这样难度色阶（灰绿青蓝紫橙红）和界面主色不会互相抢眼。 */
+  --bg: #080c12;
+  --bg-glow: #0e2130;
+  --bg-soft: #0f1722;
+  --bg-raise: #16212e;
+  --bg-topbar: rgba(8, 12, 18, 0.86);
+  --bg-overlay: rgba(15, 23, 34, 0.97);
+  --bg-track: #0b121b;
+  --border: #1c2836;
+  --border-strong: #2b3d51;
+  --text: #e9eff6;
+  --text-dim: #92a4b8;
+  --text-faint: #5a6c80;
+  --accent: #2ee6c8;
+  --accent-hover: #23c9ae;
+  --accent-soft: #0f3540;
+  --accent-text: #6bf0da;
+  --accent-alt: #a98bff;
+  --ok: #3fc97a;
+  --ok-text: #74e5a4;
+  --warn: #ffb454;
+  --warn-text: #ffc078;
+  --card-gradient: linear-gradient(180deg, #10222c, #0f1722);
+  --card-border: #1e4a52;
+  --hm-empty: #17202b;
+  --badge-text: #05121a;
 }
 
 [data-theme='light'] {
@@ -3749,4 +3751,688 @@ body.compact .panel-head h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ============================================================
+   图标导轨 + 吸顶栏 + 今日驾驶舱
+   这一段的思路：左边那条 240px 的文字菜单收成 96px 图标导轨，
+   把横向空间还给内容；主区顶部加一条吸顶栏放「目标爬升轨道」；
+   总览页从「一列往下滑」改成「左主区 + 右数据栏」。
+   ============================================================ */
+
+:root {
+  --mono: Consolas, 'Cascadia Mono', 'Courier New', monospace;
+}
+
+/* ---------- 侧栏：240px 文字菜单 → 96px 图标导轨 ---------- */
+
+/* 20 个入口摊成一列的话 900px 高的屏幕放不下，得滚动才能摸到「设置」；
+   排成两列刚好一屏装完，宽度还是比原来的 240px 窄一半。 */
+.sidebar {
+  width: 132px;
+  padding: 14px 8px 12px;
+  gap: 8px;
+}
+
+.side-brand {
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 0 10px;
+  text-align: center;
+}
+
+.side-brand .brand-mark {
+  font-size: 19px;
+  line-height: 1;
+}
+
+.side-brand h1 {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
+.side-brand .brand-sub {
+  display: none;
+}
+
+.side-nav {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 4px;
+  margin: 0;
+  padding: 0 2px;
+}
+
+/* 导轨里放不下「训练 / 数据 / 其他」这几个小标题，藏掉省纵向空间 */
+.side-group {
+  display: none;
+}
+
+.side-item {
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 2px 5px;
+  border-radius: 11px;
+  text-align: center;
+}
+
+.side-item .ico {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+}
+
+.side-item .ico svg {
+  width: 19px;
+  height: 19px;
+  display: block;
+}
+
+.side-item .lbl {
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.side-item.active .ico {
+  color: var(--accent);
+}
+
+.side-foot {
+  gap: 8px;
+  padding-top: 10px;
+  align-items: center;
+}
+
+.side-foot .handle-switch {
+  width: 100%;
+  font-size: 11.5px;
+  padding: 5px 6px;
+  text-align: center;
+  text-align-last: center;
+}
+
+/* 五个主题按钮在导轨里退化成五个色点：一眼看出这套主题的主色 */
+.theme-dots {
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px;
+  padding: 2px 0;
+  background: none;
+  border: none;
+}
+
+.theme-dots .theme-btn {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0;
+  background: var(--dot);
+  opacity: 0.45;
+  transition: opacity 0.15s, box-shadow 0.15s;
+}
+
+.theme-dots .theme-btn:hover {
+  opacity: 0.85;
+}
+
+.theme-dots .theme-btn.active {
+  opacity: 1;
+  background: var(--dot);
+  box-shadow: 0 0 0 2px var(--bg-soft), 0 0 0 3.5px var(--dot);
+}
+
+.side-foot .qq-pill {
+  width: 100%;
+  justify-content: center;
+  padding: 6px 4px;
+}
+
+.side-foot .qq-pill .qq-text {
+  display: none;
+}
+
+.side-foot .topbar-status {
+  font-size: 10.5px;
+  line-height: 1.35;
+  white-space: normal;
+  max-width: 100%;
+}
+
+/* 主色换成青以后，实心按钮上的白字看不清了，换成深色字 */
+[data-theme='dark'] .btn.primary,
+[data-theme='dark'] .theme-btn.active {
+  color: var(--badge-text);
+}
+
+/* ---------- 主区顶部吸顶栏 ---------- */
+
+.main {
+  padding: 0 32px 30px;
+}
+
+.tb {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  /* 主区左右各有 32px 内边距，顶栏往两边各撑出去 32px，
+     这样吸顶时整条是满宽的，不会在边上留两条缝让内容从缝里滑过去 */
+  padding: 13px 32px 12px;
+  margin: 0 -32px 6px;
+  background: var(--bg-topbar);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+.tb-left {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.tb-eyebrow {
+  font-size: 10px;
+  letter-spacing: 2.4px;
+  color: var(--text-faint);
+}
+
+.tb-title {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+/* ---------- 目标爬升轨道 ---------- */
+
+.tb-goal {
+  flex: 0 1 580px;
+  min-width: 300px;
+}
+
+.climb-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.climb-now {
+  font-family: var(--mono);
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.climb-now small {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--text-faint);
+  margin-left: 5px;
+}
+
+.climb-next {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.climb-next b {
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+.climb-rail {
+  position: relative;
+  height: 6px;
+  border-radius: 4px;
+  margin-bottom: 19px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.climb-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #1a6f72, var(--accent));
+}
+
+.climb-mark {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--bg), 0 0 14px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.climb-station {
+  position: absolute;
+  top: 50%;
+  width: 0;
+}
+
+.climb-station i {
+  position: absolute;
+  left: -1px;
+  top: -7px;
+  width: 2px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+
+.climb-station b {
+  position: absolute;
+  left: 0;
+  top: 12px;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.climb-station.hit i {
+  background: var(--accent);
+  opacity: 0.6;
+}
+
+.climb-station.target i {
+  background: var(--accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.climb-station.target b {
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+/* ---------- 平台战绩横带 ---------- */
+
+.platform-band {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0 18px;
+}
+
+.pf-cell {
+  position: relative;
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 11px 12px 11px 16px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.pf-cell::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--pf);
+}
+
+.pf-cell.empty {
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
+.pf-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 9px;
+}
+
+.pf-badge {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--pf) 22%, transparent);
+  color: var(--pf);
+}
+
+.pf-name {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pf-account {
+  display: block;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pf-cell.empty .pf-account {
+  color: var(--text-faint);
+  border-bottom: 1px dashed var(--border-strong);
+  padding-bottom: 2px;
+}
+
+.pf-ac {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.pf-ac b {
+  font-family: var(--mono);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.pf-ac span {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.pf-cell.empty .pf-ac b {
+  color: var(--text-faint);
+}
+
+.pf-bar {
+  margin-top: 8px;
+  height: 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  overflow: hidden;
+}
+
+.pf-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--pf);
+}
+
+/* ---------- 总览页：左主区 + 右数据栏 ---------- */
+
+.cockpit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 268px;
+  gap: 18px;
+  align-items: start;
+}
+
+.cockpit-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.cockpit-main .stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cockpit-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.rail-card {
+  background: var(--bg-raise);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 13px 14px;
+}
+
+.rail-card h4 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+}
+
+.rail-card h4 em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.rail-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-faint);
+  line-height: 1.6;
+}
+
+/* 今日进度环 */
+.ring {
+  position: relative;
+  width: 116px;
+  height: 116px;
+  margin: 2px auto 0;
+}
+
+.ring svg {
+  width: 116px;
+  height: 116px;
+  transform: rotate(-90deg);
+}
+
+.ring-val {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+}
+
+.ring-val b {
+  font-family: var(--mono);
+  font-size: 25px;
+  line-height: 1;
+}
+
+.ring-val span {
+  display: block;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+/* 本周柱条 */
+.rail-week {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 64px;
+}
+
+.rail-week .d {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rail-week .d .b {
+  width: 100%;
+  min-height: 3px;
+  border-radius: 4px 4px 2px 2px;
+  background: linear-gradient(180deg, #35e0c9, #14a89a);
+}
+
+.rail-week .d.today .b {
+  background: linear-gradient(180deg, #ffd08a, #ff9d3d);
+}
+
+.rail-week .d .n {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--text-faint);
+}
+
+/* 轨道里的小列表 */
+.rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.rail-item .code {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.rail-item .nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-item .meta {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+/* ---------- 今日题单：按难度分三段 ---------- */
+
+.seg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 13px 0 1px;
+}
+
+.seg-head:first-child {
+  margin-top: 7px;
+}
+
+.seg-tag {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  padding: 2px 7px;
+  border-radius: 5px;
+}
+
+.seg-note {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.seg-head.warm .seg-tag {
+  background: color-mix(in srgb, #5ee08a 16%, transparent);
+  color: #5ee08a;
+}
+
+.seg-head.main .seg-tag {
+  background: color-mix(in srgb, #35d6e8 16%, transparent);
+  color: #35d6e8;
+}
+
+.seg-head.push .seg-tag {
+  background: color-mix(in srgb, #b49bff 18%, transparent);
+  color: #b49bff;
+}
+
+@media (max-width: 1180px) {
+  .cockpit {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cockpit-rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .cockpit-rail > .rail-card {
+    flex: 1 1 240px;
+  }
+}
+
+@media (max-width: 900px) {
+  .platform-band {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* 平台战绩横带的小标题：占满一整行，夹在格子上面 */
+.platform-band .band-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: -2px;
+  font-size: 11.5px;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+}
+
+.platform-band .band-head em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
 }

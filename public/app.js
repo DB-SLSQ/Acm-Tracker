@@ -50,6 +50,8 @@ const state = {
   extraTasks: {},
   // 当前 rating：题库页「按我的水平推荐」要用
   rating: null,
+  // Codeforces 那一坨原始数据（过题数、最高分…），顶栏爬升轨道和平台战绩都读它
+  user: null,
   // 其他平台
   nowcoderUid: null,
   // 比赛日历：当前筛选的来源 + 最近一次拿到的数据
@@ -458,10 +460,13 @@ async function loadUser(force = false) {
     const { user } = await getJson(
       `/api/user?handle=${encodeURIComponent(handle)}${force ? '&refresh=1' : ''}`,
     );
-    // 题库页推荐题目时要知道你现在多少分
+    // 题库页推荐题目时要知道你现在多少分；顶栏的爬升轨道和平台战绩也要用这份原始数据
     state.rating = user.rating ?? null;
+    state.user = user;
     renderStats(user);
     renderRatingChart(user.ratingHistory);
+    renderTopbar();
+    renderPlatformBand();
     $('overview-handle').textContent = `${user.displayHandle} · 数据更新于 ${new Date(user.updatedAt).toLocaleString('zh-CN')}`;
 
     // 目标分数只在用户从没设过的时候才给建议值，
@@ -1310,6 +1315,7 @@ async function loadReview() {
     // 题库里查不到的题不列出来（没有难度和标签），只在摘要里报个数
     state.reviewMissing = data.missing ?? 0;
     renderReviewQueue();
+    renderRailReview();
     // 队列拿到数据以后这块面板才显示出来（和「做题记录」一样的做法）
     markViewReady('panel-review');
   } catch {
@@ -3327,6 +3333,9 @@ function renderCalendar(data) {
       );
     });
   }, 30000);
+
+  // 总览页右栏那三场也顺手刷新
+  renderRailContests();
 }
 
 // ---------- 虚拟参赛 ----------
@@ -3614,6 +3623,7 @@ async function loadActivity() {
     );
     state.activity = activity;
     renderHeatmap();
+    renderRailWeek();
     markViewReady('panel-heatmap');
   } catch (error) {
     markViewReady('panel-heatmap');
@@ -3788,16 +3798,8 @@ function renderTodayCard() {
     return;
   }
 
-  const now = new Date();
-  const overview = todayOverview({
-    problems: state.planProblems,
-    weekly: state.weekly,
-    restDays: state.restDays,
-    dayOff: state.dayOff,
-    startDate: state.planStart ?? now,
-    today: now,
-    doneKeys: state.done,
-  });
+  const overview = todaySnapshot();
+  if (!overview) return;
 
   const total = overview.todayProblems.length;
   const doneToday = overview.todayDone;
@@ -3824,7 +3826,7 @@ function renderTodayCard() {
     : '';
   let body;
   if (total) {
-    body = `<div class="today-list">${overview.todayProblems.map(todayRow).join('')}</div>`;
+    body = `<div class="today-list">${segmentTodayRows(overview.todayProblems)}</div>`;
   } else if (overview.restDay) {
     body = `<p class="subtle">今天休息${
       overview.restDay.reason ? `（${escapeHtml(overview.restDay.reason)}）` : ''
@@ -3884,6 +3886,40 @@ function renderTodayCard() {
        <span class="today-behind ${behindClass}">${behindText}</span>
      </div>` +
     (retroLine(state.retro) ? `<p class="subtle today-retro">${escapeHtml(retroLine(state.retro))}</p>` : '');
+
+  // 今天这张卡一变，右栏的进度环也要跟着走
+  renderRailProgress();
+}
+
+/**
+ * 今日题单按「比我现在的水平低 / 差不多 / 高」切成三段。
+ * 段界跟着当前 rating 走，不写死分数——换个账号、上个分都不用改代码。
+ */
+function todaySegments() {
+  const base = Number.isFinite(state.rating) && state.rating > 0 ? state.rating : 1600;
+  return [
+    { key: 'warm', tag: '热身', note: '找回手感', lo: -Infinity, hi: base - 150 },
+    { key: 'main', tag: '主攻', note: '这一段的主战场', lo: base - 150, hi: base + 250 },
+    { key: 'push', tag: '冲刺', note: '踮脚够得着', lo: base + 250, hi: Infinity },
+  ];
+}
+
+function segmentTodayRows(problems) {
+  const sorted = [...problems].sort((a, b) => (a.rating ?? 0) - (b.rating ?? 0));
+  let html = '';
+  for (const seg of todaySegments()) {
+    const rows = sorted.filter((problem) => {
+      const rating = problem.rating ?? 0;
+      return rating > seg.lo && rating <= seg.hi;
+    });
+    if (!rows.length) continue;
+    html += `<div class="seg-head ${seg.key}">
+      <span class="seg-tag">${seg.tag}</span>
+      <span class="seg-note">${rows.length} 题 · ${seg.note}</span>
+    </div>`;
+    html += rows.map((problem) => todayRow(problem)).join('');
+  }
+  return html || sorted.map((problem) => todayRow(problem)).join('');
 }
 
 function rebuildSchedule() {
@@ -4221,47 +4257,83 @@ document.addEventListener('click', (event) => {
 // 以前是一整页从上滑到底，现在是「左边点菜单、右边换页面」：
 // 每个 section.panel 就是一个页面，同时只显示一个。
 // 顺序按「每天真正会看的先后」排：先看今天要做什么，再看数据，最后是资料类的。
+// 导轨上的图标全是自绘的 24×24 线性图标：用 currentColor 描边，
+// 所以跟着主题走，切到浅色主题不会变成一团黑，也不用额外引图标库。
+const NAV_ICONS = {
+  overview: '<path d="M3.5 17.2 8 11.2l3.5 3.5L16 7.6l4.5 5"/><path d="M3.5 20.4h17"/>',
+  target:
+    '<circle cx="12" cy="12" r="8.4"/><circle cx="12" cy="12" r="3.9"/><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"/>',
+  plan: '<rect x="4.5" y="3.6" width="15" height="16.8" rx="2.4"/><path d="M9 3.6V6h6V3.6"/><path d="M8.5 12h7M8.5 16h4.5"/>',
+  team: '<circle cx="9" cy="8.4" r="3.1"/><circle cx="17" cy="9.6" r="2.2"/><path d="M3.4 19.4c0-3 2.6-4.6 5.6-4.6s5.6 1.6 5.6 4.6"/><path d="M15.7 19.4c0-2 1.4-3.3 3.2-3.3"/>',
+  schedule:
+    '<rect x="3.6" y="5" width="16.8" height="15.4" rx="2.4"/><path d="M3.6 9.8h16.8"/><path d="M8 3.4v3.2M16 3.4v3.2"/><circle cx="12" cy="15" r="1.1" fill="currentColor" stroke="none"/>',
+  review: '<path d="M3.9 12a8.1 8.1 0 1 0 2.5-5.8"/><path d="M3.9 4.6v5.1h5.1"/>',
+  makeup: '<path d="M4 6.4h10M4 11.4h10M4 16.4h6"/><path d="M16.8 13.4v6.2M13.7 16.5h6.2"/>',
+  problems:
+    '<path d="M4 5.6A2.6 2.6 0 0 1 6.6 3H20v14.6H6.6A2.6 2.6 0 0 0 4 20.2z"/><path d="M4 20.2A2.6 2.6 0 0 1 6.6 17.6H20V21H6.6A2.6 2.6 0 0 1 4 20.2z"/>',
+  contests:
+    '<path d="M7.6 3.6h8.8v5.2a4.4 4.4 0 0 1-8.8 0z"/><path d="M7.6 5.4H4.7a2.6 2.6 0 0 0 2.9 4.2M16.4 5.4h2.9a2.6 2.6 0 0 1-2.9 4.2"/><path d="M12 13.3v3.4M9.2 20.4h5.6M10.2 16.7h3.6"/>',
+  mashup:
+    '<path d="M10 3.6a2 2 0 0 1 4 0v.9h3.4a1.5 1.5 0 0 1 1.5 1.5v3.4h.9a2 2 0 0 1 0 4h-.9v3.4a1.5 1.5 0 0 1-1.5 1.5H14v-.9a2 2 0 0 0-4 0v.9H6.6a1.5 1.5 0 0 1-1.5-1.5V14h-.9a2 2 0 0 1 0-4h.9V6a1.5 1.5 0 0 1 1.5-1.5H10z"/>',
+  lists: '<path d="M9.2 3.6h5.6l-.9 5.9 2.9 2.9H7.2l2.9-2.9z"/><path d="M12 12.4v8.1"/>',
+  tags: '<circle cx="12" cy="12" r="8.4"/><path d="M15.4 8.6 13.2 13.2 8.6 15.4l2.2-4.6z"/>',
+  growth:
+    '<path d="M12 20.5v-6.1"/><path d="M12 14.4c0-3.2-2.2-5.4-6.4-5.4 0 3.2 2.2 5.4 6.4 5.4z"/><path d="M12 14.4c0-3.2 2.2-5.4 6.4-5.4 0 3.2-2.2 5.4-6.4 5.4z"/>',
+  records:
+    '<path d="M6 3.6h7.4L19 9.2V20a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 20V5.1a1.5 1.5 0 0 1 1-1.5z"/><path d="M13.4 3.6v5.6H19"/><path d="M8.5 13h7M8.5 16.6h4"/>',
+  heatmap:
+    '<rect x="3.6" y="3.6" width="7" height="7" rx="1.8"/><rect x="13.4" y="3.6" width="7" height="7" rx="1.8"/><rect x="3.6" y="13.4" width="7" height="7" rx="1.8"/><rect x="13.4" y="13.4" width="7" height="7" rx="1.8"/>',
+  calendar: '<path d="M6.5 20.8V3.6"/><path d="M6.5 4.4h11.1l-2.1 4.1 2.1 4.1H6.5"/>',
+  virtual:
+    '<circle cx="12" cy="13.6" r="7.1"/><path d="M12 9.9v3.8l2.4 1.5"/><path d="M9.4 3.3h5.2"/><path d="M12 3.3v3.2"/><path d="M18.9 5.7l1.4-1.4"/>',
+  platforms:
+    '<circle cx="12" cy="12" r="2.7"/><path d="M12 3.3v3.3M12 17.4v3.3M3.3 12h3.3M17.4 12h3.3M5.9 5.9l2.3 2.3M15.8 15.8l2.3 2.3M18.1 5.9l-2.3 2.3M8.2 15.8l-2.3 2.3"/>',
+  help: '<circle cx="12" cy="12" r="8.4"/><path d="M9.7 9.4a2.4 2.4 0 1 1 3.3 2.3c-.7.3-1 .8-1 1.6v.3"/><circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/>',
+  settings:
+    '<circle cx="12" cy="12" r="3.1"/><path d="M12 2.9v2.3M12 18.8v2.3M4 7.5l2 1.2M18 15.3l2 1.2M4 16.5l2-1.2M18 8.7l2-1.2"/>',
+};
+
+/** 把一个图标名变成可以直接塞进 innerHTML 的 SVG。 */
+function navIcon(name) {
+  const body = NAV_ICONS[name] ?? NAV_ICONS.overview;
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+}
+
 const NAV_ITEMS = [
-  { id: 'panel-overview', label: '当前水平', icon: '📊' },
-  { id: 'panel-target', label: '目标设置', icon: '🎯', group: '训练' },
-  { id: 'panel-plan', label: '训练计划', icon: '📋' },
-  { id: 'panel-team', label: '团队训练', icon: '👥' },
-  { id: 'panel-schedule', label: '训练日程', icon: '🗓' },
-  { id: 'panel-review', label: '补题队列', icon: '🧾' },
-  { id: 'panel-makeup', label: '待补题', icon: '📋' },
-  { id: 'panel-problems', label: '题库', icon: '📚' },
-  { id: 'panel-contests', label: '历年比赛', icon: '🏆' },
-  { id: 'panel-mashup', label: '拼好题', icon: '🧩' },
-  { id: 'panel-lists', label: '我的题单', icon: '📌' },
-  { id: 'panel-tags', label: '能力画像', icon: '🧭', group: '数据' },
-  { id: 'panel-growth', label: '成长', icon: '🌱' },
-  { id: 'panel-records', label: '做题记录', icon: '📝' },
-  { id: 'panel-heatmap', label: '活动记录', icon: '🔥' },
-  { id: 'panel-calendar', label: '比赛日历', icon: '🏁', group: '其他' },
-  { id: 'panel-virtual', label: '虚拟参赛', icon: '⏱' },
-  { id: 'panel-platforms', label: '平台数据', icon: '🔔' },
-  { id: 'panel-help', label: '帮助', icon: '💡' },
-  { id: 'panel-settings', label: '设置', icon: '⚙️' },
+  { id: 'panel-overview', label: '当前水平', icon: 'overview' },
+  { id: 'panel-target', label: '目标设置', icon: 'target', group: '训练' },
+  { id: 'panel-plan', label: '训练计划', icon: 'plan' },
+  { id: 'panel-team', label: '团队训练', icon: 'team' },
+  { id: 'panel-schedule', label: '训练日程', icon: 'schedule' },
+  { id: 'panel-review', label: '补题队列', icon: 'review' },
+  { id: 'panel-makeup', label: '待补题', icon: 'makeup' },
+  { id: 'panel-problems', label: '题库', icon: 'problems' },
+  { id: 'panel-contests', label: '历年比赛', icon: 'contests' },
+  { id: 'panel-mashup', label: '拼好题', icon: 'mashup' },
+  { id: 'panel-lists', label: '我的题单', icon: 'lists' },
+  { id: 'panel-tags', label: '能力画像', icon: 'tags', group: '数据' },
+  { id: 'panel-growth', label: '成长', icon: 'growth' },
+  { id: 'panel-records', label: '做题记录', icon: 'records' },
+  { id: 'panel-heatmap', label: '活动记录', icon: 'heatmap' },
+  { id: 'panel-calendar', label: '比赛日历', icon: 'calendar', group: '其他' },
+  { id: 'panel-virtual', label: '虚拟参赛', icon: 'virtual' },
+  { id: 'panel-platforms', label: '平台数据', icon: 'platforms' },
+  { id: 'panel-help', label: '帮助', icon: 'help' },
+  { id: 'panel-settings', label: '设置', icon: 'settings' },
 ];
 
 const VIEW_IDS = NAV_ITEMS.map((item) => item.id);
 
-/** 画左边那列菜单。group 变了就插一个小标题，把功能分成几段。 */
+/** 画左边那条导轨：图标 + 一行小字，悬停还给一个完整的名字。 */
 function renderSideNav() {
   const nav = $('side-nav');
   if (!nav) return;
-  let html = '';
-  let group = null;
-  for (const item of NAV_ITEMS) {
-    if (item.group && item.group !== group) {
-      group = item.group;
-      html += `<div class="side-group">${escapeHtml(group)}</div>`;
-    }
-    html += `<button type="button" class="side-item" data-view="${item.id}">
-      <span class="ico">${item.icon}</span><span>${escapeHtml(item.label)}</span>
-    </button>`;
-  }
-  nav.innerHTML = html;
+  nav.innerHTML = NAV_ITEMS.map(
+    (item) => `<button type="button" class="side-item" data-view="${item.id}" title="${escapeHtml(item.label)}">
+      <span class="ico">${navIcon(item.icon)}</span><span class="lbl">${escapeHtml(item.label)}</span>
+    </button>`,
+  ).join('');
 }
 
 /** 切到某个页面：把其它页面藏起来，菜单高亮跟上，地址栏的 hash 也同步。 */
@@ -4275,6 +4347,7 @@ function showView(id, { save = true } = {}) {
   for (const button of document.querySelectorAll('#side-nav .side-item')) {
     button.classList.toggle('active', button.dataset.view === id);
   }
+  renderTopbar();
   $('main')?.scrollTo?.({ top: 0 });
   window.scrollTo({ top: 0 });
   if (save) {
@@ -4286,6 +4359,241 @@ function showView(id, { save = true } = {}) {
 function markViewReady(id) {
   state.readyView.add(id);
   if (state.view === id) showView(id, { save: false });
+}
+
+// ---------- 顶栏：当前页名字 + 目标爬升轨道 ----------
+// 四站：1600 / 1800 / 2100 / 2400。当前分落在轨道上，一眼看出离下一站还差多少。
+
+const CLIMB_STATIONS = [1600, 1800, 2100, 2400];
+const CLIMB_LO = 1200;
+const CLIMB_HI = 2600;
+
+function climbPercent(value) {
+  return Math.max(0, Math.min(100, ((value - CLIMB_LO) / (CLIMB_HI - CLIMB_LO)) * 100));
+}
+
+function renderTopbar() {
+  const titleBox = $('tb-title');
+  if (titleBox) {
+    const item = NAV_ITEMS.find((entry) => entry.id === state.view);
+    titleBox.textContent = item ? item.label : 'ACM 训练台';
+  }
+
+  const box = $('tb-goal');
+  if (!box) return;
+
+  const current = Number(state.rating);
+  if (!Number.isFinite(current) || current <= 0) {
+    box.innerHTML =
+      '<div class="climb-next" style="text-align:right">加载账号数据后，这里会显示你的爬升轨道。</div>';
+    return;
+  }
+
+  const target = Number(state.target) || null;
+  const nextStation = CLIMB_STATIONS.find((value) => value > current) ?? null;
+  const markPct = climbPercent(current).toFixed(2);
+
+  const targetText = target
+    ? target > current
+      ? `目标 <b>${target}</b> 分 · 还差 ${target - current}`
+      : `已达目标 <b>${target}</b> 分`
+    : '还没设目标';
+
+  const stations = CLIMB_STATIONS.map((value) => {
+    const cls = ['climb-station'];
+    if (value <= current) cls.push('hit');
+    if (target === value) cls.push('target');
+    return `<span class="${cls.join(' ')}" style="left:${climbPercent(value).toFixed(2)}%"><i></i><b>${value}</b></span>`;
+  }).join('');
+
+  box.innerHTML = `
+    <div class="climb">
+      <div class="climb-top">
+        <span class="climb-now">${current}<small>${
+          nextStation ? `分 · 距 ${nextStation} 站还差 ${nextStation - current}` : '分 · 已经翻过最后一站'
+        }</small></span>
+        <span class="climb-next">${targetText}</span>
+      </div>
+      <div class="climb-rail">
+        <span class="climb-fill" style="width:${markPct}%"></span>
+        ${stations}
+        <span class="climb-mark" style="left:${markPct}%"></span>
+      </div>
+    </div>`;
+}
+
+// ---------- 平台战绩横带 ----------
+// 五个平台各一格：绑了账号就显示过题数，没绑就是虚线空态，一眼看出还缺哪家。
+
+const BAND_PLATFORMS = [
+  { key: 'cf', badge: 'CF', name: 'Codeforces', color: '#ff6b6b' },
+  { key: 'luogu', badge: 'LG', name: '洛谷', color: '#52c41a' },
+  { key: 'atcoder', badge: 'AT', name: 'AtCoder', color: '#a98bff' },
+  { key: 'leetcode', badge: 'LC', name: '力扣', color: '#ffa116' },
+  { key: 'nowcoder', badge: 'NC', name: '牛客', color: '#35d6e8' },
+];
+
+/** 从已有的数据里抽一个平台的账号与过题数，没有就返回空态。 */
+function platformBandEntry(key) {
+  if (key === 'cf') {
+    if (!state.handle || !state.user) return { account: '', count: null };
+    return { account: state.handle, count: state.user.solvedCount ?? null };
+  }
+  const entry = state.platforms.find((row) => row.platform === key);
+  if (!entry) return { account: '', count: null };
+  const count = entry.stats?.['题已通过'] ?? entry.stats?.['通过题目'] ?? null;
+  return { account: entry.account, count };
+}
+
+function renderPlatformBand() {
+  const box = $('platform-band');
+  if (!box) return;
+
+  const rows = BAND_PLATFORMS.map((meta) => ({ meta, ...platformBandEntry(meta.key) }));
+  const max = Math.max(1, ...rows.map((row) => row.count ?? 0));
+  const total = rows.reduce((sum, row) => sum + (row.count ?? 0), 0);
+  const bound = rows.filter((row) => row.count != null).length;
+
+  const cells = rows
+    .map(({ meta, account, count }) => {
+      const empty = count == null;
+      const width = empty ? 0 : Math.max(4, Math.round((count / max) * 100));
+      return `<div class="pf-cell${empty ? ' empty' : ''}" style="--pf:${meta.color}">
+        <div class="pf-head">
+          <span class="pf-badge">${meta.badge}</span>
+          <span class="pf-name">${meta.name}</span>
+        </div>
+        <span class="pf-account" title="${escapeHtml(account || '未绑定')}">${
+          account ? escapeHtml(account) : '未绑定账号'
+        }</span>
+        <div class="pf-ac"><b>${empty ? '—' : count}</b><span>道</span></div>
+        <div class="pf-bar"><i style="width:${width}%"></i></div>
+      </div>`;
+    })
+    .join('');
+
+  box.innerHTML = `<div class="band-head">
+      <span>平台战绩</span>
+      <em>已绑定 ${bound}/5 · 合计 ${total} 道</em>
+    </div>${cells}`;
+}
+
+// ---------- 总览页右栏：今日进度 / 本周 / 补题 / 赛程 ----------
+
+/** 今天这一张卡的数据，今日卡片和右栏的进度环共用一份，免得两个地方算得不一样。 */
+function todaySnapshot() {
+  if (!state.planData || !state.schedule) return null;
+  const now = new Date();
+  return todayOverview({
+    problems: state.planProblems,
+    weekly: state.weekly,
+    restDays: state.restDays,
+    dayOff: state.dayOff,
+    startDate: state.planStart ?? now,
+    today: now,
+    doneKeys: state.done,
+  });
+}
+
+function renderRailProgress() {
+  const box = $('rail-progress');
+  if (!box) return;
+  const snap = todaySnapshot();
+  if (!snap || !snap.todayProblems.length) {
+    box.innerHTML =
+      '<h4>今日进度</h4><p class="rail-empty">今天没有安排题目。先在「目标设置」里生成一份训练计划。</p>';
+    return;
+  }
+  const total = snap.todayProblems.length;
+  const done = snap.todayDone;
+  const pct = total ? done / total : 0;
+  const circumference = 2 * Math.PI * 50;
+  box.innerHTML = `<h4>今日进度 <em>${done}/${total} 题</em></h4>
+    <div class="ring">
+      <svg viewBox="0 0 116 116">
+        <circle cx="58" cy="58" r="50" fill="none" stroke="var(--bg-track)" stroke-width="9" />
+        <circle cx="58" cy="58" r="50" fill="none" stroke="var(--accent)" stroke-width="9"
+          stroke-linecap="round" stroke-dasharray="${circumference.toFixed(1)}"
+          stroke-dashoffset="${(circumference * (1 - pct)).toFixed(1)}" />
+      </svg>
+      <div class="ring-val"><b>${Math.round(pct * 100)}%</b><span>${done}/${total} 题</span></div>
+    </div>`;
+}
+
+function renderRailWeek() {
+  const box = $('rail-week');
+  if (!box) return;
+  const solved = state.activity?.solved;
+  if (!solved) {
+    box.innerHTML = '<h4>本周训练量</h4><p class="rail-empty">活动数据还没拉回来。</p>';
+    return;
+  }
+  const today = new Date();
+  const days = [];
+  for (let back = 6; back >= 0; back -= 1) {
+    const day = new Date(today.getFullYear(), today.getMonth(), today.getDate() - back);
+    const key = dateKey(day);
+    days.push({ key, label: '日一二三四五六'[day.getDay()], count: solved[key] ?? 0, today: back === 0 });
+  }
+  const max = Math.max(1, ...days.map((day) => day.count));
+  const total = days.reduce((sum, day) => sum + day.count, 0);
+  box.innerHTML = `<h4>本周训练量 <em>${total} 题</em></h4>
+    <div class="rail-week">${days
+      .map(
+        (day) => `<div class="d${day.today ? ' today' : ''}" title="${day.key} · ${day.count} 题">
+          <span class="n">${day.count || ''}</span>
+          <div class="b" style="height:${day.count ? Math.max(6, Math.round((day.count / max) * 40)) : 3}px"></div>
+          <span class="n">${day.label}</span>
+        </div>`,
+      )
+      .join('')}</div>`;
+}
+
+function renderRailReview() {
+  const box = $('rail-review');
+  if (!box) return;
+  const items = (state.review ?? []).slice(0, 4);
+  if (!items.length) {
+    box.innerHTML = '<h4>补题队列</h4><p class="rail-empty">队列是空的，没有欠着的题。</p>';
+    return;
+  }
+  box.innerHTML = `<h4>补题队列 <em>${state.review.length} 道</em></h4>
+    <div class="rail-list">${items
+      .map(
+        (item) => `<div class="rail-item">
+          <span class="code">${escapeHtml(`${item.contestId}${item.index}`)}</span>
+          <span class="nm" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
+          <span class="meta">${item.rating ?? '?'}</span>
+        </div>`,
+      )
+      .join('')}</div>`;
+}
+
+function renderRailContests() {
+  const box = $('rail-contests');
+  if (!box) return;
+  const upcoming = (state.calendarData?.upcoming ?? []).slice(0, 3);
+  if (!upcoming.length) {
+    box.innerHTML = '<h4>接下来</h4><p class="rail-empty">还没拿到赛程，去「比赛日历」看看。</p>';
+    return;
+  }
+  box.innerHTML = `<h4>接下来 <em>${SOURCE_LABELS[upcoming[0].source ?? 'cf'] ?? ''}</em></h4>
+    <div class="rail-list">${upcoming
+      .map(
+        (contest) => `<div class="rail-item">
+          <span class="code">${escapeHtml((SOURCE_LABELS[contest.source ?? 'cf'] ?? '').slice(0, 2))}</span>
+          <span class="nm" title="${escapeHtml(contest.name)}">${escapeHtml(contest.name)}</span>
+          <span class="meta">${countdownText(contest.startTime, contest.durationSeconds ?? 7200)}</span>
+        </div>`,
+      )
+      .join('')}</div>`;
+}
+
+function renderCockpitRail() {
+  renderRailProgress();
+  renderRailWeek();
+  renderRailReview();
+  renderRailContests();
 }
 
 $('side-nav').addEventListener('click', (event) => {
@@ -4381,6 +4689,7 @@ async function loadPlatforms() {
     renderLuoguInPlanHint();
     refreshLuoguKeys();
     renderPlatformCards();
+    renderPlatformBand();
   } catch {
     /* 读不到就先不显示 */
   }
@@ -4879,6 +5188,10 @@ async function restoreSession() {
   // 还没填账号就先停在「账号」页，填过的话停在地址栏指向的页面（默认当前水平）
   // 账号和当前水平合并成一页了，冷启动也停在这一页
   showView(VIEW_IDS.includes(fromHash) ? fromHash : 'panel-overview', { save: false });
+  // 顶栏轨道、平台战绩、右栏都先画一遍空态，免得等数据回来之前那一块是白板
+  renderTopbar();
+  renderPlatformBand();
+  renderCockpitRail();
   loadPlatforms();
 
   if (!settings?.handle) {
