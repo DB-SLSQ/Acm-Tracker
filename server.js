@@ -339,10 +339,12 @@ function readSettings() {
     luoguUid: raw.luogu_uid ?? null,
     // AtCoder 用户名（Kenkoooo 接口用的就是 AtCoder 上的用户名）
     atcoderUid: raw.atcoder_uid ?? null,
-    // 训练计划里要不要混 AtCoder 的题。没勾就是全 Codeforces
+    // 训练计划里要不要混 AtCoder 的题。没勾就不排
     atcoderInPlan: raw.atcoder_in_plan === '1',
     // 训练计划里要不要混洛谷的题（题库要先抓过）
     luoguInPlan: raw.luogu_in_plan === '1',
+    // Codeforces 参不参与。没存过这个键时默认参与（老库升级上来行为不变）
+    cfInPlan: raw.cf_in_plan !== '0',
       // 评估水平时忽略「比当前 rating 低多少分」以内的题（null = 用默认值）
       floorGap: raw.floor_gap === undefined ? null : Number(raw.floor_gap),
       // 单个标签在题单里的占比上限，存的是百分数（null = 用默认值 40）
@@ -371,6 +373,8 @@ function readSettings() {
 // v5：题单里可以混 AtCoder 的题（设置里勾选）。挑题多了一个平台维度，
 //     同一份设置会挑出不同结果，老快照得重挑一次。
 // v6：洛谷题也能进题单（设置里勾选），一天最多一道。挑题又变了一次，老计划重挑。
+//     CF 是否参与后来也做成了开关，但那一项只在「取消 CF」时才写进指纹（见下），
+//     默认参与时指纹和 v6 完全一样 —— 所以不用 bump 版本，升级上来的人手上的计划不会被平白重挑。
 const PLAN_VERSION = 6;
 
 /**
@@ -380,6 +384,7 @@ const PLAN_VERSION = 6;
  * 都不该把整份计划打乱重排。
  */
 function planSignature({ weekly, settings, model, bandShift = 0 }) {
+  const cfInPlan = settings.cfInPlan !== false;
   return JSON.stringify({
     v: PLAN_VERSION,
     weekly: Number.isFinite(weekly) && weekly > 0 ? Math.round(weekly) : 10,
@@ -387,6 +392,9 @@ function planSignature({ weekly, settings, model, bandShift = 0 }) {
     tagShare: settings.tagShare ?? null,
     atcoderInPlan: Boolean(settings.atcoderInPlan),
     luoguInPlan: Boolean(settings.luoguInPlan),
+    // 只在「明确取消了 CF」时写这一项：默认参与就不写，
+    // 这样老库升级上来时指纹和原来一模一样，计划不会被平白重挑一次。
+    ...(cfInPlan ? {} : { cfInPlan: false }),
     modelTrainedAt: model?.trainedAt ?? null,
     modelActive: Boolean(model && modelModule.isModelUseful(model)),
     bandShift: Math.round(bandShift) || 0,
@@ -566,10 +574,12 @@ async function handlePlan(url) {
       model,
       // 题目年份偏好要用：老题在人气分上占便宜，靠比赛开始时间把新题提上来
       contestDates: problemContestDates(),
-      // 勾了「加入 AtCoder 题」才按比例混进去，没勾就是纯 CF
+      // 勾了「加入 AtCoder 题」才按比例混进去，没勾就不排
       atcoderShare: settings.atcoderInPlan ? ATCODER_SHARE : 0,
       // 洛谷同理
       luoguShare: settings.luoguInPlan ? LUOGU_SHARE : 0,
+      // CF 默认参与；取消勾选后名额让给别的平台（三个都不勾还是纯 CF）
+      cfInPlan: settings.cfInPlan !== false,
       // 用户手动屏蔽的题，永远不再推荐
       blocked: new Set(db.blockedKeys(handleKey)),
       // 上一份计划里的题：优先保下来，做过的也留在原位
@@ -2537,10 +2547,12 @@ async function route(req, res, url) {
       if (body.nowcoderUid !== undefined) patch.nowcoder_uid = String(body.nowcoderUid).trim();
       if (body.luoguUid !== undefined) patch.luogu_uid = String(body.luoguUid).trim();
       if (body.atcoderUid !== undefined) patch.atcoder_uid = String(body.atcoderUid).trim();
-      // 训练计划里是否混入 AtCoder 题：不勾就是全 CF
+      // 训练计划里是否混入 AtCoder 题：不勾就不排
       if (body.atcoderInPlan !== undefined) patch.atcoder_in_plan = body.atcoderInPlan ? '1' : '';
       // 训练计划里是否混入洛谷题
       if (body.luoguInPlan !== undefined) patch.luogu_in_plan = body.luoguInPlan ? '1' : '';
+      // Codeforces 参不参与（默认参与，所以存 '0' 表示明确取消）
+      if (body.cfInPlan !== undefined) patch.cf_in_plan = body.cfInPlan ? '1' : '0';
       if (body.floorGap !== undefined) {
         const value = Number(body.floorGap);
         if (!Number.isFinite(value) || value < 0 || value > 2000) {

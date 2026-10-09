@@ -66,6 +66,8 @@ const state = {
   atcoderInPlan: false,
   // 洛谷题要不要进训练计划
   luoguInPlan: false,
+  // Codeforces 参不参与。默认参与，取消后名额让给别的平台
+  cfInPlan: true,
   // 打卡提醒
   remindAt: null,
   remindLast: null,
@@ -5041,27 +5043,57 @@ $('atcoder-sync').addEventListener('click', async () => {
 });
 
 /**
- * 勾选框改了要重新出计划：计划指纹里带了这一项，服务端会自动重挑一批题。
- * 没勾就是纯 Codeforces，和以前完全一样。
+ * 「题目来源」那三个勾选框：改了要重新出计划。
+ * 计划指纹里带了这三项，服务端会自动重挑一批题。
+ * 一个都不勾等于「只用 Codeforces」，和默认行为一致。
  */
-$('atcoder-in-plan').addEventListener('change', () => {
-  const on = $('atcoder-in-plan').checked;
-  state.atcoderInPlan = on;
-  saveSettings({ atcoderInPlan: on });
-  if (on && !state.atcoderUid) {
-    $('atcoder-hint').textContent = '填上 AtCoder 用户名并同步一次，题单里才会有 AtCoder 的题。';
-  }
-  if (state.handle && state.target) generatePlan(false, { scroll: false });
-});
 
-// 洛谷题进题单：题库要先抓过；没抓的话给一句提示，别让人以为勾了没反应
-$('luogu-in-plan').addEventListener('change', () => {
-  const on = $('luogu-in-plan').checked;
-  state.luoguInPlan = on;
-  saveSettings({ luoguInPlan: on });
-  renderLuoguInPlanHint();
-  if (state.handle && state.target) generatePlan(false, { scroll: false });
-});
+/** 份额常量要和 lib/plan.js 的 ATCODER_SHARE / LUOGU_SHARE 对得上。 */
+const PLAN_PLATFORM_SHARE = { atcoder: 0.25, luogu: 0.25 };
+
+/**
+ * 按勾选情况算一遍各平台份额，写进旁边那行提示。
+ * 算法必须和后端 lib/plan.js 里那段一致：CF 拿剩下的，CF 被取消时勾选的平台按比例分掉整份。
+ */
+function renderPlanPlatformHint() {
+  const hint = $('plan-platform-hint');
+  if (!hint) return;
+  let at = state.atcoderInPlan ? PLAN_PLATFORM_SHARE.atcoder : 0;
+  let lg = state.luoguInPlan ? PLAN_PLATFORM_SHARE.luogu : 0;
+  const cf = state.cfInPlan !== false || (!at && !lg);
+  const wanted = at + lg;
+  if ((!cf && wanted > 0) || (cf && wanted > 1)) {
+    at /= wanted;
+    lg /= wanted;
+  }
+  const cfShare = cf ? Math.max(0, 1 - at - lg) : 0;
+  const pct = (value) => `${Math.round(value * 100)}%`;
+  const parts = [];
+  if (cfShare > 0) parts.push(`Codeforces ${pct(cfShare)}`);
+  if (at > 0) parts.push(`AtCoder ${pct(at)}`);
+  if (lg > 0) parts.push(`洛谷 ${pct(lg)}`);
+  hint.textContent = `当前份额：${parts.join(' · ')}（按题量算；AtCoder / 洛谷的题每天最多一道）。`;
+}
+
+function bindPlanPlatformToggle(id, key) {
+  const box = $(id);
+  if (!box) return;
+  box.addEventListener('change', () => {
+    const on = box.checked;
+    state[key] = on;
+    saveSettings({ [key]: on });
+    renderPlanPlatformHint();
+    renderLuoguInPlanHint();
+    if (key === 'atcoderInPlan' && on && !state.atcoderUid) {
+      $('atcoder-hint').textContent = '填上 AtCoder 用户名并同步一次，题单里才会有 AtCoder 的题。';
+    }
+    if (state.handle && state.target) generatePlan(false, { scroll: false });
+  });
+}
+
+bindPlanPlatformToggle('cf-in-plan', 'cfInPlan');
+bindPlanPlatformToggle('atcoder-in-plan', 'atcoderInPlan');
+bindPlanPlatformToggle('luogu-in-plan', 'luoguInPlan');
 
 /** 「加入洛谷题」旁边那行小字：题库抓了没有、抓了多少。 */
 function renderLuoguInPlanHint() {
@@ -5233,10 +5265,13 @@ async function restoreSession() {
     if (settings.luoguUid) $('luogu-input').value = settings.luoguUid;
     state.atcoderUid = settings.atcoderUid ?? null;
     if (settings.atcoderUid) $('atcoder-input').value = settings.atcoderUid;
+    state.cfInPlan = settings.cfInPlan !== false;
+    $('cf-in-plan').checked = state.cfInPlan;
     state.atcoderInPlan = Boolean(settings.atcoderInPlan);
     $('atcoder-in-plan').checked = state.atcoderInPlan;
     state.luoguInPlan = Boolean(settings.luoguInPlan);
     $('luogu-in-plan').checked = state.luoguInPlan;
+    renderPlanPlatformHint();
     if (settings.floorGap !== null && settings.floorGap !== undefined) {
       $('floor-gap-input').value = settings.floorGap;
     }

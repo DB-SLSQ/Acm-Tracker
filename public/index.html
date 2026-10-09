@@ -829,18 +829,25 @@
 
         <h3 class="settings-title">题目来源</h3>
         <p class="subtle">
-          训练计划默认全用 Codeforces 的题。勾上以后按比例混进别的平台，各占四分之一、每天最多一道：
+          勾选训练计划要用哪些平台的题，默认只用 Codeforces。勾上别的平台就按份额分配、每天最多一道：
           AtCoder（ABC / ARC / AGC，来自 Kenkoooo 公开接口）和洛谷（要先在下面「洛谷」里抓一次题库）。
-          两个平台都不需要登录，也不会往对面提交任何东西；做过的题在同步过之后会自动排除、自动打勾。
+          都勾是 Codeforces 一半、AtCoder 和洛谷各四分之一；把 Codeforces 取消，它那份名额就分给勾选的平台
+          （只勾洛谷，整份计划就都是洛谷题）。三个都不勾等于「只用 Codeforces」。
+          这些平台都不需要登录，也不会往对面提交任何东西；做过的题在同步过之后会自动排除、自动打勾。
         </p>
-        <label class="tag-hide-toggle" title="勾上以后题单里会按比例混入 AtCoder 的题">
+        <label class="tag-hide-toggle" title="默认参与。取消后题量让给勾选的其它平台；三个都不勾仍是纯 Codeforces">
+          <input type="checkbox" id="cf-in-plan" />
+          <span>Codeforces</span>
+        </label>
+        <label class="tag-hide-toggle" title="勾上以后题单里会按份额混入 AtCoder 的题">
           <input type="checkbox" id="atcoder-in-plan" />
-          <span>训练计划里加入 AtCoder 题</span>
+          <span>AtCoder</span>
         </label>
-        <label class="tag-hide-toggle" title="勾上以后题单里会按比例混入洛谷的题（要先把洛谷题库抓好）">
+        <label class="tag-hide-toggle" title="勾上以后题单里会按份额混入洛谷的题（要先把洛谷题库抓好）">
           <input type="checkbox" id="luogu-in-plan" />
-          <span>训练计划里加入洛谷题</span>
+          <span>洛谷</span>
         </label>
+        <p class="hint" id="plan-platform-hint"></p>
         <p class="hint" id="luogu-in-plan-hint">
           洛谷题进题单之前，先到下面「洛谷」那里抓一次题库（约 1 分钟）。
         </p>
