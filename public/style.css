@@ -224,9 +224,10 @@ body {
   white-space: nowrap;
 }
 
+/* 主区：宽度交给 .main（flex:1 撑满侧栏以外的所有地方）。
+   这里以前是老版布局的「居中 1080 窄栏」，现在已经在侧栏右边了，
+   再留着 max-width + margin:auto 就会在左右各空出一大条。 */
 main {
-  max-width: 1080px;
-  margin: 0 auto;
   padding: 28px 24px 80px;
   display: flex;
   flex-direction: column;
@@ -616,8 +617,6 @@ input[type="number"]:focus {
 }
 
 .footer {
-  max-width: 1080px;
-  margin: 0 auto;
   padding: 0 24px 40px;
   display: flex;
   justify-content: space-between;
@@ -2576,12 +2575,7 @@ input[type="number"]:focus {
   padding: 26px 32px 30px;
 }
 
-.main > .panel {
-  max-width: 1120px;
-}
-
 .footer {
-  max-width: 1120px;
   margin: 34px 0 0;
 }
 
