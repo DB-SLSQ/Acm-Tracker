@@ -539,6 +539,7 @@ async function loadUser(force = false) {
     renderRatingChart(user.ratingHistory);
     renderTopbar();
     renderPlatformBand();
+    renderOjPie();
     $('overview-handle').textContent = `${user.displayHandle} · 数据更新于 ${new Date(user.updatedAt).toLocaleString('zh-CN')}`;
 
     // 目标分数只在用户从没设过的时候才给建议值，
@@ -4550,6 +4551,80 @@ function renderPlatformBand() {
     </div>${cells}`;
 }
 
+// ---------- 过题分布饼图 ----------
+// 和上面那条横带吃同一份数据，只是换个看法：谁是大头、谁还没接进来，一眼看出来。
+
+function renderOjPie() {
+  const box = $('oj-pie');
+  if (!box) return;
+
+  const rows = BAND_PLATFORMS.map((meta) => ({ meta, ...platformBandEntry(meta.key) }));
+  const bound = rows.filter((row) => row.count != null);
+  const total = bound.reduce((sum, row) => sum + row.count, 0);
+
+  if (!bound.length || total <= 0) {
+    box.innerHTML = `<div class="band-head"><span>过题分布</span><em>暂无数据</em></div>
+      <div class="oj-empty">在「设置」里填上各个平台的 ID，这里就会画出过题分布。</div>`;
+    return;
+  }
+
+  // 圆环用 stroke-dasharray 画：周长按 2πr 算，每段给「弧长 + 剩下的空白」，
+  // 再用 dashoffset 把它推到该在的位置。比手写弧线 path 省事，也不用管大弧标志位。
+  const R = 60;
+  const SW = 26;
+  const CX = 80;
+  const CY = 80;
+  const CIRC = 2 * Math.PI * R;
+
+  // 从大头开始排：弧和右边的图例顺序一致，读起来才不用来回找
+  const sorted = [...bound].sort((a, b) => b.count - a.count);
+  let acc = 0;
+  const arcs = sorted
+    .map(({ meta, count }) => {
+      const len = (count / total) * CIRC;
+      const arc = `<circle cx="${CX}" cy="${CY}" r="${R}" fill="none" stroke="${meta.color}"
+        stroke-width="${SW}" stroke-dasharray="${len} ${CIRC - len}" stroke-dashoffset="${-acc}"
+        transform="rotate(-90 ${CX} ${CY})"><title>${meta.name} ${count} 道 · ${pctText(
+        count,
+        total,
+      )}</title></circle>`;
+      acc += len;
+      return arc;
+    })
+    .join('');
+
+  const legend = [...sorted, ...rows.filter((row) => row.count == null)]
+    .map(({ meta, count }) => {
+      const off = count == null;
+      return `<li class="oj-leg${off ? ' off' : ''}" style="--pf:${meta.color}">
+          <span class="oj-dot"></span>
+          <span class="oj-name">${meta.name}</span>
+          <b class="oj-num">${off ? '—' : count}</b>
+          <span class="oj-pct">${off ? '未绑定' : pctText(count, total)}</span>
+        </li>`;
+    })
+    .join('');
+
+  box.innerHTML = `
+    <div class="band-head">
+      <span>过题分布</span>
+      <em>已绑定 ${bound.length}/5 · 合计 ${total} 道</em>
+    </div>
+    <div class="oj-body">
+      <div class="oj-chart">
+        <svg viewBox="0 0 160 160" role="img" aria-label="各平台过题数占比">${arcs}</svg>
+        <div class="oj-center"><b>${total}</b><span>道</span></div>
+      </div>
+      <ul class="oj-legend">${legend}</ul>
+    </div>`;
+}
+
+/** 占比：小道数也要看得出差别，统一保留一位小数。 */
+function pctText(count, total) {
+  if (!total) return '0%';
+  return `${((count / total) * 100).toFixed(1)}%`;
+}
+
 // ---------- 总览页右栏：今日进度 / 本周 / 补题 / 赛程 ----------
 
 /** 今天这一张卡的数据，今日卡片和右栏的进度环共用一份，免得两个地方算得不一样。 */
@@ -4762,6 +4837,7 @@ async function loadPlatforms() {
     refreshLuoguKeys();
     renderPlatformCards();
     renderPlatformBand();
+    renderOjPie();
   } catch {
     /* 读不到就先不显示 */
   }
@@ -5304,6 +5380,7 @@ async function restoreSession() {
   // 顶栏轨道、平台战绩、右栏都先画一遍空态，免得等数据回来之前那一块是白板
   renderTopbar();
   renderPlatformBand();
+  renderOjPie();
   renderCockpitRail();
   loadPlatforms();
 
