@@ -176,6 +176,11 @@ npm.cmd run sync       # 手动刷新题库
   题号集合没变、每日题单却整体挪位（HANDOFF 坑 33）。统一用 `lib/plan.js` 的
   `byDifficultyThenKey`（rating → contestId → index）。写这类「顺序会影响结果」的断言时，
   **要比「题号 + 顺序」，只比集合抓不到这个 bug**。
+- **「沿用旧计划」时题号必须从快照还原，别信重算结果**：`planSignature` 只挡得住设置变化，
+  而 `buildPlan` 另有两个输入不在指纹里——做题手感 `feedbackShift`（让练习区间整体挪 ±25/±50）、
+  新做过的题带来的能力画像变化（影响各方向名额）。它们一变，重算就换题换顺序，接口却照样报
+  `reused=true`，用户看到的是「昨天的题第二天变了样」（HANDOFF 坑 34）。
+  `/api/plan` 的 `reusable` 分支现在按快照顺序把题目取回来；改这块前先跑 `.dev/verify-plan-pin2.mjs`。
 
 ## 宣传素材
 

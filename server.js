@@ -608,6 +608,62 @@ async function handlePlan(url) {
   }
   plan.reused = Boolean(reusable);
 
+  // ---- 沿用旧计划时，题单必须按快照还原 ----
+  // planSignature 只挡得住「设置变了」，挡不住漂移：buildPlan 每次请求都会重算，
+  // 而它有几个输入不在指纹里——做题手感反馈（feedbackShift 会让练习区间整体上/下挪
+  // 最多 50 分）、以及新做过的题带来的能力画像变化（它会改变各方向的名额分配）。
+  // 这两个一变，重算结果就换题、换顺序，接口却照样报 reused=true。
+  // 用户看到的是「昨天排的那几道题，第二天换了样」；换进来的题没做过，
+  // 又会被日程当成「过期没做完」自动收进待补题。
+  // 所以这里按快照顺序把题目取回来：题号、顺序都以快照为准，只有题库里已经
+  // 找不到的、或用户亲手屏蔽掉的，才从这份计划里拿掉。
+  if (reusable) {
+    const problemIndex = new Map(
+      allProblems().map((problem) => [`${problem.contestId}-${problem.index}`, problem]),
+    );
+    const blockedSet = new Set(db.blockedKeys(handleKey));
+    const computedStages = new Map((plan.stageList ?? []).map((stage) => [stage.index, stage]));
+    const dropped = [];
+    const pinnedStages = [];
+    for (const stage of reusable.stages ?? []) {
+      const problems = [];
+      for (const key of stage.keys ?? []) {
+        const problem = problemIndex.get(key);
+        if (!problem || blockedSet.has(key)) {
+          dropped.push(key);
+          continue;
+        }
+        problems.push(toClientProblem(problem));
+      }
+      const base = computedStages.get(stage.index);
+      pinnedStages.push({
+        // 阶段的展示信息（区间、四档、方向名额）沿用这次算出来的，只有题单换成快照那份
+        ...(base ?? {
+          index: stage.index,
+          label: `第 ${stage.index} 阶段`,
+          targetRating: null,
+          band: [0, 0],
+          weeks: 1,
+          focusTags: [],
+          axisPlan: [],
+          atcoderCount: 0,
+          luoguCount: 0,
+          supply: 0,
+          unsolvedSupply: 0,
+          review: [],
+        }),
+        count: problems.length,
+        problems,
+      });
+    }
+    if (pinnedStages.length) plan.stageList = pinnedStages;
+    if (dropped.length) {
+      plan.notes.unshift(
+        `有 ${dropped.length} 道题在题库里已经找不到了（或已被你屏蔽），已从这份计划里移出；其余题一道没动。`,
+      );
+    }
+  }
+
   // 每周记一次各方向水平，用来画成长曲线。这东西只能往后攒，早几周的数据补不回来。
   try {
     db.saveGrowthSnapshot(
