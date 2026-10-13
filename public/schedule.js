@@ -204,6 +204,129 @@ export function buildSchedule({
   };
 }
 
+/** 题目在日程里的标识。 */
+export const problemKey = (problem) => `${problem.contestId}-${problem.index}`;
+
+/**
+ * 带「钉住的日子」的排期。
+ *
+ * 为什么需要它：日程原本是每次打开时从计划顺序现算的，于是只要计划顺序、每周题量、
+ * 休息日任何一项变了，过去那些天也会跟着重排——昨天做完的题第二天换了另一道，
+ * 换进来的题没做过，又会被日程当成「过期没做完」收进待补题。
+ *
+ * 现在把过去的日子（以及今天已经开始做的）钉在库里：它们原样搬进结果，
+ * 剩下的题从最后一个钉住的日子之后接着按老规矩铺。钉住那天要显示的信息
+ * （阶段、方向）优先用计划里那份，计划里已经翻不到了就用服务端从题库补齐的那份，
+ * 这样历史永远看得见。
+ *
+ * pinnedDays 是「日期 → 题目数组」。没有它时结果与 buildSchedule 完全一致。
+ */
+export function layoutWithPins({
+  problems = [],
+  pinnedDays = {},
+  weekly = 10,
+  restDays = [],
+  dayOff = {},
+  startDate = new Date(),
+  maxWeeks = 60,
+  platformCaps = { atcoder: 1, luogu: 1 },
+  todayKey = dateKey(new Date()),
+} = {}) {
+  const rest = new Set(restDays.map(Number));
+  const off = dayOff ?? {};
+  const isOff = (key) => {
+    const date = parseDateKey(key);
+    return rest.has(date.getDay()) || Object.hasOwn(off, key);
+  };
+
+  const inPlan = new Map(problems.map((problem) => [problemKey(problem), problem]));
+  const frozenDates = [];
+  const frozenProblems = new Map();
+  const frozenKeys = new Set();
+
+  for (const [date, list] of Object.entries(pinnedDays ?? {})) {
+    if (!Array.isArray(list) || !list.length) continue;
+    // 事后把某天设成休息，那天的钉子就摘掉、题退回池子往后顺延——和「这天没空」
+    // 原本的语义（题目自动顺延、总量不变）一致。但只对今天及以后生效：
+    // 过去的日子已经发生了，不能因为现在多勾一个休息日就把历史掏空。
+    if (date >= todayKey && isOff(date)) continue;
+    const resolved = [];
+    for (const problem of list) {
+      if (!problem || problem.contestId == null || problem.index == null) continue;
+      const key = problemKey(problem);
+      if (frozenKeys.has(key)) continue;
+      frozenKeys.add(key);
+      resolved.push(inPlan.get(key) ?? problem);
+    }
+    if (!resolved.length) continue;
+    frozenDates.push(date);
+    frozenProblems.set(date, resolved);
+  }
+  frozenDates.sort();
+
+  const remaining = problems.filter((problem) => !frozenKeys.has(problemKey(problem)));
+  const lastFrozen = frozenDates.length ? frozenDates[frozenDates.length - 1] : null;
+  const tail = buildSchedule({
+    problems: remaining,
+    weekly,
+    restDays,
+    dayOff,
+    startDate: lastFrozen ? addDays(parseDateKey(lastFrozen), 1) : startOfDay(startDate),
+    maxWeeks,
+    platformCaps,
+  });
+
+  const days = [
+    ...frozenDates.map((date) => {
+      const list = frozenProblems.get(date);
+      const parsed = parseDateKey(date);
+      return {
+        date,
+        weekday: parsed.getDay(),
+        label: WEEKDAY_LABELS[parsed.getDay()],
+        quota: list.length,
+        problems: list,
+        pinned: true,
+        stages: [...new Set(list.map((problem) => problem.stage).filter((s) => s != null))],
+      };
+    }),
+    ...tail.days.map((day) => ({ ...day, pinned: false })),
+  ].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+  const byDate = new Map(days.map((day) => [day.date, day]));
+  const firstDate = frozenDates.length ? frozenDates[0] : tail.startDate;
+  const endDate = days.length ? days[days.length - 1].date : dateKey(startOfDay(startDate));
+  const totalProblems = days.reduce((sum, day) => sum + day.problems.length, 0);
+
+  // 休息日整段重算：钉住的日子和后面铺的日子可能不连续，得按合并后的范围来。
+  // 已经有题的日子不算休息——否则「事后把某个过去的周日勾成休息」会把那天
+  // 已经发生的事盖掉，日历上写着休息、点开却是四道题。
+  const restDates = [];
+  for (let date = parseDateKey(firstDate); dateKey(date) <= endDate; date = addDays(date, 1)) {
+    const key = dateKey(date);
+    if (isOff(key) && !byDate.has(key)) {
+      restDates.push({
+        date: key,
+        weekday: date.getDay(),
+        label: WEEKDAY_LABELS[date.getDay()],
+        reason: off[key] ?? null,
+      });
+    }
+  }
+
+  return {
+    days,
+    byDate,
+    restDates,
+    totalProblems,
+    startDate: firstDate,
+    endDate,
+    weeks: days.length ? Math.ceil(days.length / Math.max(1, 7 - rest.size)) : 0,
+    perActiveDay: days.length ? Math.round((totalProblems / days.length) * 10) / 10 : 0,
+    pinnedDates: frozenDates,
+  };
+}
+
 /**
  * 「今天」这张卡片要用的数据。
  *

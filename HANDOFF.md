@@ -132,19 +132,20 @@ node_modules\electron\dist\electron.exe .dev\verify-makeup-ui.mjs
 ## 代码地图
 
 ```
-server.js              本地服务 + 全部接口（约 3600 行，路由都写在 route() 里；团队接口见下方）
+server.js              本地服务 + 全部接口（约 3980 行，路由都写在 route() 里；团队接口见下方）
 lib/cf.js              Codeforces 官方 API（题目、提交、比赛、rating）
 lib/atcoder.js         AtCoder：Kenkoooo 的题目表 / 难度 / 提交记录 / 用户统计
 lib/luogu.js           洛谷题库：按难度档等距抽页抓取
 lib/platforms.js       洛谷练习页、牛客；fetchLuoguText() 处理洛谷的 cookie 挑战
 lib/plan.js            挑题算法（方向配额、四档均分、难度自适应、deriveProgress；**团队分工与排题也在这**，约 1325 行）
-lib/db.js              node:sqlite 封装：建表、迁移、所有 SQL（约 1990 行）
+lib/db.js              node:sqlite 封装：建表、迁移、所有 SQL（约 2290 行）
 lib/contests.js        比赛分档解析（Div. 1/2/3、Educational…）与适合度判断
 lib/model.js           推题模型（逻辑回归，训练好才启用）
 public/index.html      所有页面（<section class="panel" id="panel-xxx">）
-public/app.js          全部前端逻辑（约 4900 行；导航项是 NAV_ITEMS，页面切换用 showView）
-public/style.css       全部样式（约 3730 行，CSS 变量控制五套主题）
-public/schedule.js     日程排布（按天把题排开，考虑休息日/没空的天）
+public/app.js          全部前端逻辑（约 6060 行；导航项是 NAV_ITEMS，页面切换用 showView）
+public/style.css       全部样式（约 4640 行，CSS 变量控制五套主题）
+public/schedule.js     日程排布（buildSchedule 按天把题排开，考虑休息日/没空的天；
+                       layoutWithPins 在此基础上把「已经过去的日子」按库里钉住的安排原样摆回去）
 public/selftest.html   计划自检页
 electron/main.js       桌面入口：起服务 + 开窗口，打包后数据目录 = %APPDATA%\acm-trainer\data
 ```
@@ -160,12 +161,13 @@ electron/main.js       桌面入口：起服务 + 开窗口，打包后数据目
 现在的导航（20 页，比 1.0.7 多了「待补题」）：当前水平 / 目标设置 / 训练计划 / **团队训练** / 训练日程 / 补题队列 / **待补题** / 题库 / 历年比赛 / 拼好题 / 我的题单 /
 能力画像 / 成长 / 做题记录 / 活动记录 / 比赛日历 / 虚拟参赛 / 平台数据 / 帮助 / 设置。
 
-数据表（33 张，其中 `sqlite_sequence` 是 SQLite 自带的）：`problems`（题库缓存，含
+数据表（34 张，其中 `sqlite_sequence` 是 SQLite 自带的）：`problems`（题库缓存，含
 platform/native_id/native_contest/native_rating）、
 `submissions`、`rating_history`、`users`、`contests`、`atcoder_contests`（比赛 id 映射）、
 `luogu_ids`、`settings`、`meta`（各种缓存 JSON）、`model_samples`、`blocked_problems`、
 `progress`（打勾）、`platform_stats`、`virtual_sessions`、`plan_snapshots`（钉住的计划）、
 `plan_swaps`、`plan_defer`、`plan_adjust`、`extra_tasks`（补一个方向）、`schedule_extras`、
+`schedule_days`（过去的日子做的是哪几题，见坑 35）、
 `problem_feedback`（做题手感）、`review_done`、`growth_snapshots`、`known_handles`、
 `problem_lists` + `problem_list_items`（我的题单）、
 `teams` + `team_members` + `team_assignments`（团队训练，见下节）、
@@ -491,7 +493,7 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
     免得「取到哪儿截断」取决于候选集的输入顺序。
     `.dev/verify-plan-pin.mjs` 里凡是比题单的地方都比「题号 + 顺序」，光比集合抓不到这个。
 
-34. **「沿用旧计划」不能只靠 `planSignature` 兜底：题号必须从快照还原。**
+34. **「沿用旧计划」不能只靠 `planSignature` 兜底：题号必须从快照还原。**（使用者 Mr.dongly 反馈）
     32 和 33 修的都是「重挑时」的漂移，但 `reused=true` 时 `buildPlan` 照样每次重算，
     只是把旧题号当 `preferred` 优先保留。问题是它有几个输入**不在指纹里**：
     做题手感反馈（`db.feedbackShift` 让练习区间整体上/下挪 ±25/±50）、以及新做过的题
@@ -509,6 +511,25 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
     refresh）全过；老的 `.dev/probe-plan-reuse.mjs` 确认「快照内容 == 接口返回」。
     **别把 `feedbackShift` 塞进 `planSignature`**——那会让它一变就整份重挑、更糟；
     正确语义是「它只影响新挑题时的区间，不影响已经钉住的计划」。
+
+35. **日程光钉住「计划题目顺序」不够，日期也得钉**（同一条反馈的另一层）。33/34 修的是「计划漂」，但那是
+    另一层：日程（哪天做哪几题）一直是**每次打开时在浏览器里现算的**
+    （`buildSchedule` 纯粹按「计划顺序 + 每周题量 + 休息日 + 计划起始日」推），
+    日期和题目之间没有任何绑定关系。于是任何一个输入变了——题量从 50 改 20、
+    多勾一天休息、计划重新生成后 `generatedAt` 变成今天——**过去那几天都会被重排**：
+    昨天做完的 4 道题第二天换了别的题，换进来的没做过，又被
+    `collectMakeupFromSchedule()` 当成「过期没做完」收进待补题。
+    实测（真实库副本，计划 10-10 起、60 题）：把每周题量 50 改成 20，过去三天
+    22 道题全部移位（新计划锚点挪到今天时则整段清空）。
+    修法：加 `schedule_days` 表存「日期 → 题号 + 顺序」，前端每次排完日程把
+    **今天以前**的日子报给 `POST /api/schedule/pin`（服务端只收 `date <= 今天`，
+    往后的安排得跟着设置走），排期改用 `schedule.js` 的 `layoutWithPins()`：
+    钉子原样摆回去，剩下的题从最后一个钉住的日子之后接着铺。
+    附带两个决定：① 过去的日子就算现在被勾成休息日也不摘钉子（历史不能被掏空）；
+    ② 点「重新生成计划」（`refresh=1`）时只清今天及以后的钉子。
+    验证：`.dev/verify-schedule-pin.mjs`（22 项：历史稳定 / 改题量 / 加休息日 /
+    待补题集合不变 / 存取与边界）、`.dev/quantify-pin-fix.mjs`（量化修复前的损失）。
+    **别把未来的日子也钉住**——那样改题量、点「这天没空」就不再顺延了。
 
 ## 已经做过的事（按版本）
 

@@ -485,6 +485,20 @@ function blockedPayload(handleKey) {
   }));
 }
 
+/** 库里钉住的日程（日期 → 那天的题）。题面信息从题库补齐，不依赖当前计划。 */
+function pinnedDaysPayload(handleKey) {
+  const rows = db.listScheduleDays(handleKey);
+  const out = {};
+  if (!rows.length) return out;
+  const known = db.getProblemsByKeys(rows.map((row) => `${row.contestId}-${row.index}`));
+  for (const row of rows) {
+    const problem = known.get(`${row.contestId}-${row.index}`);
+    if (!problem) continue;
+    (out[row.date] ??= []).push(toClientProblem(problem));
+  }
+  return out;
+}
+
 async function handlePlan(url) {
   const rawHandle = url.searchParams.get('handle');
   const target = Number(url.searchParams.get('target'));
@@ -494,6 +508,13 @@ async function handlePlan(url) {
   if (!rawHandle) return { status: 400, body: { error: '请先填写 Codeforces 用户名' } };
   if (!Number.isFinite(target) || target < 800 || target > 4000) {
     return { status: 400, body: { error: '目标 rating 需要在 800 到 4000 之间' } };
+  }
+
+  // 明确点了「重新生成计划」（refresh=1）：允许重排今天以后的安排。
+  // 已经过去的日子照旧钉着——那是历史，重排等于把昨天做过的题换掉。
+  if (force) {
+    const todayKey = new Date().toLocaleDateString('sv-SE');
+    db.clearScheduleDays(db.normalizeHandle(rawHandle), todayKey);
   }
 
   const problemsState = await ensureProblems();
@@ -738,6 +759,10 @@ async function handlePlan(url) {
   }
   const doneList = [...new Set([...done, ...autoDone])];
 
+  // ---- 已经钉住的日程（过去的日子做的是哪几题）----
+  // 这些日子不参与重排，界面照库里存的呈现。
+  const pinnedDays = pinnedDaysPayload(handleKey);
+
   // ---- 手动塞进某天的补题 ----
   // 这些不参与配额，只挂在某一天上；日程当天和「今天」卡片会一起列出来。
   const extraRows = db.listScheduleExtras(handleKey);
@@ -791,6 +816,9 @@ async function handlePlan(url) {
       doneManual: done,
       swapCount: db.listPlanSwaps(handleKey, targetRounded).size,
       extras: extrasByDate,
+      // 已经钉死的日子（日期 → 那天的题）。前端排期时把它们当成不可改的前缀，
+      // 剩下的题从「最后一个钉住的日子」之后接着铺。
+      schedule: pinnedDays,
       // 今天补一个方向临时加的题（按天分组）
       extraTasks: extraTasksByDate,
       // 做题手感反馈：界面上给每道题标「秒了/刚好/卡住/看题解」，并显示它把区间挪了多少
@@ -3817,6 +3845,35 @@ async function route(req, res, url) {
         problems: picked.map(toClientProblem),
         keys: db.listExtraTasks(handleKey, date),
       });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 把「已经过去的日子」钉进库：哪天做的哪几题。
+  //
+  // 前端算完日程后把这类日子报上来。之所以由后端把关截止到「今天」：
+  // 今天以后的安排得跟着每周题量、休息日走，钉住就改不动了；
+  // 而过去的日子一旦钉住就是历史，之后任何重排都不会再碰它。
+  if (pathname === '/api/schedule/pin' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
+      const todayKey = new Date().toLocaleDateString('sv-SE');
+      const days = [];
+      for (const day of Array.isArray(body.days) ? body.days : []) {
+        const date = String(day?.date ?? '');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+        if (date > todayKey) continue;
+        const keys = (Array.isArray(day?.problems) ? day.problems : [])
+          .map((key) => String(key ?? ''))
+          .filter((key) => /^\d+-[A-Za-z0-9_]+$/.test(key))
+          .slice(0, 40);
+        days.push({ date, problems: keys });
+      }
+      db.pinScheduleDays(handleKey, days);
+      return sendJson(res, 200, { ok: true, schedule: pinnedDaysPayload(handleKey) });
     } catch (error) {
       return sendError(res, 400, error.message);
     }

@@ -2,6 +2,7 @@ import {
   buildSchedule,
   dateKey,
   heatmapWeeks,
+  layoutWithPins,
   monthMatrix,
   parseDateKey,
   todayOverview,
@@ -29,6 +30,11 @@ const state = {
   dayOff: {},
   planProblems: [],
   schedule: null,
+  // 已经钉死的日子（日期 → 那天的题）。存库里，重排时原样搬过来，
+  // 只有「重新生成计划」才会把今天以后的钉子拔掉。
+  pinnedDays: {},
+  // 上一次同步给服务端的钉子签名，没变就不重复写库
+  pinSignature: '',
   // 计划定下来的那天。日程和「今天」卡片都以它为锚点，
   // 这样每天的题是固定的，勾掉一题不会让后面的题往前顶。
   planStart: null,
@@ -618,6 +624,11 @@ async function generatePlan(force = false, { scroll = true } = {}) {
     state.planProblems = data.plan.stageList.flatMap((stage) =>
       stage.problems.map((problem) => ({ ...problem, stage: stage.index })),
     );
+    // 已经钉死的日子（过去那几天做的是哪几题）。要在 planProblems 之后解析：
+    // 计划里还翻得到的题用计划那份，翻不到的用服务端从题库补的题面。
+    // 「重新生成计划」时服务端会把今天以后的钉子拔掉，所以这里拿到的就是最新一份。
+    state.pinnedDays = resolvePinnedDays(data.schedule);
+    state.pinSignature = '';
     renderPlan(data.plan);
     renderAxes(data.plan.axes ?? []);
     renderTags(data.plan.weakTags);
@@ -3995,12 +4006,15 @@ function segmentTodayRows(problems) {
   return html || sorted.map((problem) => todayRow(problem)).join('');
 }
 
-function rebuildSchedule() {
+function rebuildSchedule({ skipPin = false } = {}) {
   if (!state.planProblems.length) return;
   // 从「计划定下来的那天」开始排，而不是从今天开始：
   // 每天的题固定下来，日历不会因为今天勾了一道题就整条往前挪。
-  state.schedule = buildSchedule({
+  // 已经过去的日子上面有钉子（见 layoutWithPins），它们原样摆回去，
+  // 剩下的题从最后一个钉住的日子之后接着铺。
+  state.schedule = layoutWithPins({
     problems: state.planProblems,
+    pinnedDays: state.pinnedDays,
     weekly: state.weekly,
     restDays: state.restDays,
     dayOff: state.dayOff,
@@ -4013,12 +4027,81 @@ function rebuildSchedule() {
   if (!state.selectedDate) state.selectedDate = dateKey(new Date());
   renderSchedule();
   renderTodayCard();
+  // 把过去的日子钉进库：不钉的话，下次计划顺序或设置一变，昨天做过的题就换人了。
+  if (!skipPin) syncSchedulePins();
   // 日程一变就可能多出「过期没打勾」的题，顺手收进待补题。
   // loadMakeup 里也调了一次（那是给「刚打开这一页」用的），签名挡着不会重复请求。
   if (state.makeup.loaded) {
     collectMakeupFromSchedule().then((added) => {
       if (added) loadMakeup();
     });
+  }
+}
+
+/** 服务端回来的钉子：计划里还翻得到的优先用计划那份（带阶段、方向）。 */
+function resolvePinnedDays(raw) {
+  const byKey = new Map(
+    state.planProblems.map((problem) => [`${problem.contestId}-${problem.index}`, problem]),
+  );
+  const out = {};
+  for (const [date, list] of Object.entries(raw ?? {})) {
+    if (!Array.isArray(list) || !list.length) continue;
+    out[date] = list.map((problem) => byKey.get(`${problem.contestId}-${problem.index}`) ?? problem);
+  }
+  return out;
+}
+
+/** 钉子签名：日期 + 那天的题号顺序。没变就不重复写库。 */
+function pinSignatureOf(days) {
+  return Object.keys(days ?? {})
+    .sort()
+    .map((date) => `${date}:${(days[date] ?? []).map((p) => `${p.contestId}-${p.index}`).join(',')}`)
+    .join('|');
+}
+
+let pinSyncing = false;
+
+/**
+ * 把「已经过去的日子」钉进库。
+ *
+ * 为什么非钉不可：日程是每次打开时现算的，只要计划顺序、每周题量、休息日任何一项变了，
+ * 过去那些天就会跟着重排——昨天做完的题第二天换了另一道，换进来的题没做过，
+ * 又会被当成「过期没做完」收进待补题。
+ *
+ * 只报今天以前的：今天以后的安排要跟着设置走，钉住就改不动了；
+ * 想重排今天以后，点右上角「重新生成计划」。
+ */
+async function syncSchedulePins() {
+  if (pinSyncing || !state.handle || !state.schedule?.days?.length) return;
+  const todayKey = dateKey(new Date());
+  const frozen = {};
+  for (const day of state.schedule.days) {
+    if (!day.problems.length || day.date >= todayKey) continue;
+    frozen[day.date] = day.problems;
+  }
+  const signature = pinSignatureOf(frozen);
+  if (signature === state.pinSignature) return;
+  state.pinSignature = signature;
+  pinSyncing = true;
+  try {
+    const res = await postJson('/api/schedule/pin', {
+      handle: state.handle,
+      days: Object.entries(frozen).map(([date, list]) => ({
+        date,
+        problems: list.map((problem) => `${problem.contestId}-${problem.index}`),
+      })),
+    });
+    const next = resolvePinnedDays(res?.schedule);
+    if (pinSignatureOf(next) === signature) return;
+    // 服务端存下的和我们算出的是两回事（比如某天它认定已经是历史、不接受改动）。
+    // 以库里的为准重排一次，别让界面和库里各说各话。
+    state.pinnedDays = next;
+    state.pinSignature = pinSignatureOf(next);
+    rebuildSchedule({ skipPin: true });
+  } catch {
+    /* 写库失败就当这次没钉上，下次重排再试 */
+  } finally {
+    pinSyncing = false;
   }
 }
 
@@ -4030,10 +4113,16 @@ function renderSchedule() {
     return;
   }
 
+  // 过去的日子已经钉死，说明一下——不然改了题量发现前几天没动会以为是 bug
+  const lockedDays = state.schedule.pinnedDates?.length ?? 0;
+  const lockedNote = lockedDays
+    ? `已经过去的那 ${lockedDays} 天锁定了（哪天做哪几题不再变，重排只动今天以后）。`
+    : '';
   $('schedule-summary').textContent =
     `从 ${formatMonthDay(schedule.startDate)} 开始，到 ${formatMonthDay(schedule.endDate)} 做完 ${schedule.totalProblems} 题；` +
     `今天安排 ${schedule.byDate.get(dateKey(new Date()))?.problems.length ?? 0} 题。` +
-    `平均每个做题日 ${schedule.perActiveDay} 题，中间有 ${schedule.restDates.length} 天不安排任务。`;
+    `平均每个做题日 ${schedule.perActiveDay} 题，中间有 ${schedule.restDates.length} 天不安排任务。` +
+    lockedNote;
 
   $('rest-picker').innerHTML = WEEKDAY_LABELS.map((label, index) => {
     const active = state.restDays.includes(index) ? 'active' : '';
@@ -4160,7 +4249,7 @@ function renderDayDetail() {
   const status = isOff
     ? '这天不安排任务'
     : day
-      ? `安排 ${day.problems.length} 题`
+      ? `安排 ${day.problems.length} 题${day.pinned ? ' · 已锁定' : ''}`
       : '不在计划时间范围内';
 
   let actions;
@@ -4206,7 +4295,12 @@ function renderDayDetail() {
       )
       .join('');
     $('day-detail').innerHTML =
-      header + `<table class="problem-table">${rows}</table>` + extrasBlock(key);
+      header +
+      (day.pinned
+        ? '<p class="subtle">这天已经过去，题目锁定了——改题量、休息日、换一道都不会再动它，待补题也只按这里的记录算。</p>'
+        : '') +
+      `<table class="problem-table">${rows}</table>` +
+      extrasBlock(key);
   }
 
   const toggle = $('day-toggle');
