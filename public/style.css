@@ -4634,3 +4634,165 @@ html[data-side-wide='1'] .side-item {
 html[data-side-wide='1'] .side-item .lbl {
   font-size: 11.5px;
 }
+
+/* ---------- AI 题解 ---------- */
+
+/* 题单里那一小颗按钮：没生成过是描边，生成过是实底 */
+.sol-btn {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.75;
+  color: var(--accent);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.sol-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.sol-btn.has {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-text, var(--accent));
+}
+
+.sol-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 弹窗比 team-dialog 宽得多：题解是长文本，窄了没法看 */
+.solution-dialog {
+  display: flex;
+  flex-direction: column;
+  max-width: 780px;
+  max-height: min(86vh, 920px);
+  padding: 0;
+}
+
+.solution-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 22px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.solution-title h3 {
+  margin: 0 0 4px;
+}
+
+.solution-meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.solution-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  cursor: pointer;
+}
+
+.solution-close:hover {
+  color: var(--text);
+  background: var(--bg-soft);
+}
+
+.solution-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 22px;
+}
+
+.solution-loading {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.solution-idea {
+  font-size: 13px;
+  line-height: 1.85;
+  color: var(--text);
+}
+
+.solution-idea h4 {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.solution-idea p {
+  margin: 0 0 8px;
+}
+
+.solution-idea ul {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.solution-idea li {
+  margin-bottom: 4px;
+}
+
+.solution-idea code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-soft);
+}
+
+.solution-code {
+  margin-top: 16px;
+}
+
+.solution-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.solution-code pre {
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow-x: auto;
+  background: var(--bg-track);
+}
+
+.solution-code code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text);
+  white-space: pre;
+}
+
+.solution-dialog .team-dialog-actions {
+  margin: 0;
+  padding: 12px 22px 18px;
+  border-top: 1px solid var(--border);
+}

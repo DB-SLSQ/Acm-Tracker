@@ -29,6 +29,8 @@ import {
   recommendVirtualContests,
 } from './lib/contests.js';
 import { fetchLuogu, fetchLuoguText, fetchNowcoder, PlatformError } from './lib/platforms.js';
+import { fetchStatement } from './lib/statement.js';
+import { AiError, DEFAULT_AI_BASE_URL, DEFAULT_AI_MODEL, generateSolution } from './lib/ai.js';
 import {
   AtcoderError,
   fetchCatalog as fetchAtcoderCatalog,
@@ -359,7 +361,25 @@ function readSettings() {
       sidebarWidth: raw.sidebar_width === undefined ? null : Number(raw.sidebar_width),
       // 上一次提醒是哪天（'YYYY-MM-DD'），避免同一天反复弹
       remindLast: raw.remind_last ?? null,
+      // AI 题解：Base URL / 模型 / 语言正常回传；Key 只回「有没有配」和末四位，
+      // 明文不出库、不回浏览器。
+      aiBaseUrl: raw.ai_base_url ?? null,
+      aiModel: raw.ai_model ?? null,
+      aiLang: raw.ai_lang === 'python' ? 'python' : 'cpp',
+      aiKeySet: Boolean(raw.ai_api_key),
+      aiKeyHint: raw.ai_api_key ? `…${String(raw.ai_api_key).slice(-4)}` : null,
       updatedAt: raw.updated_at ? Number(raw.updated_at) : null,
+  };
+}
+
+/** 内部用：带上 Key 明文，只给服务端自己调模型时读。 */
+function readAiConfig() {
+  const raw = db.getSettings();
+  return {
+    baseUrl: raw.ai_base_url || DEFAULT_AI_BASE_URL,
+    apiKey: raw.ai_api_key || '',
+    model: raw.ai_model || DEFAULT_AI_MODEL,
+    lang: raw.ai_lang === 'python' ? 'python' : 'cpp',
   };
 }
 
@@ -2674,6 +2694,18 @@ async function route(req, res, url) {
         }
         patch.sidebar_width = String(Math.round(value));
       }
+      // AI 题解配置。Key 走的是单独的写入口：不传 = 不动，传空串 = 清掉，
+      // 这样前端「没改 Key 就只是保存别的设置」不会把已存的 Key 抹了。
+      if (body.aiBaseUrl !== undefined) {
+        const value = String(body.aiBaseUrl ?? '').trim();
+        if (value && !/^https?:\/\//i.test(value)) {
+          return sendError(res, 400, '接口地址要以 http:// 或 https:// 开头');
+        }
+        patch.ai_base_url = value.slice(0, 300);
+      }
+      if (body.aiModel !== undefined) patch.ai_model = String(body.aiModel ?? '').trim().slice(0, 120);
+      if (body.aiLang !== undefined) patch.ai_lang = body.aiLang === 'python' ? 'python' : 'cpp';
+      if (body.aiApiKey !== undefined) patch.ai_api_key = String(body.aiApiKey ?? '').trim().slice(0, 300);
       db.saveSettings(patch);
       return sendJson(res, 200, { settings: readSettings() });
     } catch (error) {
@@ -3910,6 +3942,58 @@ async function route(req, res, url) {
       return sendJson(res, 200, { ok: true });
     } catch (error) {
       return sendError(res, 400, error.message);
+    }
+  }
+
+  // ---- AI 题解 ----
+
+  // 已经生成过的题解，一次全拿（一题一份，前端按题号索引）
+  if (pathname === '/api/solutions' && req.method === 'GET') {
+    const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
+    if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
+    return sendJson(res, 200, { solutions: db.listSolutions(handleKey) });
+  }
+
+  if (pathname === '/api/solution' && req.method === 'DELETE') {
+    const handleKey = db.normalizeHandle(url.searchParams.get('handle'));
+    const key = String(url.searchParams.get('key') ?? '').trim();
+    if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
+    if (!key) return sendError(res, 400, '缺少题目');
+    db.deleteSolution(handleKey, key);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // 生成一道题的题解：抓题面 → 问模型 → 落库。
+  // 一次只做一题，让前端逐题跑、进度看得见（模型慢，批量一次等几分钟最难受）。
+  if (pathname === '/api/solution/generate' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
+      const key = String(body.key ?? '').trim();
+      if (!key) return sendError(res, 400, '缺少题目');
+
+      const problem = db.getProblemsByKeys([key]).get(key);
+      if (!problem) return sendError(res, 404, '题库里没有这道题');
+
+      // 抓不到题面不打断流程：generateSolution 会退化成「只给题号」，
+      // 并把 fromStatement 记成 false，界面上提示可信度不同。
+      const statement = await fetchStatement(problem);
+      const result = await generateSolution({ problem, statement, config: readAiConfig() });
+      const solution = db.saveSolution({
+        handleKey,
+        problemKey: key,
+        platform: problem.platform,
+        title: problem.name,
+        model: result.model,
+        idea: result.idea,
+        code: result.code,
+        lang: result.lang,
+        fromStatement: result.fromStatement,
+      });
+      return sendJson(res, 200, { solution });
+    } catch (error) {
+      return sendError(res, error instanceof AiError ? 400 : 500, error.message);
     }
   }
 

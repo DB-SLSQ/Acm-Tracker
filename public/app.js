@@ -35,6 +35,12 @@ const state = {
   pinnedDays: {},
   // 上一次同步给服务端的钉子签名，没变就不重复写库
   pinSignature: '',
+  // AI 题解：题号 → { idea, code, lang, model, fromStatement }
+  solutions: new Map(),
+  // 正在生成的题号（按钮显示成「生成中…」）
+  solutionBusy: new Set(),
+  // AI 接口配置。Key 的明文不回浏览器，只回「配没配」和末四位。
+  ai: { baseUrl: null, model: null, lang: 'cpp', keySet: false, keyHint: null },
   // 计划定下来的那天。日程和「今天」卡片都以它为锚点，
   // 这样每天的题是固定的，勾掉一题不会让后面的题往前顶。
   planStart: null,
@@ -914,6 +920,16 @@ $('today-card').addEventListener('click', async (event) => {
   }
   if (event.target.closest('#copy-today')) {
     copyTodayList();
+    return;
+  }
+  if (event.target.closest('#gen-solutions')) {
+    generateTodaySolutions();
+    return;
+  }
+  const solutionBtn = event.target.closest('[data-solution-key]');
+  if (solutionBtn) {
+    const target = findProblemByKey(solutionBtn.dataset.solutionKey);
+    if (target) openSolutionDialog(target);
     return;
   }
   // 今日卡片上的「换一道 / 放最后」：和训练计划里走同一套函数
@@ -3323,6 +3339,33 @@ renderQuickPicks();
 let countdownInterval = null;
 
 // 「补一个方向」开关 + 赛程来源筛选的交互（都在这块统一绑一次）
+// AI 题解配置：地址 / 模型 / 语言照常保存；Key 只在真的填了新值时才写，
+// 留空表示「不改」，免得手一滑把已经存好的 Key 抹了。
+$('ai-save')?.addEventListener('click', async () => {
+  const patch = {
+    aiBaseUrl: ($('ai-base-input')?.value ?? '').trim(),
+    aiModel: ($('ai-model-input')?.value ?? '').trim(),
+    aiLang: $('ai-lang-select')?.value === 'python' ? 'python' : 'cpp',
+  };
+  const key = ($('ai-key-input')?.value ?? '').trim();
+  if (key) patch.aiApiKey = key;
+  try {
+    const data = await postJson('/api/settings', patch);
+    state.ai = {
+      baseUrl: data.settings.aiBaseUrl ?? null,
+      model: data.settings.aiModel ?? null,
+      lang: data.settings.aiLang === 'python' ? 'python' : 'cpp',
+      keySet: Boolean(data.settings.aiKeySet),
+      keyHint: data.settings.aiKeyHint ?? null,
+    };
+    if ($('ai-key-input')) $('ai-key-input').value = '';
+    renderAiHint();
+    toast('AI 配置已保存');
+  } catch (error) {
+    toast(`保存失败：${error.message}`, { error: true });
+  }
+});
+
 $('extra-axis-toggle')?.addEventListener('change', () => {
   state.extraAxis = $('extra-axis-toggle').checked;
   saveSettings({ extraAxis: state.extraAxis });
@@ -3826,6 +3869,247 @@ function formatDays(value) {
 }
 
 /** 「今天」卡片里的一行题，勾选用的属性和训练计划里的一致。 */
+/* ---------- AI 题解 ---------- */
+
+const solutionKeyOf = (problem) => `${problem.contestId}-${problem.index}`;
+
+function findProblemByKey(key) {
+  return state.planProblems.find((problem) => solutionKeyOf(problem) === key) ?? null;
+}
+
+/** 题单里那一小颗按钮：没生成过叫「AI 题解」，生成过就叫「看题解」。 */
+function solutionButton(problem) {
+  const key = solutionKeyOf(problem);
+  const busy = state.solutionBusy.has(key);
+  const has = state.solutions.has(key);
+  const label = busy ? '生成中…' : has ? '看题解' : 'AI 题解';
+  const title = has ? '看看 AI 写的思路和代码' : '让 AI 写一份思路 + 代码';
+  return `<button type="button" class="sol-btn${has ? ' has' : ''}${busy ? ' busy' : ''}"
+    data-solution-key="${key}"${busy ? ' disabled' : ''} title="${title}">${label}</button>`;
+}
+
+/** 开局把已经生成过的题解一次性拉回来，按题号索引。 */
+async function loadSolutions() {
+  if (!state.handle) return;
+  try {
+    const data = await getJson(`/api/solutions?handle=${encodeURIComponent(state.handle)}`);
+    state.solutions = new Map((data.solutions ?? []).map((item) => [item.problemKey, item]));
+    renderTodayCard();
+  } catch {
+    /* 拉不到就算了，不影响别的功能 */
+  }
+}
+
+function renderAiHint() {
+  const box = $('ai-hint');
+  if (!box) return;
+  box.textContent = state.ai.keySet
+    ? `已配置：${state.ai.model || '默认模型'}${state.ai.keyHint ? `（Key ${state.ai.keyHint}）` : ''}。今日题单里点「AI 题解」就能生成。`
+    : '还没填 API Key，填完才能生成题解。';
+}
+
+/** 让服务端生成一道题的题解，成功后写进 state。 */
+async function requestSolution(problem) {
+  const key = solutionKeyOf(problem);
+  state.solutionBusy.add(key);
+  renderTodayCard();
+  try {
+    const data = await postJson('/api/solution/generate', { handle: state.handle, key });
+    state.solutions.set(key, data.solution);
+    return data.solution;
+  } finally {
+    state.solutionBusy.delete(key);
+  }
+}
+
+/** 「生成今日题解」：逐题跑，进度看得见，单题失败不打断剩下的。 */
+async function generateTodaySolutions() {
+  if (!state.handle) {
+    toast('先填上你的 Codeforces 用户名', { error: true });
+    return;
+  }
+  if (!state.ai.keySet) {
+    toast('还没配置 AI 接口。去「设置 → AI 题解」填一个 API Key。', { error: true, timeout: 9000 });
+    return;
+  }
+  const overview = todaySnapshot();
+  const list = overview?.todayProblems ?? [];
+  if (!list.length) {
+    toast('今天没有安排题目');
+    return;
+  }
+  const pending = list.filter((problem) => !state.solutions.has(solutionKeyOf(problem)));
+  if (!pending.length) {
+    toast('今天这些题的题解都已经生成过了');
+    return;
+  }
+
+  let ok = 0;
+  const failed = [];
+  for (let i = 0; i < pending.length; i += 1) {
+    const problem = pending[i];
+    setStatus(`正在生成题解 ${i + 1}/${pending.length}：${problem.name ?? ''}`);
+    try {
+      await requestSolution(problem);
+      ok += 1;
+    } catch (error) {
+      failed.push(`${problem.name ?? solutionKeyOf(problem)}（${error.message}）`);
+    }
+    renderTodayCard();
+  }
+  setStatus('计划已生成');
+  if (failed.length) {
+    toast(`题解完成 ${ok} 道，${failed.length} 道失败：${failed[0]}${failed.length > 1 ? ' …' : ''}`, {
+      error: true,
+      timeout: 14000,
+    });
+  } else {
+    toast(`题解生成完成，共 ${ok} 道`);
+  }
+}
+
+async function copySolutionCode(code) {
+  if (!code) {
+    toast('还没有代码', { error: true });
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(code);
+    toast('代码已复制');
+  } catch {
+    toast('复制失败，手动选一下吧', { error: true });
+  }
+}
+
+/**
+ * 极简 Markdown：题解里的思路大多是「小标题 + 列表 + 加粗 + 行内代码」，
+ * 一个完整的 Markdown 渲染器太重，这些够用了。
+ */
+function renderMarkdownLite(text) {
+  const inline = (value) =>
+    escapeHtml(value)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  const out = [];
+  let listOpen = false;
+  for (const raw of String(text ?? '').split('\n')) {
+    const line = raw.trimEnd();
+    const item = /^\s*(?:[-*·]|\d+[.、)])\s+(.*)$/.exec(line);
+    const heading = /^\s*#{1,6}\s+(.*)$/.exec(line);
+    if (item) {
+      if (!listOpen) {
+        out.push('<ul>');
+        listOpen = true;
+      }
+      out.push(`<li>${inline(item[1])}</li>`);
+      continue;
+    }
+    if (listOpen) {
+      out.push('</ul>');
+      listOpen = false;
+    }
+    if (heading) out.push(`<h4>${inline(heading[1])}</h4>`);
+    else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+  }
+  if (listOpen) out.push('</ul>');
+  return out.join('\n');
+}
+
+/** 题解弹窗：左边思路、下面代码，能复制、能重新生成。 */
+function openSolutionDialog(problem) {
+  const key = solutionKeyOf(problem);
+  const existing = state.solutions.get(key);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'team-dialog-backdrop solution-backdrop';
+  wrap.innerHTML = `
+    <div class="team-dialog solution-dialog" role="dialog" aria-modal="true">
+      <div class="solution-head">
+        <div class="solution-title">
+          <h3>${escapeHtml(problem.name ?? key)}</h3>
+          <p class="solution-meta">
+            ${escapeHtml(problemCodeText(problem))}
+            ${problem.rating ? ` · 难度 ${problem.rating}` : ''}
+            ${existing?.model ? ` · ${escapeHtml(existing.model)}` : ''}
+            ${existing && existing.fromStatement === false ? ' · 没取到题面，凭题号生成' : ''}
+          </p>
+        </div>
+        <button type="button" class="solution-close" id="sol-close" title="关闭">×</button>
+      </div>
+      <div class="solution-body" id="sol-body"></div>
+      <div class="team-dialog-actions">
+        <button type="button" class="btn" id="sol-open">去题目页</button>
+        <button type="button" class="btn primary" id="sol-regen">${existing ? '重新生成' : '生成题解'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+
+  const body = wrap.querySelector('#sol-body');
+  const render = () => {
+    const current = state.solutions.get(key);
+    const busy = state.solutionBusy.has(key);
+    if (!current) {
+      body.innerHTML = busy
+        ? '<p class="solution-loading">正在让 AI 写题解…（一道题通常十几秒到一分钟）</p>'
+        : '<p class="subtle">还没有题解。点下面的「生成题解」，AI 会给出思路和代码。</p>';
+      return;
+    }
+    body.innerHTML =
+      `<div class="solution-idea">${renderMarkdownLite(current.idea || '（模型没给思路）')}</div>` +
+      (current.code
+        ? `<div class="solution-code">
+             <div class="solution-code-head">
+               <span>代码 · ${escapeHtml(current.lang === 'python' ? 'Python' : 'C++')}</span>
+               <button type="button" class="btn small" id="sol-copy">复制</button>
+             </div>
+             <pre><code>${escapeHtml(current.code)}</code></pre>
+           </div>`
+        : '');
+    body.querySelector('#sol-copy')?.addEventListener('click', () => copySolutionCode(current.code));
+  };
+  render();
+
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener('keydown', onKey, true);
+    wrap.remove();
+  };
+  const onKey = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+    }
+  };
+  document.addEventListener('keydown', onKey, true);
+  wrap.addEventListener('click', (event) => {
+    if (event.target === wrap) close();
+  });
+  wrap.querySelector('#sol-close').addEventListener('click', close);
+  wrap.querySelector('#sol-open').addEventListener('click', () => {
+    window.open(problemHref(problem), '_blank', 'noreferrer');
+  });
+  wrap.querySelector('#sol-regen').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = '生成中…';
+    state.solutionBusy.add(key);
+    render();
+    try {
+      await requestSolution(problem);
+      render();
+      button.textContent = '重新生成';
+    } catch (error) {
+      body.insertAdjacentHTML('afterbegin', `<p class="hint error">生成失败：${escapeHtml(error.message)}</p>`);
+      button.textContent = '重试';
+    } finally {
+      button.disabled = false;
+      state.solutionBusy.delete(key);
+    }
+  });
+}
+
 function todayRow(problem) {
   const key = `${problem.contestId}-${problem.index}`;
   const isDone = state.done.has(key);
@@ -3844,6 +4128,7 @@ function todayRow(problem) {
     </span>
     <span class="today-stage">第 ${problem.stage ?? 1} 阶段</span>
     ${ratingBadge(problem.rating)}
+    ${solutionButton(problem)}
     ${feedbackButtons(key)}
     ${swapControls(problem)}
   </div>`;
@@ -3900,6 +4185,7 @@ function renderTodayCard() {
              <span style="width:${Math.round((doneToday / total) * 100)}%"></span>
            </div>
            <span class="today-count"><b>${doneToday}</b>/${total} 题</span>
+           <button type="button" class="btn small" id="gen-solutions" title="让 AI 把这些题的思路和代码都写出来">AI 题解</button>
            <button type="button" class="btn small" id="copy-today">复制题单</button>
          </div>`
       : '') +
@@ -5449,6 +5735,18 @@ async function restoreSession() {
     state.extraAxis = settings.extraAxis !== false;
     if ($('extra-axis-toggle')) $('extra-axis-toggle').checked = state.extraAxis;
     $('hide-tags').checked = state.hideTags;
+    // AI 题解配置（Key 的明文拿不到，只回「配没配」和末四位）
+    state.ai = {
+      baseUrl: settings.aiBaseUrl ?? null,
+      model: settings.aiModel ?? null,
+      lang: settings.aiLang === 'python' ? 'python' : 'cpp',
+      keySet: Boolean(settings.aiKeySet),
+      keyHint: settings.aiKeyHint ?? null,
+    };
+    if ($('ai-base-input')) $('ai-base-input').value = state.ai.baseUrl ?? '';
+    if ($('ai-model-input')) $('ai-model-input').value = state.ai.model ?? '';
+    if ($('ai-lang-select')) $('ai-lang-select').value = state.ai.lang;
+    renderAiHint();
     state.remindAt = settings.remindAt ?? null;
     state.remindLast = settings.remindLast ?? null;
     if (settings.tagShare !== null && settings.tagShare !== undefined) {
@@ -5477,6 +5775,8 @@ async function restoreSession() {
   renderOjPie();
   renderCockpitRail();
   loadPlatforms();
+  // 已经生成过的题解一次性拉回来（题号 → 题解），题单里直接显示「看题解」
+  loadSolutions();
 
   if (!settings?.handle) {
     setStatus('未连接');

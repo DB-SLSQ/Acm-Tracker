@@ -899,6 +899,40 @@
         <p class="hint" id="train-hint">还没有训练过。300 场大约够十万条样本，十几分钟。</p>
         <pre class="train-log hidden" id="train-log"></pre>
 
+        <h3 class="settings-title">AI 题解</h3>
+        <p class="subtle">
+          填一个 OpenAI 兼容的接口，今日题单里每道题就能让 AI 写出「思路 + 代码」。
+          DeepSeek、通义、Kimi、智谱、本地 Ollama、各种中转站都行——填对应的地址和模型名即可。
+          Key 只存在本机数据库里，除了你填的那家接口，不会发给任何人。
+          能抓到题面就用题面（AtCoder / 洛谷），抓不到就让模型凭题号自己认（Codeforces 有 Cloudflare，
+          多半抓不到，题解可信度会低一些）。
+        </p>
+        <div class="platform-row">
+          <div class="sched-field">
+            <label for="ai-base-input">接口地址</label>
+            <input id="ai-base-input" type="text" placeholder="https://api.deepseek.com/v1" autocomplete="off" />
+          </div>
+          <div class="sched-field">
+            <label for="ai-model-input">模型</label>
+            <input id="ai-model-input" type="text" placeholder="deepseek-chat" autocomplete="off" />
+          </div>
+        </div>
+        <div class="platform-row">
+          <div class="sched-field">
+            <label for="ai-key-input">API Key</label>
+            <input id="ai-key-input" type="password" placeholder="sk-…" autocomplete="off" />
+          </div>
+          <div class="sched-field">
+            <label for="ai-lang-select">代码语言</label>
+            <select id="ai-lang-select">
+              <option value="cpp">C++17</option>
+              <option value="python">Python 3</option>
+            </select>
+          </div>
+          <button class="btn primary" id="ai-save">保存</button>
+        </div>
+        <p class="hint" id="ai-hint">还没填 API Key，填完才能生成题解。</p>
+
         <h3 class="settings-title">平台数据</h3>
         <p class="subtle">
           只抓汇总数字（过题数、提交数），不抓逐题记录——逐题要翻很多页，那才是把 IP 抓封的原因。

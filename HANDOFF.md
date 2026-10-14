@@ -137,6 +137,8 @@ lib/cf.js              Codeforces 官方 API（题目、提交、比赛、rating
 lib/atcoder.js         AtCoder：Kenkoooo 的题目表 / 难度 / 提交记录 / 用户统计
 lib/luogu.js           洛谷题库：按难度档等距抽页抓取
 lib/platforms.js       洛谷练习页、牛客；fetchLuoguText() 处理洛谷的 cookie 挑战
+lib/statement.js       抓题面给 AI 写题解用（三平台三套坑，见坑 36）
+lib/ai.js              AI 题解：OpenAI 兼容的 /chat/completions（默认 DeepSeek），只用内置 fetch
 lib/plan.js            挑题算法（方向配额、四档均分、难度自适应、deriveProgress；**团队分工与排题也在这**，约 1325 行）
 lib/db.js              node:sqlite 封装：建表、迁移、所有 SQL（约 2290 行）
 lib/contests.js        比赛分档解析（Div. 1/2/3、Educational…）与适合度判断
@@ -161,13 +163,13 @@ electron/main.js       桌面入口：起服务 + 开窗口，打包后数据目
 现在的导航（20 页，比 1.0.7 多了「待补题」）：当前水平 / 目标设置 / 训练计划 / **团队训练** / 训练日程 / 补题队列 / **待补题** / 题库 / 历年比赛 / 拼好题 / 我的题单 /
 能力画像 / 成长 / 做题记录 / 活动记录 / 比赛日历 / 虚拟参赛 / 平台数据 / 帮助 / 设置。
 
-数据表（34 张，其中 `sqlite_sequence` 是 SQLite 自带的）：`problems`（题库缓存，含
+数据表（35 张，其中 `sqlite_sequence` 是 SQLite 自带的）：`problems`（题库缓存，含
 platform/native_id/native_contest/native_rating）、
 `submissions`、`rating_history`、`users`、`contests`、`atcoder_contests`（比赛 id 映射）、
 `luogu_ids`、`settings`、`meta`（各种缓存 JSON）、`model_samples`、`blocked_problems`、
 `progress`（打勾）、`platform_stats`、`virtual_sessions`、`plan_snapshots`（钉住的计划）、
 `plan_swaps`、`plan_defer`、`plan_adjust`、`extra_tasks`（补一个方向）、`schedule_extras`、
-`schedule_days`（过去的日子做的是哪几题，见坑 35）、
+`schedule_days`（过去的日子做的是哪几题，见坑 35）、`solutions`（AI 题解，见坑 36）、
 `problem_feedback`（做题手感）、`review_done`、`growth_snapshots`、`known_handles`、
 `problem_lists` + `problem_list_items`（我的题单）、
 `teams` + `team_members` + `team_assignments`（团队训练，见下节）、
@@ -530,6 +532,28 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
     验证：`.dev/verify-schedule-pin.mjs`（22 项：历史稳定 / 改题量 / 加休息日 /
     待补题集合不变 / 存取与边界）、`.dev/quantify-pin-fix.mjs`（量化修复前的损失）。
     **别把未来的日子也钉住**——那样改题量、点「这天没空」就不再顺延了。
+
+36. **AI 题解要先拿题面，而三个平台是三套坑**（2026-10-14 实测）。
+    · **洛谷**两处：① 老的 `?_contentOnly=1` JSON 接口**已经失效**——现在不管 Accept 写什么
+      都返回整页 HTML（41KB 的空壳，一个 `currentData` 都没有），题面实际在
+      `<script id="lentille-context" type="application/json">` 里，取
+      `data.problem.content.{description,formatI,formatO,hint}` 加 `samples`；
+      而且内容是 **Markdown**（含 `$LaTeX$`，还有 `#include <bits/stdc++.h>` 这种尖括号），
+      **千万别过 `htmlToText`**——会把 `<bits/stdc++.h>` 当标签吃掉；
+      ② 有 302 + `Set-Cookie` 挑战，必须 `redirect: 'manual'` 拿 cookie 再请求一次，
+      用 `follow` 会一路重定向到 `redirect count exceeded`（fetch 不自己管 cookie）。
+    · **Codeforces**前面挂着 Cloudflare，服务器直连基本都吃 403（`Just a moment...`），
+      抓不到就**降级**成「只给题号让模型自己认」，不当成错误——这条降级路径是设计的一部分。
+    · **AtCoder**最好抓：`#task-statement` 里英文日文两份都在，英文在后，
+      优先从 `class="lang-en"` 那段开始截。
+    · 本机到这些站的连接**时好时坏**（同一条 URL 前一次超时、后一次 300ms 就回来），
+      所以 `lib/statement.js` 里的重试是必需品，不是优化。
+      界面会把没抓到题面的题解标上「没取到题面，凭题号生成」。
+
+37. **AI 的 Key 不能从 `readSettings()` 里出去**。`readSettings()` 的返回值会一路传到浏览器，
+    所以 Key 只回「配没配」和末四位（`aiKeySet` / `aiKeyHint`），明文另走 `readAiConfig()`
+    在服务端内部读。改这块之前先跑 `.dev/test-solution-e2e.mjs`，里面有一条断言专门守这个
+    （往响应里搜 Key 明文，搜到就算失败）。
 
 ## 已经做过的事（按版本）
 
