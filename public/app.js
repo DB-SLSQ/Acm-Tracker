@@ -533,6 +533,10 @@ async function loadUser(force = false) {
 
   state.handle = handle;
   saveSettings({ handle });
+  // 已经生成过的题解一次性拉回来（题号 → 题解），题单里直接显示「看题解」。
+  // ⚠️ 必须挂在 state.handle 赋值之后：loadSolutions() 拿不到 handle 就直接 return 了，
+  // 早于这里调用等于白跑一遍，界面会永远以为「没生成过」，点一次就重复生成一次。
+  loadSolutions();
 
   const button = $('load-btn');
   button.disabled = true;
@@ -3882,8 +3886,10 @@ function solutionButton(problem) {
   const key = solutionKeyOf(problem);
   const busy = state.solutionBusy.has(key);
   const has = state.solutions.has(key);
-  const label = busy ? '生成中…' : has ? '看题解' : 'AI 题解';
-  const title = has ? '看看 AI 写的思路和代码' : '让 AI 写一份思路 + 代码';
+  // ⚠️ 别叫「看题解」：手感反馈那排里已经有一个「看题解」（= 这题是看了题解才会的），
+  // 两个并排出现会被当成同一件事。
+  const label = busy ? '生成中…' : has ? 'AI 题解 ✓' : 'AI 题解';
+  const title = has ? 'AI 已经写过这道题了，点开看思路和代码' : '让 AI 写一份思路 + 代码';
   return `<button type="button" class="sol-btn${has ? ' has' : ''}${busy ? ' busy' : ''}"
     data-solution-key="${key}"${busy ? ' disabled' : ''} title="${title}">${label}</button>`;
 }
@@ -5775,8 +5781,6 @@ async function restoreSession() {
   renderOjPie();
   renderCockpitRail();
   loadPlatforms();
-  // 已经生成过的题解一次性拉回来（题号 → 题解），题单里直接显示「看题解」
-  loadSolutions();
 
   if (!settings?.handle) {
     setStatus('未连接');

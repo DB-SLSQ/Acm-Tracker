@@ -2323,6 +2323,17 @@ input[type="number"]:focus {
   padding: 7px 2px;
   font-size: 13.5px;
   border-bottom: 1px solid var(--border);
+  /* 一行里有「AI 题解 + 手感反馈 + 换题」好几组按钮，窄窗口下容不下时必须折行，
+     否则 flex 会先把标题压扁——标题会变成一个字一行。 */
+  flex-wrap: wrap;
+}
+
+/* 这些是内容驱动的窄元素，别让它们参与压缩，把空间让给标题。 */
+.today-row .problem-code,
+.today-row .sol-btn,
+.today-row .feel-row,
+.today-row .today-actions {
+  flex: none;
 }
 
 .today-row:last-child {
@@ -2338,8 +2349,9 @@ input[type="number"]:focus {
 }
 
 .today-name {
-  flex: 1;
-  min-width: 0;
+  /* 下限 200px：标题再挤也不至于一字一行；不够就整行折行（配合上面的 flex-wrap）。 */
+  flex: 1 1 240px;
+  min-width: 200px;
   display: flex;
   align-items: center;
   gap: 8px;
