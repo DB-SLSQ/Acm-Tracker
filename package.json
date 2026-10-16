@@ -1,6 +1,6 @@
 {
   "name": "acm-trainer",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "private": true,
   "author": "DB_SLSQ",
   "type": "module",
@@ -11,7 +11,8 @@
     "sync": "node --no-warnings scripts/sync-problems.js",
     "train": "node --no-warnings scripts/train-model.js",
     "desktop": "electron .",
-    "build": "electron-builder --win"
+    "build": "electron-builder --win",
+    "build:linux": "electron-builder --linux"
   },
   "build": {
     "appId": "com.dbslsq.acmtracker",
@@ -42,6 +43,15 @@
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build/icon.png",
+      "category": "Education",
+      "maintainer": "DB_SLSQ"
     }
   },
   "engines": {

@@ -4,6 +4,9 @@
 # 而本机存的那个令牌只有读权限。用 runner 自带的 GITHUB_TOKEN 就没这个问题，
 # 也不需要把任何密钥放在本机。
 #
+# 双平台：Windows 出 NSIS 安装包，Linux 出 AppImage + deb。
+# Linux job 串在 Windows 之后（needs），避免两个 job 同时建同一个 Release 撞车。
+#
 # 更新说明放在 outputs/release-notes-<tag>.md，会被当成 Release 正文；
 # 没找到就用一句占位提示，发布后自己补也行。
 name: 发布
@@ -23,7 +26,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,5 +88,58 @@ jobs:
           name: ${{ env.TITLE }}
           body_path: ${{ runner.temp }}/body.md
           files: ${{ env.ASSET }}
+          draft: false
+          prerelease: false
+
+  linux:
+    needs: windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --foreground-scripts
+
+      # 和 Windows 同理：postinstall 偶尔不出活就手动补
+      - name: 确认 Electron 二进制到位
+        run: |
+          if [ ! -x node_modules/electron/dist/electron ]; then
+            echo "缺少 node_modules/electron/dist，手动跑一次 electron 的安装脚本"
+            node node_modules/electron/install.js
+          fi
+          test -x node_modules/electron/dist/electron || { echo 'Electron 二进制没下来，打包没法继续'; exit 1; }
+          ls -lh node_modules/electron/dist/electron
+
+      # deb 打包 electron-builder 会自己拉 fpm，不用提前装
+      - name: 打包 AppImage 与 deb
+        run: npm run build:linux -- --publish never
+
+      - name: 准备附件
+        run: |
+          set -e
+          shopt -s nullglob
+          assets=()
+          for f in dist/*.AppImage dist/*.deb; do
+            # 附件名里的空格换成点号，跟 Windows 那份保持一致
+            asset="dist/$(basename "$f" | tr ' ' '.')"
+            [ "$f" != "$asset" ] && mv "$f" "$asset"
+            assets+=("$asset")
+          done
+          if [ ${#assets[@]} -eq 0 ]; then echo '没找到 Linux 安装包，先看上面的打包日志'; exit 1; fi
+          printf 'ASSETS=%s\n' "$(IFS=,; echo "${assets[*]}")" >> "$GITHUB_ENV"
+
+      # release 已由 Windows job 建好，这里只追加附件
+      - name: 追加 Linux 安装包到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: ${{ env.ASSETS }}
           draft: false
           prerelease: false

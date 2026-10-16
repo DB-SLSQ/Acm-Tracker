@@ -6,9 +6,11 @@
 
 ### 方式一：桌面程序（推荐）
 
-从 [Releases](https://github.com/DB-SLSQ/Acm-Tracker/releases) 下载 `ACM Trainer Setup x.y.z.exe`，双击安装。之后从开始菜单或桌面快捷方式打开，就是一个独立的窗口程序，不需要终端，也不需要浏览器。
+**Windows**：从 [Releases](https://github.com/DB-SLSQ/Acm-Tracker/releases) 下载 `ACM Trainer Setup x.y.z.exe`，双击安装。之后从开始菜单或桌面快捷方式打开，就是一个独立的窗口程序，不需要终端，也不需要浏览器。
 
-程序的数据（题库缓存、训练进度）保存在 `%APPDATA%\acm-trainer\data\`，卸载重装不会丢。
+**Linux（Ubuntu / Debian 等）**：同一页面下载 `.AppImage`（下载后 `chmod +x` 直接运行），或 `.deb`（`sudo dpkg -i acm-trainer_x.y.z_amd64.deb` 安装，装完在应用菜单里找 ACM Trainer）。数据保存在 `~/.config/ACM Trainer/data/`。
+
+程序的数据（题库缓存、训练进度）Windows 上保存在 `%APPDATA%\acm-trainer\data\`，Linux 上在 `~/.config/ACM Trainer/data/`，卸载重装不会丢。
 
 ### 方式二：网页版
 
