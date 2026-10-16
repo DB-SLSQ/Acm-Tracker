@@ -272,7 +272,11 @@ async function postJson(url, body, method = 'POST') {
  * 隔离，重启就丢。所以由服务端记住，网页版和桌面版行为一致。
  */
 function saveSettings(patch) {
-  postJson('/api/settings', patch).catch(() => {
+  // 带上当前账号：平台 UID 的保存会同时记到这个账号名下（platform_bindings），
+  // 这样切换队员账号时各平台绑定互不覆盖
+  const body = { ...patch };
+  if (state.handle && body.handle === undefined) body.handle = state.handle;
+  postJson('/api/settings', body).catch(() => {
     /* 静默失败：记不住设置不该影响正常使用 */
   });
 }
@@ -5215,7 +5219,9 @@ $('module-list').addEventListener('change', (event) => {
 
 async function loadPlatforms() {
   try {
-    const { platforms, luoguCatalog } = await getJson('/api/platforms');
+    // 只拉当前账号自己的平台战绩（+ 没标归属的旧全局行），多账号不串号
+    const q = state.handle ? `?handle=${encodeURIComponent(state.handle)}` : '';
+    const { platforms, luoguCatalog } = await getJson(`/api/platforms${q}`);
     state.platforms = platforms ?? [];
     state.luoguCatalog = luoguCatalog ?? state.luoguCatalog;
     renderLuoguCatalogHint();
@@ -5345,7 +5351,11 @@ function bindPlatformSync({ platform, inputId, hintId, buttonId, label, settings
     hint.textContent = '正在抓取，只请求一次…';
 
     try {
-      const data = await postJson('/api/platforms/sync', { platform, account });
+      const data = await postJson('/api/platforms/sync', {
+        platform,
+        account,
+        handle: state.handle ?? undefined,
+      });
       state.platforms = data.platforms;
       refreshLuoguKeys();
       renderPlatformCards();
@@ -5720,13 +5730,15 @@ async function restoreSession() {
     state.restDays = Array.isArray(settings.restDays) ? settings.restDays : [];
     state.dayOff = settings.dayOff ?? {};
     state.hiddenModules = Array.isArray(settings.hiddenModules) ? settings.hiddenModules : [];
-    if (settings.nowcoderUid) {
-      state.nowcoderUid = settings.nowcoderUid;
-      $('nowcoder-input').value = settings.nowcoderUid;
-    }
-    if (settings.luoguUid) $('luogu-input').value = settings.luoguUid;
-    state.atcoderUid = settings.atcoderUid ?? null;
-    if (settings.atcoderUid) $('atcoder-input').value = settings.atcoderUid;
+    // 平台绑定按 CF 账号存：只回填当前账号自己绑的那套。
+    // ⚠️ 不回退到全局旧值——那是「最后保存的人」的账号，回填等于把别人的账号
+    // 展示给当前用户看（多账号串号的根因）。没绑过就显示空，绑一次即可。
+    const pBindings = settings.bindings ?? {};
+    state.nowcoderUid = pBindings.nowcoder ?? null;
+    $('nowcoder-input').value = pBindings.nowcoder ?? '';
+    $('luogu-input').value = pBindings.luogu ?? '';
+    state.atcoderUid = pBindings.atcoder ?? null;
+    $('atcoder-input').value = pBindings.atcoder ?? '';
     state.cfInPlan = settings.cfInPlan !== false;
     $('cf-in-plan').checked = state.cfInPlan;
     state.atcoderInPlan = Boolean(settings.atcoderInPlan);

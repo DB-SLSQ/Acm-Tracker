@@ -544,15 +544,23 @@ async function handlePlan(url) {
   // 勾了 AtCoder 就先增量同步一次提交记录（6 小时内不重复抓）。
   // 同步失败不影响出计划：AtCoder 只是加菜，CF 那份计划照常给。
   let atcoderSync = null;
-  if (settings.atcoderInPlan && settings.atcoderUid) {
-    try {
-      const handleKeyForAtcoder = db.normalizeHandle(rawHandle);
-      atcoderSync = await syncAtcoderSubmissions(handleKeyForAtcoder, settings.atcoderUid, {
-        force,
-      });
-      if (atcoderSync.cached) atcoderSync = null;
-    } catch (error) {
-      atcoderSync = { error: error.message };
+  if (settings.atcoderInPlan) {
+    // 平台绑定按 CF 账号存：只用这个账号自己绑的 AtCoder 号。
+    // ⚠️ 不回退到全局 settings.atcoder_uid —— 那是「最后保存的人」的账号，
+    // 回退等于把别人的提交记录挂到当前账号名下（多账号串号的根因之一）。
+    // 没绑定就不排 AtCoder，去设置里绑一次即可。
+    const handleKeyForPlan = db.normalizeHandle(rawHandle);
+    const atcoderUid = db.getPlatformBindings(handleKeyForPlan).atcoder;
+    if (atcoderUid) {
+      try {
+        const handleKeyForAtcoder = db.normalizeHandle(rawHandle);
+        atcoderSync = await syncAtcoderSubmissions(handleKeyForAtcoder, atcoderUid, {
+          force,
+        });
+        if (atcoderSync.cached) atcoderSync = null;
+      } catch (error) {
+        atcoderSync = { error: error.message };
+      }
     }
   }
 
@@ -2591,7 +2599,12 @@ async function route(req, res, url) {
   }
 
   if (pathname === '/api/settings' && req.method === 'GET') {
-    return sendJson(res, 200, { settings: readSettings() });
+    const settings = readSettings();
+    // 平台绑定按 CF 账号存：设置页回填时优先用当前账号自己绑的那套
+    const settingsHandle = db.normalizeHandle(String(settings.handle ?? '').trim());
+    return sendJson(res, 200, {
+      settings: { ...settings, bindings: db.getPlatformBindings(settingsHandle) },
+    });
   }
 
   if (pathname === '/api/settings' && req.method === 'POST') {
@@ -2651,6 +2664,22 @@ async function route(req, res, url) {
       if (body.nowcoderUid !== undefined) patch.nowcoder_uid = String(body.nowcoderUid).trim();
       if (body.luoguUid !== undefined) patch.luogu_uid = String(body.luoguUid).trim();
       if (body.atcoderUid !== undefined) patch.atcoder_uid = String(body.atcoderUid).trim();
+      // 平台账号绑定跟着 CF 账号走：带 handle 的保存会同时记到这个账号名下，
+      // 这样教练切换队员账号时，各平台的绑定互不覆盖
+      {
+        const bindingHandle = db.normalizeHandle(String(body.handle ?? '').trim());
+        if (bindingHandle) {
+          if (body.atcoderUid !== undefined) {
+            db.setPlatformBinding(bindingHandle, 'atcoder', String(body.atcoderUid).trim());
+          }
+          if (body.luoguUid !== undefined) {
+            db.setPlatformBinding(bindingHandle, 'luogu', String(body.luoguUid).trim());
+          }
+          if (body.nowcoderUid !== undefined) {
+            db.setPlatformBinding(bindingHandle, 'nowcoder', String(body.nowcoderUid).trim());
+          }
+        }
+      }
       // 训练计划里是否混入 AtCoder 题：不勾就不排
       if (body.atcoderInPlan !== undefined) patch.atcoder_in_plan = body.atcoderInPlan ? '1' : '';
       // 训练计划里是否混入洛谷题
@@ -2854,8 +2883,12 @@ async function route(req, res, url) {
   }
 
   if (pathname === '/api/platforms' && req.method === 'GET') {
+    // 战绩按 CF 账号归属：只返回这个账号自己的（和没标归属的旧全局行），
+    // 不再把别人同步过的平台数据也端出来
+    const rawHandle = url.searchParams.get('handle');
+    const handleKey = rawHandle ? db.normalizeHandle(rawHandle) : null;
     return sendJson(res, 200, {
-      platforms: db.listPlatformStats(),
+      platforms: db.listPlatformStats(handleKey ?? undefined),
       // 洛谷题库的抓取摘要（抓了几道、抽了哪几页），设置里会显示上一次的结果
       luoguCatalog: parseJson(db.metaGet('luogu_catalog_info'), null),
     });
@@ -3099,20 +3132,23 @@ async function route(req, res, url) {
       // 洛谷顺手把「做过的题」记下来：训练计划靠它排除做过的题、自动打勾。
       // 逐题列表不写进 platform_stats（几千道题的 JSON 太大），记完就删。
       let solvedMarked = null;
+      const rawHandle = String(body.handle ?? db.getSettings().handle ?? '').trim();
+      const handleKey = rawHandle ? db.normalizeHandle(rawHandle) : null;
       if (platform === 'luogu') {
-        const rawHandle = String(body.handle ?? db.getSettings().handle ?? '').trim();
         const passed = result.extra?.solved ?? [];
-        if (rawHandle && passed.length) {
-          solvedMarked = db.appendLuoguSolved(db.normalizeHandle(rawHandle), passed);
+        if (handleKey && passed.length) {
+          solvedMarked = db.appendLuoguSolved(handleKey, passed);
         }
         if (result.extra) delete result.extra.solved;
       }
 
-      db.savePlatformStats(result);
+      db.savePlatformStats({ ...result, handleKey });
+      // 绑定按 CF 账号走：切回来还是这个账号自己绑的洛谷/牛客
+      if (handleKey) db.setPlatformBinding(handleKey, platform, account);
       return sendJson(res, 200, {
         result,
         solvedMarked,
-        platforms: db.listPlatformStats(),
+        platforms: db.listPlatformStats(handleKey ?? undefined),
       });
     } catch (error) {
       const message = error instanceof PlatformError ? error.message : `同步失败：${error.message}`;
@@ -3175,7 +3211,10 @@ async function route(req, res, url) {
         nickname: account,
         stats,
         extra: { catalog: catalog.count },
+        handleKey,
       });
+      // 平台绑定跟着 CF 账号走：以后切回来，AtCoder 还是这个账号自己绑的那个
+      db.setPlatformBinding(handleKey, 'atcoder', account);
 
       return sendJson(res, 200, {
         result: {
@@ -3189,7 +3228,7 @@ async function route(req, res, url) {
         },
         catalog,
         submissions,
-        platforms: db.listPlatformStats(),
+        platforms: db.listPlatformStats(handleKey),
       });
     } catch (error) {
       const message =
@@ -3255,13 +3294,18 @@ async function route(req, res, url) {
       // 题库刚更新，顺手把「做过的题」也标一遍：之前题库里没有的题现在能对上了
       const settings = readSettings();
       let solvedMarked = null;
-      if (settings.luoguUid) {
+      const catalogHandleKey = db.normalizeHandle(
+        String(body.handle ?? settings.handle ?? '').trim(),
+      );
+      // 只用这个 CF 账号自己绑的洛谷号——不回退全局（那是最后保存的人的账号，
+      // 回退会把别人的「做过」记到当前账号头上）
+      const luoguUid = db.getPlatformBindings(catalogHandleKey).luogu;
+      if (luoguUid) {
         try {
-          const stats = await fetchLuogu(settings.luoguUid);
+          const stats = await fetchLuogu(luoguUid);
           const passed = stats.extra?.solved ?? [];
-          const rawHandle = String(body.handle ?? settings.handle ?? '').trim();
-          if (rawHandle && passed.length) {
-            solvedMarked = db.appendLuoguSolved(db.normalizeHandle(rawHandle), passed);
+          if (catalogHandleKey && passed.length) {
+            solvedMarked = db.appendLuoguSolved(catalogHandleKey, passed);
           }
         } catch (error) {
           solvedMarked = { error: error.message };

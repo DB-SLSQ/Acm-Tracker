@@ -555,6 +555,19 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
     在服务端内部读。改这块之前先跑 `.dev/test-solution-e2e.mjs`，里面有一条断言专门守这个
     （往响应里搜 Key 明文，搜到就算失败）。
 
+38. **平台账号和平台战绩必须跟着 CF 账号走，不能存全局**（群友 zhouyi2019 踩到，v1.0.15 修）。
+    老版本里 `atcoder_uid` / `luogu_uid` 存在全局 settings、`platform_stats` 表也没有
+    `handle_key` 列——教练管理多个队员账号时，给队员绑的 AtCoder 会覆盖自己的，
+    切回自己的 CF 号，平台卡片显示的还是队员的战绩（bindings/战绩全局一份，谁后同步归谁）。
+    现在的规矩：
+    · 绑定存 `platform_bindings(handle_key, platform, uid)`，战绩行带 `handle_key`；
+    · 查询**只信当前账号自己的绑定，绝不回退全局**——全局 `atcoder_uid` 那份是
+      「最后保存的人」的账号，回退等于把别人的提交记录挂到当前账号名下。
+      没绑定就空着（不排 AtCoder、不标做过），让用户去设置里绑一次；
+    · 升级迁移 `migratePlatformBindings()`（db.js）把旧全局行 / 旧全局 UID 归到
+      升级时的主账号名下，幂等；
+    · 回归：`.dev/test-platform-bindings.mjs`（8 项，模拟「切队员绑号再切回来」全流程）。
+
 ## 已经做过的事（按版本）
 
 - **0.1.5–0.1.6**：左侧菜单分页布局、今日任务卡片（做题手感 / 赛前热身 / 复盘卡 / 补一个方向）、
