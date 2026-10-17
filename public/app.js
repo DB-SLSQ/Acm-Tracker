@@ -129,6 +129,18 @@ const state = {
     target: 1900,
     busy: false,
     error: null,
+    // 手动改分工时的草稿：axis -> { main, sub }。dirty 为 true 时出现保存/取消
+    assignDraft: null,
+    assignDirty: false,
+  },
+  // VP 查询：QOJ + CF 的区域赛列表（服务端缓存 24h）
+  vp: {
+    items: null,
+    loading: false,
+    error: null,
+    cached: false,
+    fetchedAt: null,
+    query: '',
   },
 };
 
@@ -1987,8 +1999,10 @@ async function loadTeamDetail(id, { keepPlan = false } = {}) {
   state.team.current = id;
   state.team.detail = detail;
   state.team.error = null;
-  // 切队伍时旧队伍的排题结果就失效了，清掉免得看串
+  // 切队伍时旧队伍的排题结果就失效了，清掉免得看串；分工草稿同理
   state.team.plan = null;
+  state.team.assignDraft = null;
+  state.team.assignDirty = false;
   renderTeam();
   markViewReady('panel-team');
   if (keepPlan) return;
@@ -2080,6 +2094,9 @@ async function reassignAxes() {
   renderTeam();
   try {
     await postJson(`/api/team/${teamId}/assign`, {});
+    // 机器重算会清掉「手动改过」的标记，草稿也跟着重置
+    state.team.assignDraft = null;
+    state.team.assignDirty = false;
     setStatus('方向已重新分配');
     await loadTeamDetail(teamId, { keepPlan: true });
   } catch (error) {
@@ -2088,6 +2105,62 @@ async function reassignAxes() {
   } finally {
     state.team.busy = false;
     renderTeam();
+  }
+}
+
+/** 保存手动改过的分工。存完服务端会打 custom 标记，自动重算不再覆盖。 */
+async function saveAssignment() {
+  const teamId = state.team.current;
+  const draft = state.team.assignDraft;
+  if (!teamId || !draft) return;
+  const assignments = [];
+  for (const [axis, entry] of Object.entries(draft)) {
+    if (entry.main) assignments.push({ handleKey: entry.main, axis, kind: 'main' });
+    for (const handleKey of entry.sub) assignments.push({ handleKey, axis, kind: 'sub' });
+  }
+  try {
+    await postJson(`/api/team/${teamId}/assign/custom`, { assignments });
+    state.team.assignDirty = false;
+    state.team.plan = null; // 分工变了，旧排题结果作废
+    setStatus('分工已保存，之后不会再被自动重算覆盖');
+    await loadTeamDetail(teamId, { keepPlan: true });
+  } catch (error) {
+    setStatus(`保存失败：${error.message}`);
+  }
+}
+
+/** 设队员的手动实力（相当于 CF 多少分）。空串 = 清除，回到 CF 实分。 */
+async function setMemberStrength(handleKey) {
+  const teamId = state.team.current;
+  if (!teamId) return;
+  const detail = state.team.detail;
+  const member = (detail?.members ?? []).find((m) => m.handleKey === handleKey);
+  const current = member?.strength ? String(member.strength) : '';
+  const value = await askDialog({
+    title: `设定 ${handleKey} 的实力`,
+    hint: member?.ratingSource === 'manual'
+      ? `现在标的是 <b>≈ CF ${member.strength}</b>。填新数字覆盖，留空清除（回到 CF 实分）。`
+      : '不打 CF 的队友在这里标一个「相当于 CF 多少分」（500–4000），排题和知识画像都按它算。CF 上有实分的人不用标。',
+    value: current,
+    placeholder: '例如 1600',
+    confirmText: '保存',
+  });
+  if (value === null) return;
+  const trimmed = value.trim();
+  if (trimmed && (!Number.isFinite(Number(trimmed)) || Number(trimmed) < 500 || Number(trimmed) > 4000)) {
+    setStatus('实力值要是 500 到 4000 之间的数字');
+    return;
+  }
+  try {
+    await postJson(`/api/team/${teamId}/strength`, {
+      handle: handleKey,
+      strength: trimmed === '' ? null : Number(trimmed),
+    });
+    state.team.assignDraft = null; // 实力变了画像会变，草稿重建
+    setStatus(trimmed ? `${handleKey} 的实力已标为 ≈ CF ${trimmed}` : `${handleKey} 的手动实力已清除`);
+    await loadTeamDetail(teamId, { keepPlan: true });
+  } catch (error) {
+    setStatus(`设置失败：${error.message}`);
   }
 }
 
@@ -2253,6 +2326,14 @@ function teamMemberDialog() {
         <input id="tm-luogu" type="text" placeholder="主页地址里的数字，例如 123456" autocomplete="off" />
       </label>
       <label class="team-field">
+        <span>QOJ 用户名 <em>选填</em></span>
+        <input id="tm-qoj" type="text" placeholder="例如 Qingyu（数据要登录，只作链接）" autocomplete="off" />
+      </label>
+      <label class="team-field">
+        <span>手动实力 <em>不打 CF 才填</em></span>
+        <input id="tm-strength" type="text" placeholder="相当于 CF 多少分，例如 1600" autocomplete="off" />
+      </label>
+      <label class="team-field">
         <span>队内角色</span>
         <select id="tm-role">
           <option value="member">队员</option>
@@ -2292,6 +2373,14 @@ async function submitTeamMember(close) {
   }
   const atcoder = $('tm-atcoder').value.trim();
   const luogu = $('tm-luogu').value.trim();
+  const qoj = $('tm-qoj')?.value.trim() ?? '';
+  const strengthRaw = $('tm-strength')?.value.trim() ?? '';
+  if (strengthRaw && (!Number.isFinite(Number(strengthRaw)) || Number(strengthRaw) < 500 || Number(strengthRaw) > 4000)) {
+    $('tm-note').textContent = '手动实力要是 500 到 4000 之间的数字（不打 CF 才填）。';
+    $('tm-strength').focus();
+    return;
+  }
+  const strength = strengthRaw ? Number(strengthRaw) : undefined;
   const role = $('tm-role').value;
 
   const confirm = $('tm-confirm');
@@ -2309,6 +2398,8 @@ async function submitTeamMember(close) {
       role,
       atcoder: atcoder || undefined,
       luogu: luogu || undefined,
+      qoj: qoj || undefined,
+      strength,
     });
     close();
     setStatus(result.message ?? `${handle} 已加入队伍`);
@@ -2419,20 +2510,33 @@ function renderTeam() {
             return `<span class="platform-chip${missing ? ' missing' : ''}" title="${escapeHtml(title)}">${p.label} ${p.count}</span>`;
           })
           .join('');
+        // QOJ 抓不了数据（要登录），绑定了就给个主页链接
+        const qojChip = accounts.qoj
+          ? `<a class="platform-chip qoj" href="https://qoj.ac/user/profile/${encodeURIComponent(accounts.qoj)}"
+              target="_blank" rel="noreferrer" title="QOJ：${escapeHtml(accounts.qoj)}（数据要登录，点开主页自己看）">QOJ ${escapeHtml(accounts.qoj)}</a>`
+          : '';
+        // 手动实力：不打 CF 的队友由教练标「相当于 CF xxx」，排题按它算
+        const strengthChip =
+          m.ratingSource === 'manual'
+            ? `<span class="strength-chip" title="手动标注的实力——不打 CF，排题和画像都按这个分算">≈ CF ${m.rating}</span>`
+            : '';
         const needFix = (counts.atcoder ?? 0) === 0 || (counts.luogu ?? 0) === 0;
         return `<div class="team-member-card">
           <div class="team-member-top">
             <b>${escapeHtml(m.display)}</b>
             <span class="team-role">${roleLabel}</span>
+            <button type="button" class="btn tiny" data-team-strength="${escapeHtml(m.handleKey)}"
+                    title="给不打 CF 的队友标一个「相当于 CF 多少分」">${m.strength != null ? '改实力' : '设实力'}</button>
             <button type="button" class="btn members-remove" data-team-remove="${escapeHtml(m.handleKey)}"
                     ${busy ? 'disabled' : ''}>移出</button>
           </div>
           <div class="team-member-stat">
             ${ratingBadge(m.rating)}
+            ${strengthChip}
             <span>做题 <b>${m.solvedCount}</b></span>
             <span>近 7 天 <b>${m.solvedThisWeek}</b></span>
           </div>
-          <div class="platform-chips">${chips}</div>
+          <div class="platform-chips">${chips}${qojChip}</div>
           <div class="team-member-last">${escapeHtml(last)}</div>
           ${needFix
             ? `<button type="button" class="btn tiny team-resync" data-team-resync="${escapeHtml(m.handleKey)}"
@@ -2447,34 +2551,58 @@ function renderTeam() {
   // ---- 分工矩阵：八个方向 × 谁主攻 ----
   // 用矩阵而不是每人一张卡：分工的意义就是「不重叠」，一眼扫一列就知道
   // 每个方向归谁，比分开看三张卡更容易发现"两个人撞了"。
-  // 数据来源是 detail.assignment（钉住的那份分工），不是 members——
-  // 成员画像里没有"他主攻哪块"，分工是单独一张表。
+  // 现在能直接改：主攻是下拉框，副攻点名字切换；保存后服务端会打上
+  // 「手动改过」的标记，自动重算不再覆盖它。
   if (!members.length) {
     $('team-assignment').innerHTML = '<p class="subtle">先加队员，再分配方向。</p>';
   } else {
-    // 排过题的话用排题返回的那份（可能刚重算过），否则用详情里的
-    const assignList = team.plan?.assignment ?? detail.assignment ?? [];
-    const mainOf = new Map(); // axis -> {handleKey, display}
-    const subOf = new Map(); // axis -> [display]
-    for (const a of assignList) {
-      for (const axis of a.main ?? []) mainOf.set(axis, a);
-      for (const axis of a.sub ?? []) {
-        const list = subOf.get(axis) ?? [];
-        list.push(a.display ?? a.handleKey);
-        subOf.set(axis, list);
+    // 草稿只在第一次（或放弃修改/重算之后）从服务端数据建，改动作改草稿
+    if (!state.team.assignDraft) {
+      const assignList = team.plan?.assignment ?? detail.assignment ?? [];
+      const draft = {};
+      for (const axis of TEAM_AXES) draft[axis] = { main: null, sub: [] };
+      for (const a of assignList) {
+        for (const axis of a.main ?? []) if (draft[axis]) draft[axis].main = a.handleKey;
+        for (const axis of a.sub ?? []) {
+          if (draft[axis] && !draft[axis].sub.includes(a.handleKey)) draft[axis].sub.push(a.handleKey);
+        }
       }
+      state.team.assignDraft = draft;
     }
+    const draft = state.team.assignDraft;
+    const mainOptions = (selected) =>
+      ['<option value="">待分配</option>']
+        .concat(
+          members.map(
+            (m) =>
+              `<option value="${escapeHtml(m.handleKey)}"${selected === m.handleKey ? ' selected' : ''}>${escapeHtml(m.display ?? m.handleKey)}</option>`,
+          ),
+        )
+        .join('');
     $('team-assignment').innerHTML = `<div class="team-matrix">${TEAM_AXES.map((axis) => {
-      const main = mainOf.get(axis);
-      const subs = subOf.get(axis) ?? [];
-      return `<div class="team-axis ${main ? 'has-main' : ''}">
+      const d = draft[axis];
+      const subChips = members
+        .map((m) => {
+          const on = d.sub.includes(m.handleKey);
+          const isMain = d.main === m.handleKey;
+          return `<button type="button" class="axis-chip toggle${on ? ' on' : ''}" data-axis="${escapeHtml(axis)}"
+            data-member="${escapeHtml(m.handleKey)}"${isMain ? ' disabled title="这个人已经是这个方向的主攻"' : ' title="点一下设为副攻 / 再点取消"'}>${escapeHtml(m.display ?? m.handleKey)}</button>`;
+        })
+        .join('');
+      return `<div class="team-axis edit${d.main ? ' has-main' : ''}">
         <span class="team-axis-name">${escapeHtml(axis)}</span>
-        <span class="team-axis-main">${main ? escapeHtml(main.display ?? main.handleKey) : '<span class="subtle">待分配</span>'}</span>
-        ${subs.length ? `<span class="team-axis-sub">副：${subs.map((s) => escapeHtml(s)).join(' ')}</span>` : ''}
+        <select class="team-axis-main-select" data-axis="${escapeHtml(axis)}" aria-label="${escapeHtml(axis)}主攻">${mainOptions(d.main)}</select>
+        <div class="team-axis-subs">${subChips}</div>
       </div>`;
     }).join('')}</div>
-    <p class="hint">点「重新分配方向」会按最新的做题数据重算一遍。想固定下来就保持不动，
-      之后排题一直用这份分工。</p>`;
+    ${state.team.assignDirty
+      ? `<div class="team-assign-actions">
+          <button type="button" class="btn primary" id="team-assign-save">保存分工</button>
+          <button type="button" class="btn" id="team-assign-cancel">放弃修改</button>
+        </div>`
+      : ''}
+    <p class="hint">分工直接在表里改：下拉换主攻，点名字切副攻。改完点「保存分工」，
+      保存后就不会因为加人或重算被自动覆盖；想全盘按数据重算，点右上角「重新分配方向」。</p>`;
   }
 
   // ---- 进度总览 ----
@@ -2681,7 +2809,7 @@ $('team-member-input')?.addEventListener('keydown', (event) => {
 });
 $('team-reassign')?.addEventListener('click', reassignAxes);
 $('team-generate')?.addEventListener('click', generateTeamPlan);
-// 移出队员 / 补抓平台：事件委托，队员卡片是动态渲染的
+// 移出队员 / 补抓平台 / 设实力：事件委托，队员卡片是动态渲染的
 $('team-members')?.addEventListener('click', (event) => {
   const removeButton = event.target.closest('[data-team-remove]');
   if (removeButton) {
@@ -2692,6 +2820,46 @@ $('team-members')?.addEventListener('click', (event) => {
   }
   const resyncButton = event.target.closest('[data-team-resync]');
   if (resyncButton) resyncTeamMember(resyncButton.dataset.teamResync);
+  const strengthButton = event.target.closest('[data-team-strength]');
+  if (strengthButton) setMemberStrength(strengthButton.dataset.teamStrength);
+});
+
+// 分工矩阵的编辑：换主攻（select）、切副攻（chip）、保存 / 放弃
+$('team-assignment')?.addEventListener('change', (event) => {
+  const select = event.target.closest('select[data-axis]');
+  if (!select || !state.team.assignDraft) return;
+  const axis = select.dataset.axis;
+  const handle = select.value || null;
+  const draft = state.team.assignDraft;
+  // 一个人同时主攻两个方向多半是手滑：把他别处的主攻撤掉
+  for (const entry of Object.values(draft)) {
+    if (entry.main && entry.main === handle && entry !== draft[axis]) entry.main = null;
+  }
+  draft[axis].main = handle;
+  // 主攻就不再当同一方向的副攻
+  draft[axis].sub = draft[axis].sub.filter((h) => h !== handle);
+  state.team.assignDirty = true;
+  renderTeam();
+});
+$('team-assignment')?.addEventListener('click', (event) => {
+  const chip = event.target.closest('.axis-chip.toggle[data-axis]');
+  if (chip && !chip.disabled && state.team.assignDraft) {
+    const { axis, member } = chip.dataset;
+    const entry = state.team.assignDraft[axis];
+    if (entry.main === member) return; // 主攻不靠点名字设置
+    entry.sub = entry.sub.includes(member)
+      ? entry.sub.filter((h) => h !== member)
+      : [...entry.sub, member];
+    state.team.assignDirty = true;
+    renderTeam();
+    return;
+  }
+  if (event.target.closest('#team-assign-save')) saveAssignment();
+  if (event.target.closest('#team-assign-cancel')) {
+    state.team.assignDraft = null;
+    state.team.assignDirty = false;
+    renderTeam();
+  }
 });
 
 // ---------- 拼好题：一场 CF + 一场 AtCoder ----------
@@ -3399,6 +3567,96 @@ async function loadCalendar() {
     $('calendar-list').innerHTML = '';
   }
 }
+
+// ---------- VP 查询 ----------
+// 区域赛 VP 链接不好找：QOJ 收得全但站内没有按名字搜的入口，CF 的又散在正式赛和 gym 里。
+// 服务端把 QOJ /contests 和 CF contest.list 爬好、按区域赛关键词筛一遍、缓存 24 小时，
+// 这里只管按名字搜和给链接。
+
+async function loadVp({ refresh = false } = {}) {
+  if (state.vp.loading) return;
+  state.vp.loading = true;
+  state.vp.error = null;
+  renderVp();
+  try {
+    const data = await getJson(`/api/vp/contests${refresh ? '?refresh=1' : ''}`);
+    state.vp.items = data.items ?? [];
+    state.vp.cached = Boolean(data.cached);
+    state.vp.fetchedAt = data.fetchedAt;
+    state.vp.errors = data.errors ?? {};
+  } catch (error) {
+    state.vp.error = error.message;
+  } finally {
+    state.vp.loading = false;
+    renderVp();
+  }
+}
+
+const VP_PLATFORM_LABELS = { qoj: 'QOJ', cf: 'CF' };
+
+function renderVp() {
+  const list = $('vp-list');
+  if (!list) return;
+  markViewReady('panel-vp');
+
+  if (state.vp.loading && !state.vp.items) {
+    list.innerHTML = '<p class="subtle">正在抓 QOJ 和 CF 的区域赛列表，第一次要几秒…</p>';
+    $('vp-summary').textContent = '';
+    return;
+  }
+  if (state.vp.error && !state.vp.items?.length) {
+    list.innerHTML = `<p class="subtle">抓取失败：${escapeHtml(state.vp.error)}。点「刷新列表」重试。</p>`;
+    $('vp-summary').textContent = '';
+    return;
+  }
+
+  const query = state.vp.query.trim().toLowerCase();
+  const items = (state.vp.items ?? []).filter(
+    (item) => !query || item.name.toLowerCase().includes(query),
+  );
+  const when = state.vp.fetchedAt
+    ? `，列表更新于 ${new Date(state.vp.fetchedAt).toLocaleString('zh-CN')}${state.vp.cached ? '（缓存）' : ''}`
+    : '';
+  const allQoj = (state.vp.items ?? []).filter((x) => x.platform === 'qoj').length;
+  const allCf = (state.vp.items ?? []).length - allQoj;
+  $('vp-summary').textContent = state.vp.items?.length
+    ? `共 ${state.vp.items.length} 场（QOJ ${allQoj} + CF ${allCf}），搜到 ${items.length} 场${when}。打 VP 前先把题目集开好：QOJ 进比赛页点题目，CF 直接开比赛链接。`
+    : '没抓到任何比赛。';
+
+  if (state.vp.errors && Object.keys(state.vp.errors).length) {
+    const bad = Object.entries(state.vp.errors)
+      .map(([k, v]) => `${VP_PLATFORM_LABELS[k] ?? k}（${v}）`)
+      .join('、');
+    $('vp-summary').textContent += ` 有源没抓到：${bad}。`;
+  }
+
+  if (!items.length) {
+    list.innerHTML = '<p class="subtle">没有匹配的比赛名。换个关键词试试，比如「Shenyang」「Invitational」。</p>';
+    return;
+  }
+
+  list.innerHTML = items
+    .map((item) => {
+      const label = VP_PLATFORM_LABELS[item.platform] ?? item.platform;
+      const time = item.time
+        ? `${formatLocalDate(item.time)} ${formatLocalTime(item.time)}`
+        : '<span class="subtle">时间未定（VP 库）</span>';
+      return `<div class="contest-row">
+        <div class="contest-when">${time}</div>
+        <div class="contest-name">
+          <span class="contest-source src-${item.platform}">${label}</span>
+          <a href="${item.url}" target="_blank" rel="noreferrer">${escapeHtml(item.name)}</a>
+        </div>
+      </div>`;
+    })
+    .join('');
+}
+
+$('vp-search')?.addEventListener('input', (event) => {
+  state.vp.query = event.target.value ?? '';
+  renderVp();
+});
+$('vp-refresh')?.addEventListener('click', () => loadVp({ refresh: true }));
 
 // 赛程来源的中文名（筛选按钮和每行左边那个小标都用它）
 const SOURCE_LABELS = { cf: 'Codeforces', luogu: '洛谷', atcoder: 'AtCoder', nowcoder: '牛客', leetcode: '力扣' };
@@ -4747,6 +5005,7 @@ const NAV_ICONS = {
   heatmap:
     '<rect x="3.6" y="3.6" width="7" height="7" rx="1.8"/><rect x="13.4" y="3.6" width="7" height="7" rx="1.8"/><rect x="3.6" y="13.4" width="7" height="7" rx="1.8"/><rect x="13.4" y="13.4" width="7" height="7" rx="1.8"/>',
   calendar: '<path d="M6.5 20.8V3.6"/><path d="M6.5 4.4h11.1l-2.1 4.1 2.1 4.1H6.5"/>',
+  vp: '<rect x="3.4" y="5.4" width="17.2" height="11.8" rx="2.2"/><path d="M10.4 8.8v4.4M13.6 8.8 12 11.6l-1.6-2.8M9 17.2l-1.2 3M15 17.2l1.2 3M12 17.2v3.2"/>',
   virtual:
     '<circle cx="12" cy="13.6" r="7.1"/><path d="M12 9.9v3.8l2.4 1.5"/><path d="M9.4 3.3h5.2"/><path d="M12 3.3v3.2"/><path d="M18.9 5.7l1.4-1.4"/>',
   platforms:
@@ -4780,6 +5039,7 @@ const NAV_ITEMS = [
   { id: 'panel-records', label: '做题记录', icon: 'records' },
   { id: 'panel-heatmap', label: '活动记录', icon: 'heatmap' },
   { id: 'panel-calendar', label: '比赛日历', icon: 'calendar', group: '其他' },
+  { id: 'panel-vp', label: 'VP 查询', icon: 'vp' },
   { id: 'panel-virtual', label: '虚拟参赛', icon: 'virtual' },
   { id: 'panel-platforms', label: '平台数据', icon: 'platforms' },
   { id: 'panel-help', label: '帮助', icon: 'help' },
@@ -5163,6 +5423,7 @@ const MODULE_META = [
   { id: 'panel-team', label: '团队训练' },
   { id: 'panel-schedule', label: '训练日程' },
   { id: 'panel-calendar', label: '比赛日历' },
+  { id: 'panel-vp', label: 'VP 查询' },
   { id: 'panel-virtual', label: '虚拟参赛' },
   { id: 'panel-heatmap', label: '活动记录' },
   { id: 'panel-platforms', label: '平台数据' },
@@ -5271,14 +5532,30 @@ const LUOGU_SHORT = {
 
 /** 平台数据面板：每同步一个平台就多一张卡片，洛谷额外画难度分布图。 */
 function renderPlatformCards() {
+  // QOJ 抓不了战绩（用户数据要登录），但绑定了就放一张快捷入口卡片
+  const qojCard = state.bindings?.qoj
+    ? `<div class="platform-card qoj-card">
+        <h4>QOJ</h4>
+        <div class="who">${escapeHtml(state.bindings.qoj)} · 绑定的用户名</div>
+        <div class="platform-stats">
+          <div class="platform-stat"><b>—</b>数据要登录</div>
+        </div>
+        <p class="hint">QOJ 不公开用户统计，点下面的链接去主页看通过数与提交记录。</p>
+        <p><a class="btn tiny" href="https://qoj.ac/user/profile/${encodeURIComponent(state.bindings.qoj)}"
+           target="_blank" rel="noreferrer">打开 QOJ 主页</a></p>
+      </div>`
+    : '';
   if (!state.platforms.length) {
     // 没同步过就别把这个面板摆出来，免得空占一块
     $('platform-charts').innerHTML =
+      qojCard ||
       '<p class="subtle">还没有同步任何平台。到「设置」里填入洛谷或牛客的用户 ID，点同步即可。</p>';
     return;
   }
   markViewReady('panel-platforms');
-  $('platform-charts').innerHTML = state.platforms
+  $('platform-charts').innerHTML =
+    qojCard +
+    state.platforms
     .map((entry) => {
       const keys = [
         ...STAT_ORDER.filter((key) => key in entry.stats),
@@ -5388,6 +5665,32 @@ bindPlatformSync({
   buttonId: 'luogu-sync',
   label: '洛谷',
   settingsKey: 'luoguUid',
+});
+
+// ---------- QOJ 绑定 ----------
+// QOJ 的用户数据（通过数、提交）要登录才能看，抓不了战绩；
+// 绑定一个用户名的意义是「平台数据」里给你一张直达主页的卡片，别每次都搜。
+
+function renderQojHint() {
+  const hint = $('qoj-hint');
+  if (!hint) return;
+  const bound = state.bindings?.qoj;
+  hint.innerHTML = bound
+    ? `已绑定 <b>${escapeHtml(bound)}</b> —— 主页：https://qoj.ac/user/profile/${escapeHtml(bound)}。QOJ 数据要登录，程序抓不了战绩，这张绑定只是个快捷入口。`
+    : 'QOJ 用户名在个人主页地址栏里：qoj.ac/user/profile/<b>用户名</b>。QOJ 的用户数据（通过题数等）要登录才能访问，抓不了——绑定后会在「平台数据」里放一个直达主页的卡片。';
+}
+
+$('qoj-save')?.addEventListener('click', () => {
+  const value = $('qoj-input').value.trim();
+  saveSettings({ qojUid: value });
+  state.bindings = { ...(state.bindings ?? {}), qoj: value || null };
+  renderQojHint();
+  renderPlatformCards();
+  const hint = $('qoj-hint');
+  if (hint) {
+    hint.classList.add('ok');
+    setTimeout(() => hint.classList.remove('ok'), 1500);
+  }
 });
 
 // ---------- 洛谷题库 ----------
@@ -5734,11 +6037,16 @@ async function restoreSession() {
     // ⚠️ 不回退到全局旧值——那是「最后保存的人」的账号，回填等于把别人的账号
     // 展示给当前用户看（多账号串号的根因）。没绑过就显示空，绑一次即可。
     const pBindings = settings.bindings ?? {};
+    state.bindings = pBindings;
     state.nowcoderUid = pBindings.nowcoder ?? null;
     $('nowcoder-input').value = pBindings.nowcoder ?? '';
     $('luogu-input').value = pBindings.luogu ?? '';
     state.atcoderUid = pBindings.atcoder ?? null;
     $('atcoder-input').value = pBindings.atcoder ?? '';
+    if ($('qoj-input')) {
+      $('qoj-input').value = pBindings.qoj ?? '';
+      renderQojHint();
+    }
     state.cfInPlan = settings.cfInPlan !== false;
     $('cf-in-plan').checked = state.cfInPlan;
     state.atcoderInPlan = Boolean(settings.atcoderInPlan);
@@ -5793,6 +6101,8 @@ async function restoreSession() {
   renderOjPie();
   renderCockpitRail();
   loadPlatforms();
+  // VP 查询不依赖账号，后台把缓存好的区域赛列表拉回来（有 24h 缓存，通常秒回）
+  loadVp();
 
   if (!settings?.handle) {
     setStatus('未连接');

@@ -189,6 +189,18 @@
         <div class="contest-list" id="calendar-list"></div>
       </section>
 
+      <section class="panel hidden" id="panel-vp">
+        <div class="panel-head">
+          <h2>VP 查询</h2>
+          <p id="vp-summary"></p>
+        </div>
+        <div class="review-toolbar">
+          <input id="vp-search" type="text" placeholder="搜比赛名，比如 沈阳、Shenyang、Regional、CCPC" autocomplete="off" />
+          <button type="button" class="btn" id="vp-refresh">刷新列表</button>
+        </div>
+        <div class="contest-list" id="vp-list"></div>
+      </section>
+
       <section class="panel hidden" id="panel-virtual">
         <div class="panel-head">
           <h2>虚拟参赛</h2>
@@ -951,6 +963,20 @@
           牛客 ID 在个人主页地址栏里：ac.nowcoder.com/acm/contest/profile/<b>数字</b>
         </p>
         <p class="hint">同步完成后，图表会显示在「平台数据」里。</p>
+
+        <h4 class="settings-sub">QOJ</h4>
+        <div class="platform-row">
+          <div class="sched-field">
+            <label for="qoj-input">QOJ 用户名</label>
+            <input id="qoj-input" type="text" placeholder="例如 Qingyu" autocomplete="off" />
+          </div>
+          <button class="btn" id="qoj-save">保存绑定</button>
+        </div>
+        <p class="hint" id="qoj-hint">
+          QOJ 用户名在个人主页地址栏里：qoj.ac/user/profile/<b>用户名</b>。
+          QOJ 的用户数据（通过题数等）要登录才能访问，抓不了——绑定后会在「平台数据」里
+          放一个直达主页的卡片，点开自己看。
+        </p>
 
         <h4 class="settings-sub">洛谷</h4>
         <p class="subtle">

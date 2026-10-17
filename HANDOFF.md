@@ -568,6 +568,20 @@ collectMakeupFromSchedule()`，页面在 `#panel-makeup`，样式在 `public/sty
       升级时的主账号名下，幂等；
     · 回归：`.dev/test-platform-bindings.mjs`（8 项，模拟「切队员绑号再切回来」全流程）。
 
+39. **QOJ 得靠 curl 兜底，CF API 直连就行**（v1.0.16，VP 查询）。qoj.ac 挂着 Cloudflare，
+    **拦的是 TLS 指纹不是请求头**——Node fetch 换什么浏览器 UA / sec-ch-ua 都是 403，
+    系统 curl 一次就过。所以 `lib/vp.js` 里 fetch 撞 403 时降级 `spawnSync('curl', ...)`。
+    curl 的坑：必须 `--noproxy '*'`（本机 http_proxy 会把 127.0.0.1 之外全导进代理）。
+    另外 QOJ 的**用户数据（通过数/提交列表）要登录**，匿名只能看 /contests 和题库——
+    所以「平台数据」里 QOJ 只做账号绑定 + 主页卡片，不做战绩同步，别试着抓。
+    CF 侧 gym 要登录，VP 列表用的是公开的 `contest.list?gym=false`（很多区域赛是正式赛）。
+
+40. **`/api/team/:id/assign/custom` 和 `/api/team/:id/assign` 的 sub 都是 'assign'**——
+    路由解析只取路径第二段（`rest.split('/')[1]`），第三段要自己看 `rest.split('/')[2]`，
+    而且 **custom 分支必须写在重算分支前面**，否则被重算抢先匹配，手动保存会变成
+    「机器重算 + 清自定义标记」（回归当场抓到过）。空提交（过滤后 0 条）要 400 拒绝，
+    不能落库——`saveTeamAssignments` 是先 DELETE 再插，空数组会把教练手排的方案全清掉。
+
 ## 已经做过的事（按版本）
 
 - **0.1.5–0.1.6**：左侧菜单分页布局、今日任务卡片（做题手感 / 赛前热身 / 复盘卡 / 补一个方向）、

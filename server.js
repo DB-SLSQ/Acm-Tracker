@@ -21,7 +21,7 @@ import {
   rankFocusTags,
   toClientProblem,
 } from './lib/plan.js';
-import { buildKnowledgeProfile, buildTagProfile, isNoiseTag, knowledgeAxis } from './lib/knowledge.js';
+import { buildKnowledgeProfile, buildTagProfile, isNoiseTag, knowledgeAxis, KNOWLEDGE_AXES } from './lib/knowledge.js';
 import {
   analyzeVirtualSession,
   divisionFit,
@@ -30,6 +30,7 @@ import {
 } from './lib/contests.js';
 import { fetchLuogu, fetchLuoguText, fetchNowcoder, PlatformError } from './lib/platforms.js';
 import { fetchStatement } from './lib/statement.js';
+import { getVpList } from './lib/vp.js';
 import { AiError, DEFAULT_AI_BASE_URL, DEFAULT_AI_MODEL, generateSolution } from './lib/ai.js';
 import {
   AtcoderError,
@@ -2307,8 +2308,11 @@ function teamMembersWithProfiles(teamId, settings) {
         solvedAt: entry.at,
       });
     }
-    const floor = user?.rating
-      ? Math.max(0, user.rating - (Number.isFinite(settings.floorGap) ? settings.floorGap : 400))
+    // 有效实力：手动标的「相当于 CF xxx」优先——不打 CF 的队友没有实分，
+    // 教练标多少就是多少；没标才退回 CF 实分。
+    const effRating = member.strength ?? user?.rating ?? null;
+    const floor = effRating
+      ? Math.max(0, effRating - (Number.isFinite(settings.floorGap) ? settings.floorGap : 400))
       : 0;
     const tagProfile = buildTagProfile(solvedProblems, { floor });
     const profile = buildKnowledgeProfile(solvedProblems, tagProfile, { floor });
@@ -2316,13 +2320,20 @@ function teamMembersWithProfiles(teamId, settings) {
       handleKey: member.handleKey,
       display: user?.displayHandle || member.handleKey,
       role: member.role,
-      rating: user?.rating ?? null,
+      rating: effRating,
+      // 分是手动标的还是 CF 实分：界面上「≈CF 1600」和实分要区分开
+      ratingSource: member.strength != null ? 'manual' : user?.rating != null ? 'codeforces' : null,
+      strength: member.strength ?? null,
       maxRating: user?.maxRating ?? null,
       solvedCount: solved.size,
       // 各平台各自统计了多少题。前端拿它标「这个人还缺哪个平台」——
       // 缺平台会让知识画像偏窄（只有 CF 的题），分方向时会把人看扁。
       platforms: memberPlatformCounts(member.handleKey),
-      accounts: { atcoder: member.atcoderAccount, luogu: member.luoguAccount },
+      accounts: {
+        atcoder: member.atcoderAccount,
+        luogu: member.luoguAccount,
+        qoj: member.qojAccount,
+      },
       profile: profile.map((entry) => ({
         axis: entry.axis,
         count: entry.count,
@@ -2429,6 +2440,8 @@ async function handleTeamOverview(teamId, settings) {
       display: member.display,
       role: member.role,
       rating: member.rating,
+      ratingSource: member.ratingSource,
+      strength: member.strength,
       maxRating: member.maxRating,
       solvedCount: member.solvedCount,
       solvedThisWeek: recent,
@@ -2479,8 +2492,12 @@ function ensureAssignmentView(teamId, members) {
     saved.length > 0 && list.every((m) => saved.some((s) => s.handleKey === m.handleKey));
   const stale = saved.some((s) => !memberKeys.has(s.handleKey));
 
+  // 教练手动改过分工（custom 标记）就不再自动重算——辛苦排好的方案
+  // 不能因为加了个新队员就被机器偷偷洗掉；没分到的人界面会显示「待分配」。
+  const custom = Boolean(db.metaGet(`team_assign_custom:${teamId}`));
+
   let assignment = saved;
-  if (!covered || stale) {
+  if (!custom && (!covered || stale)) {
     const allocation = assignAxes(list);
     assignment = allocation.byMember.flatMap((m) => [
       ...m.main.map((axis) => ({ handleKey: m.handleKey, axis, kind: 'main' })),
@@ -2607,6 +2624,16 @@ async function route(req, res, url) {
     });
   }
 
+  // VP 查询：QOJ + CF 的区域赛比赛列表（带 24h 缓存，refresh=1 强制重抓）
+  if (pathname === '/api/vp/contests' && req.method === 'GET') {
+    try {
+      const result = await getVpList(db, { refresh: url.searchParams.get('refresh') === '1' });
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendError(res, 502, `VP 列表抓取失败：${error.message}`);
+    }
+  }
+
   if (pathname === '/api/settings' && req.method === 'POST') {
     try {
       const body = await readJsonBody(req);
@@ -2677,6 +2704,10 @@ async function route(req, res, url) {
           }
           if (body.nowcoderUid !== undefined) {
             db.setPlatformBinding(bindingHandle, 'nowcoder', String(body.nowcoderUid).trim());
+          }
+          // QOJ 只存绑定：用户数据要登录才抓得到，绑定后界面给主页链接
+          if (body.qojUid !== undefined) {
+            db.setPlatformBinding(bindingHandle, 'qoj', String(body.qojUid).trim());
           }
         }
       }
@@ -3454,10 +3485,20 @@ async function route(req, res, url) {
         if (!handleKey) return sendError(res, 400, '请填写成员账号');
         const atcoderAccount = String(body?.atcoder ?? '').trim() || null;
         const luoguAccount = String(body?.luogu ?? '').trim() || null;
+        const qojAccount = String(body?.qoj ?? '').trim() || null;
+        const strength =
+          body?.strength === undefined || body?.strength === null || body?.strength === ''
+            ? null
+            : Number(body.strength);
 
         // 先把人记进队伍，再抓数据：抓取可能要十几秒（洛谷练习页 + AtCoder 提交记录），
         // 中途出错也不该让「加人」这件事整个失败——人先在里面，缺的平台按提示补。
-        db.addTeamMember(teamId, handleKey, body?.role, { atcoderAccount, luoguAccount });
+        db.addTeamMember(teamId, handleKey, body?.role, {
+          atcoderAccount,
+          luoguAccount,
+          qojAccount,
+          strength,
+        });
 
         const sync = await syncMemberPlatforms(handleKey, { atcoderAccount, luoguAccount });
         const member = db.listTeamMembers(teamId).find((item) => item.handleKey === handleKey) ?? null;
@@ -3510,12 +3551,47 @@ async function route(req, res, url) {
       }
     }
 
-    // 重算分工（成员或数据变了之后手动触发）
+    // 手动保存分工：矩阵上改完「谁主攻 / 谁辅助」，整份提交。
+    // 存完打上 custom 标记，之后的自动重算（成员变化、看总览）都不再动它。
+    // 路径是 /api/team/:id/assign/custom，sub 只截到 'assign'，所以这里看第三段。
+    // ⚠️ 必须放在重算分支前面：sub 都是 'assign'，顺序错了会被重算抢先匹配。
+    if (sub === 'assign' && rest.split('/')[2] === 'custom' && req.method === 'POST') {
+      if (!db.getTeam(teamId)) return sendError(res, 404, '队伍不存在');
+      const body = await readJsonBody(req);
+      const members = db.listTeamMembers(teamId);
+      const memberKeys = new Set(members.map((m) => m.handleKey));
+      const axes = new Set(KNOWLEDGE_AXES);
+      const kindOf = { main: 'main', sub: 'sub' };
+      const seen = new Set();
+      const rows = [];
+      for (const item of Array.isArray(body?.assignments) ? body.assignments : []) {
+        const handleKey = db.normalizeHandle(item?.handleKey);
+        const axis = String(item?.axis ?? '').trim();
+        const kind = kindOf[item?.kind];
+        if (!handleKey || !memberKeys.has(handleKey) || !axes.has(axis) || !kind) continue;
+        const dedupe = `${handleKey}\u0000${axis}`;
+        if (seen.has(dedupe)) continue;
+        seen.add(dedupe);
+        rows.push({ handleKey, axis, kind });
+      }
+      // 一条有效行都没有：多半是客户端传错了。直接拒绝，别把原有的分工清空——
+      // 教练精心排的方案不能被一次空提交洗掉。
+      if (!rows.length) {
+        return sendError(res, 400, '没有一条有效的分工（成员、方向、主/副都校验不过），什么都不改');
+      }
+      db.saveTeamAssignments(teamId, rows);
+      db.metaSet(`team_assign_custom:${teamId}`, '1');
+      return sendJson(res, 200, { saved: rows.length, custom: true });
+    }
+
+    // 重算分工（成员或数据变了之后手动触发）。会清掉「手动改过」的标记，
+    // 让机器重新算——和上面的手动保存是一对。
     if (sub === 'assign' && req.method === 'POST') {
       const settings = readSettings();
       const members = teamMembersWithProfiles(teamId, settings);
       if (!db.getTeam(teamId)) return sendError(res, 404, '队伍不存在');
       if (!members.length) return sendError(res, 400, '队伍里还没有成员');
+      db.metaDelete(`team_assign_custom:${teamId}`);
       const allocation = assignAxes(members);
       db.saveTeamAssignments(
         teamId,
@@ -3530,6 +3606,21 @@ async function route(req, res, url) {
           display: members.find((x) => x.handleKey === m.handleKey)?.display ?? m.handleKey,
         })),
       });
+    }
+
+    // 设一个队员的手动实力（相当于 CF rating）。给不打 CF 的队友定强度用。
+    if (sub === 'strength' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body?.handle);
+      if (!handleKey) return sendError(res, 400, '缺少成员 handle');
+      try {
+        const ok = db.setTeamMemberStrength(teamId, handleKey, body?.strength ?? null);
+        if (!ok) return sendError(res, 404, '该成员不在队伍里');
+      } catch (error) {
+        return sendError(res, 400, error.message);
+      }
+      const member = db.listTeamMembers(teamId).find((item) => item.handleKey === handleKey);
+      return sendJson(res, 200, { member });
     }
 
     if (sub === 'plan' && req.method === 'GET') {

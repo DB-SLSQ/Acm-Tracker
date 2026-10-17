@@ -4808,3 +4808,100 @@ html[data-side-wide='1'] .side-item .lbl {
   padding: 12px 22px 18px;
   border-top: 1px solid var(--border);
 }
+
+/* ============ v1.0.16：VP 查询 / 分工编辑 / 手动实力 / QOJ ============ */
+
+/* VP 查询：搜索框宽度跟日历筛选那排一致，徽章给 QOJ 一个颜色 */
+#vp-search {
+  flex: 1;
+  max-width: 420px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  color: var(--text);
+}
+
+.contest-source.src-qoj {
+  background: color-mix(in srgb, #0e8a75 22%, transparent);
+  color: #29c2a5;
+}
+
+/* 分工矩阵编辑版：主攻下拉 + 副攻点选 */
+.team-axis.edit {
+  grid-template-columns: 110px 180px 1fr;
+}
+
+.team-axis-main-select {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12.5px;
+  max-width: 160px;
+}
+
+.team-axis-subs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.axis-chip.toggle {
+  cursor: pointer;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
+.axis-chip.toggle.on {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.axis-chip.toggle:disabled {
+  cursor: not-allowed;
+  border-style: solid;
+  border-color: var(--border);
+  color: var(--text-faint);
+  opacity: 0.75;
+}
+
+.team-assign-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* 手动实力徽章：和 CF 实分区分开 */
+.strength-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, #d98600 60%, transparent);
+  color: #d98600;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* QOJ 徽章是链接，hover 给一点反馈 */
+a.platform-chip.qoj {
+  text-decoration: none;
+  border-color: color-mix(in srgb, #0e8a75 55%, transparent);
+  color: #29c2a5;
+}
+
+a.platform-chip.qoj:hover {
+  background: color-mix(in srgb, #0e8a75 16%, transparent);
+}
+
+/* 平台数据页的 QOJ 快捷入口卡片 */
+.platform-card.qoj-card .btn.tiny {
+  margin-top: 0;
+}
