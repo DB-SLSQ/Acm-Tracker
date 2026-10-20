@@ -5289,6 +5289,8 @@ function todaySnapshot() {
     startDate: state.planStart ?? now,
     today: now,
     doneKeys: state.done,
+    // 用日历那条带钉子的时间线：保证今日卡片和赛程日历看到的是同一份「今天」
+    timeline: state.schedule,
   });
 }
 
@@ -6337,7 +6339,7 @@ async function checkReminder() {
   const todayKey = dateKey(now);
   if (state.remindLast === todayKey) return;
 
-  // 今天还剩几题：直接用「今天」卡片那套算法，免得两处口径不一样
+  // 今天还剩几题：直接复用日历那条带钉子的时间线，免得两处口径不一样
   const overview = todayOverview({
     problems: state.planProblems,
     weekly: state.weekly,
@@ -6346,6 +6348,7 @@ async function checkReminder() {
     startDate: state.planStart ?? now,
     today: now,
     doneKeys: state.done,
+    timeline: state.schedule,
   });
   const remaining = overview.todayProblems.filter(
     (problem) => !state.done.has(`${problem.contestId}-${problem.index}`),

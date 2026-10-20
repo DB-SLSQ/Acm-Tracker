@@ -346,26 +346,30 @@ export function todayOverview({
   startDate = new Date(),
   today = new Date(),
   doneKeys = new Set(),
+  // 直接传 layoutWithPins 的结果（带钉子的那条时间线）。不传才自己 buildSchedule。
+  // 必须传：日历显示的是「钉住的历史 + 从最后一个钉子接着铺」，
+  // 卡片要是自己从计划第一天重排，中间有过换题/改设置/补打休息日，两边今天就会岔开。
+  timeline = null,
 } = {}) {
   const keyOf = (problem) => `${problem.contestId}-${problem.index}`;
-  const timeline = buildSchedule({ problems, weekly, restDays, dayOff, startDate });
+  const tl = timeline ?? buildSchedule({ problems, weekly, restDays, dayOff, startDate });
   const todayKey = dateKey(today);
-  const todayDay = timeline.byDate.get(todayKey) ?? null;
+  const todayDay = tl.byDate.get(todayKey) ?? null;
   const todayProblems = todayDay?.problems ?? [];
 
   // 今天之前该做完的题（今天这一天的量不算进来，不然每天开局就落后）
   let dueCount = 0;
-  for (const day of timeline.days) {
+  for (const day of tl.days) {
     if (day.date >= todayKey) break;
     dueCount += day.problems.length;
   }
   const doneCount = problems.filter((problem) => doneKeys.has(keyOf(problem))).length;
-  const perDay = timeline.perActiveDay || Math.max(1, weekly / 7);
-  const nextDay = timeline.days.find((day) => day.date > todayKey) ?? null;
+  const perDay = tl.perActiveDay || Math.max(1, weekly / 7);
+  const nextDay = tl.days.find((day) => day.date > todayKey) ?? null;
 
   return {
-    startDate: timeline.startDate,
-    endDate: timeline.endDate,
+    startDate: tl.startDate,
+    endDate: tl.endDate,
     todayKey,
     todayProblems,
     todayDone: todayProblems.filter((problem) => doneKeys.has(keyOf(problem))).length,
@@ -376,12 +380,12 @@ export function todayOverview({
     behindDays: perDay > 0 ? (dueCount - doneCount) / perDay : 0,
     perDay,
     // 距计划原定的结束日还有几个日历天
-    daysLeft: Math.round((parseDateKey(timeline.endDate) - startOfDay(today)) / 86400000),
-    restDay: timeline.restDates.find((item) => item.date === todayKey) ?? null,
+    daysLeft: Math.round((parseDateKey(tl.endDate) - startOfDay(today)) / 86400000),
+    restDay: tl.restDates.find((item) => item.date === todayKey) ?? null,
     nextDay,
     inRange:
       problems.length > 0 &&
-      (Boolean(todayDay) || timeline.restDates.some((item) => item.date === todayKey)),
+      (Boolean(todayDay) || tl.restDates.some((item) => item.date === todayKey)),
   };
 }
 
