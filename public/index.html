@@ -201,6 +201,37 @@
         <div class="contest-list" id="vp-list"></div>
       </section>
 
+      <section class="panel hidden" id="panel-prep">
+        <div class="panel-head">
+          <h2>区域赛备赛</h2>
+          <p id="prep-summary">加上要打的比赛（可以加好几场），让 AI 按日子排一份备赛计划。</p>
+        </div>
+
+        <div class="prep-add">
+          <div class="prep-add-row">
+            <input id="prep-name" type="text" placeholder="比赛名，例如 ICPC 2026 上海站" autocomplete="off" />
+            <input id="prep-date" type="date" />
+            <button type="button" class="btn primary" id="prep-add">加上</button>
+            <button type="button" class="btn" id="prep-import">从 VP 列表挑</button>
+          </div>
+          <div id="prep-pick-wrap" class="hidden">
+            <select id="prep-pick"><option value="">从最近的区域赛里选一场…</option></select>
+          </div>
+          <p class="hint">
+            比赛按日期排，AI 会按「离哪场最近」分段：先补弱项，赛前一周自动减量。
+          </p>
+        </div>
+
+        <div id="prep-contests" class="prep-contests"></div>
+
+        <div class="prep-ai-bar">
+          <button type="button" class="btn primary" id="prep-ai">AI 定制训练计划</button>
+          <span class="hint" id="prep-ai-hint"></span>
+        </div>
+
+        <div id="prep-plan"></div>
+      </section>
+
       <section class="panel hidden" id="panel-virtual">
         <div class="panel-head">
           <h2>虚拟参赛</h2>

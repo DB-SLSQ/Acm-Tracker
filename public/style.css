@@ -4905,3 +4905,234 @@ a.platform-chip.qoj:hover {
 .platform-card.qoj-card .btn.tiny {
   margin-top: 0;
 }
+
+/* ============ 区域赛备赛（v1.0.18） ============ */
+
+.prep-add {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-soft);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+
+.prep-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.prep-add-row input[type='text'] {
+  flex: 1 1 320px;
+  min-width: 220px;
+}
+
+.prep-add-row input[type='date'] {
+  flex: 0 0 170px;
+}
+
+#prep-pick-wrap {
+  margin-top: 10px;
+}
+
+#prep-pick {
+  width: 100%;
+  max-width: 640px;
+}
+
+.prep-contests {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.prep-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-raise);
+}
+
+.prep-row.soon {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, var(--bg-raise));
+}
+
+.prep-row.past {
+  opacity: 0.55;
+}
+
+.prep-row-main {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.prep-date {
+  font-family: 'Consolas', monospace;
+  font-size: 13px;
+  color: var(--text-dim);
+  flex: none;
+}
+
+.prep-name {
+  font-size: 14.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prep-days {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  flex: none;
+}
+
+.prep-days.hot {
+  color: var(--warn-text);
+  font-weight: 600;
+}
+
+.prep-del {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.prep-ai-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.prep-ai-bar .hint {
+  margin: 0;
+}
+
+.prep-plan-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.prep-plan-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.prep-plan-head .btn {
+  margin-left: auto;
+}
+
+.prep-overview {
+  margin: 0 0 14px;
+  color: var(--accent-text);
+  font-size: 14px;
+}
+
+.prep-phases {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.prep-phase {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  background: var(--card-gradient);
+  padding: 12px 16px;
+}
+
+.prep-phase-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 14px;
+}
+
+.prep-phase-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 12px;
+  flex: none;
+}
+
+.prep-phase-when {
+  font-family: 'Consolas', monospace;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.prep-weekly {
+  margin-left: auto;
+  font-size: 12.5px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.prep-target {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.prep-focus {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.prep-chip {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  background: var(--bg-raise);
+}
+
+.prep-note {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.prep-tips {
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.prep-tips b {
+  color: var(--text);
+  font-size: 13.5px;
+}
+
+.prep-tips ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  line-height: 1.7;
+}

@@ -31,7 +31,7 @@ import {
 import { fetchLuogu, fetchLuoguText, fetchNowcoder, PlatformError } from './lib/platforms.js';
 import { fetchStatement } from './lib/statement.js';
 import { getVpList } from './lib/vp.js';
-import { AiError, DEFAULT_AI_BASE_URL, DEFAULT_AI_MODEL, generateSolution } from './lib/ai.js';
+import { AiError, DEFAULT_AI_BASE_URL, DEFAULT_AI_MODEL, generatePrepPlan, generateSolution } from './lib/ai.js';
 import {
   AtcoderError,
   fetchCatalog as fetchAtcoderCatalog,
@@ -381,6 +381,89 @@ function readAiConfig() {
     apiKey: raw.ai_api_key || '',
     model: raw.ai_model || DEFAULT_AI_MODEL,
     lang: raw.ai_lang === 'python' ? 'python' : 'cpp',
+  };
+}
+
+// ---------- 区域赛备赛 ----------
+// 比赛清单和 AI 方案都按账号存（meta 键带 handle 后缀），切账号互不干扰。
+const PREP_CONTESTS_KEY = (handleKey) => `prep_contests:${handleKey}`;
+const PREP_PLAN_KEY = (handleKey) => `prep_plan:${handleKey}`;
+const PREP_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 洗一遍比赛清单：名字必须有、日期必须合法、同名同日去重、按日期排序。 */
+function normalizePrepContests(raw) {
+  if (!Array.isArray(raw)) throw new Error('contests 需要是数组');
+  const out = [];
+  const seen = new Set();
+  for (const item of raw.slice(0, 30)) {
+    const name = String(item?.name ?? '').trim().slice(0, 80);
+    const date = String(item?.date ?? '').trim();
+    if (!name) continue;
+    if (!PREP_DATE_RE.test(date)) throw new Error(`「${name}」的日期格式不对，要 YYYY-MM-DD`);
+    const key = `${date}|${name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      name,
+      date,
+      note: String(item?.note ?? '').trim().slice(0, 60),
+      url: String(item?.url ?? '').trim().slice(0, 300),
+    });
+  }
+  out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return out;
+}
+
+function readPrepContests(handleKey) {
+  try {
+    const raw = db.metaGet(PREP_CONTESTS_KEY(handleKey));
+    return raw ? normalizePrepContests(JSON.parse(raw)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function readPrepPlan(handleKey) {
+  try {
+    const raw = db.metaGet(PREP_PLAN_KEY(handleKey));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 给 AI 的选手画像：分数、刷题量、近 30 天通过数，以及「做过但没 AC」的题里
+ * 出现最多的专题（这就是弱项）。只喂这几项，别把提交记录整份塞进提示词。
+ */
+function buildPrepProfile(handleKey) {
+  const user = db.getUser(handleKey);
+  const submissions = db.getSubmissions(handleKey);
+  const { solved, attempted } = deriveProgress(submissions);
+  const byKey = new Map(allProblems().map((p) => [problemKey(p.contestId, p.index), p]));
+  const tagCount = new Map();
+  for (const key of attempted.keys()) {
+    const problem = byKey.get(key);
+    if (!problem || !Array.isArray(problem.tags)) continue;
+    for (const tag of problem.tags) {
+      if (isNoiseTag(tag)) continue;
+      tagCount.set(tag, (tagCount.get(tag) ?? 0) + 1);
+    }
+  }
+  const weakTags = [...tagCount.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([tag]) => tag);
+  const monthAgo = Math.floor(Date.now() / 1000) - 30 * 86400;
+  let recentSolved = 0;
+  for (const entry of solved.values()) {
+    if ((entry.at ?? 0) >= monthAgo) recentSolved += 1;
+  }
+  return {
+    rating: user?.rating && user.rating > 0 ? user.rating : null,
+    solvedCount: solved.size,
+    recentSolved,
+    weakTags,
   };
 }
 
@@ -2631,6 +2714,57 @@ async function route(req, res, url) {
       return sendJson(res, 200, result);
     } catch (error) {
       return sendError(res, 502, `VP 列表抓取失败：${error.message}`);
+    }
+  }
+
+  // ---------- 区域赛备赛 ----------
+  if (pathname === '/api/prep' && req.method === 'GET') {
+    const handleKey = db.normalizeHandle(url.searchParams.get('handle') ?? '');
+    if (!handleKey) return sendError(res, 400, '缺少 handle');
+    const settings = db.getSettings();
+    return sendJson(res, 200, {
+      contests: readPrepContests(handleKey),
+      plan: readPrepPlan(handleKey),
+      aiKeySet: Boolean(settings.ai_api_key),
+    });
+  }
+
+  if (pathname === '/api/prep/contests' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle ?? '');
+      if (!handleKey) return sendError(res, 400, '缺少 handle');
+      const list = normalizePrepContests(body.contests);
+      db.metaSet(PREP_CONTESTS_KEY(handleKey), JSON.stringify(list));
+      // 比赛清单变了，旧方案就过期了；留着让界面提示「方案是按旧日期生成的」
+      return sendJson(res, 200, { contests: list });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  if (pathname === '/api/prep/plan' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle ?? '');
+      if (!handleKey) return sendError(res, 400, '缺少 handle');
+      const contests = readPrepContests(handleKey);
+      if (!contests.length) return sendError(res, 400, '先加上至少一场区域赛（名字 + 日期），再生成计划');
+      const today = new Date().toLocaleDateString('sv-SE');
+      const upcoming = contests.filter((contest) => contest.date >= today);
+      if (!upcoming.length) return sendError(res, 400, '加的比赛都已经过去了，把日期改成未来的再生成');
+      const plan = await generatePrepPlan({
+        contests: upcoming,
+        profile: buildPrepProfile(handleKey),
+        today,
+        config: readAiConfig(),
+      });
+      const record = { ...plan, generatedAt: Date.now(), contestDates: upcoming.map((c) => c.date) };
+      db.metaSet(PREP_PLAN_KEY(handleKey), JSON.stringify(record));
+      return sendJson(res, 200, { plan: record });
+    } catch (error) {
+      if (error instanceof AiError) return sendError(res, 400, error.message);
+      return sendError(res, 500, error.message);
     }
   }
 

@@ -142,6 +142,15 @@ const state = {
     fetchedAt: null,
     query: '',
   },
+  // 区域赛备赛：比赛清单 + AI 给的方案（都按账号存在服务端）
+  prep: {
+    loaded: false,
+    contests: [],
+    plan: null,
+    aiKeySet: false,
+    error: null,
+    busy: false,
+  },
 };
 
 const THEME_LABELS = { dark: '暗色', light: '亮色', gray: '灰色', eye: '护眼' };
@@ -549,6 +558,10 @@ async function loadUser(force = false) {
 
   state.handle = handle;
   saveSettings({ handle });
+  // 比赛清单和备赛方案是按账号存的，换号之后下次进备赛页要重新拉
+  state.prep.loaded = false;
+  state.prep.contests = [];
+  state.prep.plan = null;
   // 已经生成过的题解一次性拉回来（题号 → 题解），题单里直接显示「看题解」。
   // ⚠️ 必须挂在 state.handle 赋值之后：loadSolutions() 拿不到 handle 就直接 return 了，
   // 早于这里调用等于白跑一遍，界面会永远以为「没生成过」，点一次就重复生成一次。
@@ -3658,6 +3671,275 @@ $('vp-search')?.addEventListener('input', (event) => {
 });
 $('vp-refresh')?.addEventListener('click', () => loadVp({ refresh: true }));
 
+// ---------- 区域赛备赛 ----------
+// 比赛清单和 AI 方案都存在服务端（按账号分），这里只管增删和渲染。
+// 比赛日期是「备赛终点」：AI 按离哪场最近来分段，赛前一周减量。
+
+async function loadPrep() {
+  if (!state.handle) {
+    state.prep.loaded = true;
+    renderPrep();
+    return;
+  }
+  try {
+    const data = await getJson(`/api/prep?handle=${encodeURIComponent(state.handle)}`);
+    state.prep.contests = data.contests ?? [];
+    state.prep.plan = data.plan ?? null;
+    state.prep.aiKeySet = Boolean(data.aiKeySet);
+    state.prep.error = null;
+  } catch (error) {
+    state.prep.error = error.message;
+  } finally {
+    state.prep.loaded = true;
+    renderPrep();
+  }
+}
+
+/** 离比赛还有几天（按日历天算，今天=0，昨天=-1）。 */
+function prepDaysLeft(date) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(target.getTime())) return null;
+  return Math.round((target - start) / 86400000);
+}
+
+function prepCountdownText(days) {
+  if (days == null) return '';
+  if (days < 0) return '已结束';
+  if (days === 0) return '就是今天';
+  return `还有 ${days} 天`;
+}
+
+async function savePrepContests(next) {
+  const data = await postJson('/api/prep/contests', { handle: state.handle, contests: next });
+  state.prep.contests = data.contests ?? next;
+  state.prep.error = null;
+  renderPrep();
+}
+
+function renderPrep() {
+  const box = $('prep-contests');
+  if (!box) return;
+  markViewReady('panel-prep');
+
+  const contests = state.prep.contests ?? [];
+  const upcoming = contests.filter((item) => (prepDaysLeft(item.date) ?? -1) >= 0);
+  const nearest = upcoming[0] ?? null;
+
+  if ($('prep-summary')) {
+    if (!state.handle) {
+      $('prep-summary').textContent = '先在上面填 Codeforces 用户名，比赛清单跟着账号走。';
+    } else if (!contests.length) {
+      $('prep-summary').textContent = '还没加比赛。加一场或多场区域赛，AI 会按日期排备赛计划。';
+    } else {
+      $('prep-summary').textContent = nearest
+        ? `共 ${contests.length} 场，最近一场「${nearest.name}」${prepCountdownText(prepDaysLeft(nearest.date))}。`
+        : `共 ${contests.length} 场，都已经结束了。`;
+    }
+  }
+
+  if (!contests.length) {
+    box.innerHTML = '<p class="subtle">还没有比赛。上面加一场，或者点「从 VP 列表挑」从抓到的区域赛里选。</p>';
+  } else {
+    box.innerHTML = contests
+      .map((contest, index) => {
+        const days = prepDaysLeft(contest.date);
+        const past = days != null && days < 0;
+        const soon = days != null && days >= 0 && days <= 7;
+        const cls = past ? ' past' : soon ? ' soon' : '';
+        return `<div class="prep-row${cls}">
+          <div class="prep-row-main">
+            <span class="prep-date">${escapeHtml(contest.date)}</span>
+            <span class="prep-name">${escapeHtml(contest.name)}</span>
+            ${contest.note ? `<span class="subtle">${escapeHtml(contest.note)}</span>` : ''}
+          </div>
+          <span class="prep-days${soon ? ' hot' : ''}">${prepCountdownText(days)}</span>
+          <button type="button" class="btn prep-del" data-prep-remove="${index}" title="删掉这场">删</button>
+        </div>`;
+      })
+      .join('');
+  }
+
+  // AI 按钮的可用状态和提示
+  const button = $('prep-ai');
+  const hint = $('prep-ai-hint');
+  if (button && hint) {
+    const blocked = !state.handle || state.prep.busy || !upcoming.length || !state.prep.aiKeySet;
+    button.disabled = blocked;
+    if (state.prep.busy) {
+      hint.textContent = '模型正在排计划，一般半分钟以内…';
+    } else if (!state.handle) {
+      hint.textContent = '先填 Codeforces 用户名。';
+    } else if (!upcoming.length) {
+      hint.textContent = '先加至少一场未来的比赛。';
+    } else if (!state.prep.aiKeySet) {
+      hint.textContent = '还没配 AI Key：去「设置 → AI 题解」填一个，这里就能用同一份配置。';
+    } else if (state.prep.error) {
+      hint.textContent = state.prep.error;
+      hint.classList.add('error');
+    } else {
+      hint.textContent = '用的是「设置 → AI 题解」里那份配置。';
+      hint.classList.remove('error');
+    }
+  }
+
+  renderPrepPlan();
+}
+
+function renderPrepPlan() {
+  const box = $('prep-plan');
+  if (!box) return;
+  const plan = state.prep.plan;
+  if (!plan || !Array.isArray(plan.phases) || !plan.phases.length) {
+    box.innerHTML = '';
+    return;
+  }
+  const when = plan.generatedAt
+    ? new Date(plan.generatedAt).toLocaleString('zh-CN', { hour12: false })
+    : '';
+  const dates = (state.prep.contests ?? []).map((c) => c.date);
+  const stale =
+    Array.isArray(plan.contestDates) &&
+    plan.contestDates.join(',') !== dates.filter((d) => (prepDaysLeft(d) ?? -1) >= 0).join(',');
+  const firstWeekly = plan.phases[0]?.weekly ?? null;
+
+  box.innerHTML = `
+    <div class="prep-plan-head">
+      <h3>AI 备赛方案</h3>
+      <span class="subtle">${when ? `生成于 ${when}` : ''}${plan.model ? ` · ${escapeHtml(plan.model)}` : ''}</span>
+      ${firstWeekly ? `<button type="button" class="btn" id="prep-apply-weekly" data-weekly="${firstWeekly}">按第一阶段设每周 ${firstWeekly} 题</button>` : ''}
+    </div>
+    ${plan.overview ? `<p class="prep-overview">${escapeHtml(plan.overview)}</p>` : ''}
+    ${stale ? '<p class="hint error">比赛日期改过了，这份方案还是按旧日期排的，重新点一次「AI 定制训练计划」更准。</p>' : ''}
+    <div class="prep-phases">
+      ${plan.phases
+        .map(
+          (phase, index) => `<div class="prep-phase">
+            <div class="prep-phase-top">
+              <span class="prep-phase-no">${index + 1}</span>
+              <b>${escapeHtml(phase.name)}</b>
+              <span class="prep-phase-when">${escapeHtml(phase.start)} → ${escapeHtml(phase.end)}</span>
+              <span class="prep-weekly">每周 ${phase.weekly} 题</span>
+            </div>
+            ${phase.target ? `<div class="prep-target">目标：${escapeHtml(phase.target)}</div>` : ''}
+            ${
+              phase.focus?.length
+                ? `<div class="prep-focus">${phase.focus
+                    .map((tag) => `<span class="prep-chip">${escapeHtml(tag)}</span>`)
+                    .join('')}</div>`
+                : ''
+            }
+            ${phase.note ? `<div class="prep-note">${escapeHtml(phase.note)}</div>` : ''}
+          </div>`,
+        )
+        .join('')}
+    </div>
+    ${
+      plan.contestTips?.length
+        ? `<div class="prep-tips"><b>赛前清单</b><ul>${plan.contestTips
+            .map((tip) => `<li>${escapeHtml(tip)}</li>`)
+            .join('')}</ul></div>`
+        : ''
+    }
+    ${
+      plan.risks?.length
+        ? `<div class="prep-tips"><b>风险提示</b><ul>${plan.risks
+            .map((tip) => `<li>${escapeHtml(tip)}</li>`)
+            .join('')}</ul></div>`
+        : ''
+    }`;
+}
+
+$('prep-add')?.addEventListener('click', async () => {
+  const name = $('prep-name').value.trim();
+  const date = $('prep-date').value;
+  if (!name) return showHint('比赛名填一下，比如「ICPC 2026 上海站」。', true);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return showHint('日期选一下。', true);
+  try {
+    await savePrepContests([...(state.prep.contests ?? []), { name, date }]);
+    $('prep-name').value = '';
+    $('prep-date').value = '';
+    $('prep-pick-wrap')?.classList.add('hidden');
+  } catch (error) {
+    showHint(`保存失败：${error.message}`, true);
+  }
+});
+
+$('prep-contests')?.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-prep-remove]');
+  if (!button) return;
+  const index = Number(button.dataset.prepRemove);
+  const next = [...(state.prep.contests ?? [])];
+  next.splice(index, 1);
+  try {
+    await savePrepContests(next);
+  } catch (error) {
+    showHint(`删除失败：${error.message}`, true);
+  }
+});
+
+$('prep-import')?.addEventListener('click', async () => {
+  const wrap = $('prep-pick-wrap');
+  if (!wrap) return;
+  if (!state.vp.items?.length) await loadVp();
+  const items = (state.vp.items ?? [])
+    .filter((item) => item.time && item.time >= Date.now() - 86400000)
+    .sort((a, b) => a.time - b.time)
+    .slice(0, 200);
+  if (!items.length) {
+    return showHint('VP 列表里没抓到未来的比赛（QOJ 的 VP 库多半没有日期），手填吧。', true);
+  }
+  const pick = $('prep-pick');
+  pick.innerHTML =
+    '<option value="">从最近的区域赛里选一场…</option>' +
+    items
+      .map((item, index) => `<option value="${index}">${formatLocalDate(item.time)} ${escapeHtml(item.name)}</option>`)
+      .join('');
+  state.prep.pickItems = items;
+  wrap.classList.remove('hidden');
+});
+
+$('prep-pick')?.addEventListener('change', (event) => {
+  const item = state.prep.pickItems?.[Number(event.target.value)];
+  if (!item) return;
+  $('prep-name').value = item.name;
+  $('prep-date').value = dateKey(new Date(item.time));
+  if (item.url) state.prep.pickUrl = item.url;
+});
+
+$('prep-ai')?.addEventListener('click', async () => {
+  if (!state.handle || state.prep.busy) return;
+  state.prep.busy = true;
+  state.prep.error = null;
+  renderPrep();
+  try {
+    const data = await postJson('/api/prep/plan', { handle: state.handle });
+    state.prep.plan = data.plan ?? null;
+  } catch (error) {
+    state.prep.error = error.message;
+  } finally {
+    state.prep.busy = false;
+    renderPrep();
+  }
+});
+
+$('prep-plan')?.addEventListener('click', async (event) => {
+  const button = event.target.closest('#prep-apply-weekly');
+  if (!button) return;
+  const weekly = Number(button.dataset.weekly);
+  if (!Number.isFinite(weekly) || weekly <= 0) return;
+  try {
+    await postJson('/api/settings', { handle: state.handle, weekly });
+    state.weekly = weekly;
+    button.textContent = `已设为每周 ${weekly} 题`;
+    button.disabled = true;
+    showHint('每周题量已改。去「训练计划」点一次「重新生成计划」，题单会按新题量重排。');
+  } catch (error) {
+    showHint(`设置失败：${error.message}`, true);
+  }
+});
+
 // 赛程来源的中文名（筛选按钮和每行左边那个小标都用它）
 const SOURCE_LABELS = { cf: 'Codeforces', luogu: '洛谷', atcoder: 'AtCoder', nowcoder: '牛客', leetcode: '力扣' };
 
@@ -5006,6 +5288,7 @@ const NAV_ICONS = {
     '<rect x="3.6" y="3.6" width="7" height="7" rx="1.8"/><rect x="13.4" y="3.6" width="7" height="7" rx="1.8"/><rect x="3.6" y="13.4" width="7" height="7" rx="1.8"/><rect x="13.4" y="13.4" width="7" height="7" rx="1.8"/>',
   calendar: '<path d="M6.5 20.8V3.6"/><path d="M6.5 4.4h11.1l-2.1 4.1 2.1 4.1H6.5"/>',
   vp: '<rect x="3.4" y="5.4" width="17.2" height="11.8" rx="2.2"/><path d="M10.4 8.8v4.4M13.6 8.8 12 11.6l-1.6-2.8M9 17.2l-1.2 3M15 17.2l1.2 3M12 17.2v3.2"/>',
+  prep: '<path d="M6.4 20.8V3.8"/><path d="M6.4 4.6h11.2l-2.4 4.4 2.4 4.4H6.4"/><circle cx="6.4" cy="21" r="0.6" fill="currentColor" stroke="none"/>',
   virtual:
     '<circle cx="12" cy="13.6" r="7.1"/><path d="M12 9.9v3.8l2.4 1.5"/><path d="M9.4 3.3h5.2"/><path d="M12 3.3v3.2"/><path d="M18.9 5.7l1.4-1.4"/>',
   platforms:
@@ -5028,6 +5311,7 @@ const NAV_ITEMS = [
   { id: 'panel-plan', label: '训练计划', icon: 'plan' },
   { id: 'panel-team', label: '团队训练', icon: 'team' },
   { id: 'panel-schedule', label: '训练日程', icon: 'schedule' },
+  { id: 'panel-prep', label: '备赛计划', icon: 'prep' },
   { id: 'panel-review', label: '补题队列', icon: 'review' },
   { id: 'panel-makeup', label: '待补题', icon: 'makeup' },
   { id: 'panel-problems', label: '题库', icon: 'problems' },
@@ -5409,6 +5693,8 @@ $('side-nav').addEventListener('click', (event) => {
   if (button.dataset.view === 'panel-makeup' && !state.makeup.loaded) loadMakeup();
   // 团队页第一次进来先拉一次队伍列表，省得看到空页面
   if (button.dataset.view === 'panel-team' && !state.team.loaded) loadTeams();
+  // 备赛页第一次进来先拉比赛清单和上次的方案
+  if (button.dataset.view === 'panel-prep' && !state.prep.loaded) loadPrep();
 });
 
 window.addEventListener('hashchange', () => {
@@ -5424,6 +5710,7 @@ const MODULE_META = [
   { id: 'panel-plan', label: '训练计划' },
   { id: 'panel-team', label: '团队训练' },
   { id: 'panel-schedule', label: '训练日程' },
+  { id: 'panel-prep', label: '备赛计划' },
   { id: 'panel-calendar', label: '比赛日历' },
   { id: 'panel-vp', label: 'VP 查询' },
   { id: 'panel-virtual', label: '虚拟参赛' },
@@ -6109,6 +6396,7 @@ async function restoreSession() {
   if (!settings?.handle) {
     setStatus('未连接');
     if (state.view === 'panel-team' && !state.team.loaded) loadTeams();
+    if (state.view === 'panel-prep' && !state.prep.loaded) loadPrep();
     return;
   }
 
@@ -6136,6 +6424,8 @@ async function restoreSession() {
   startReminder();
   // 冷启动直接落在团队页（地址栏 #/team）：这时上面的懒加载挂点没触发，补一次
   if (state.view === 'panel-team' && !state.team.loaded) loadTeams();
+  // 备赛页同理：冷启动带 #/prep 进来，补拉一次比赛清单和上次的方案
+  if (state.view === 'panel-prep' && !state.prep.loaded) loadPrep();
 }
 
 // ---------- 题单筛选与导出 ----------
