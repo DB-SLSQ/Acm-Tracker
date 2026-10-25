@@ -147,11 +147,14 @@ const state = {
     loaded: false,
     contests: [],
     plan: null,
+    goal: 'silver',
     aiKeySet: false,
     error: null,
     busy: false,
   },
 };
+
+const PREP_GOAL_LABELS = { bronze: '稳铜', silver: '冲银', gold: '冲金' };
 
 const THEME_LABELS = { dark: '暗色', light: '亮色', gray: '灰色', eye: '护眼' };
 const PALETTE_LABELS = { green: '绿', blue: '蓝', pink: '粉', orange: '橙', purple: '紫' };
@@ -3685,6 +3688,7 @@ async function loadPrep() {
     const data = await getJson(`/api/prep?handle=${encodeURIComponent(state.handle)}`);
     state.prep.contests = data.contests ?? [];
     state.prep.plan = data.plan ?? null;
+    state.prep.goal = PREP_GOAL_LABELS[data.goal] ? data.goal : 'silver';
     state.prep.aiKeySet = Boolean(data.aiKeySet);
     state.prep.error = null;
   } catch (error) {
@@ -3711,6 +3715,28 @@ function prepCountdownText(days) {
   return `还有 ${days} 天`;
 }
 
+/**
+ * 阶段题量文案。赛前减量常常只有 3-5 天，写「每周 10 题」会让人以为要练满一周，
+ * 短阶段改成给总题量。老方案没有 days/total 字段，按起止日期现算。
+ */
+function prepPhaseDays(phase) {
+  const stored = Number(phase.days);
+  if (Number.isFinite(stored) && stored > 0) return stored;
+  const start = Date.parse(`${phase.start}T00:00:00`);
+  const end = Date.parse(`${phase.end}T00:00:00`);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 0;
+  return Math.round((end - start) / 86400000) + 1;
+}
+
+function prepLoadText(phase) {
+  const days = prepPhaseDays(phase);
+  const weekly = Number(phase.weekly) || 0;
+  const total = Number(phase.total) || (days && weekly ? Math.max(1, Math.round((weekly * days) / 7)) : 0);
+  if (days > 0 && days < 7) return total ? `${days} 天 · 共 ${total} 题` : `${days} 天`;
+  if (weekly) return days ? `${days} 天 · 每周 ${weekly} 题` : `每周 ${weekly} 题`;
+  return days ? `${days} 天` : '';
+}
+
 async function savePrepContests(next) {
   const data = await postJson('/api/prep/contests', { handle: state.handle, contests: next });
   state.prep.contests = data.contests ?? next;
@@ -3726,6 +3752,14 @@ function renderPrep() {
   const contests = state.prep.contests ?? [];
   const upcoming = contests.filter((item) => (prepDaysLeft(item.date) ?? -1) >= 0);
   const nearest = upcoming[0] ?? null;
+
+  const goalBox = $('prep-goal');
+  if (goalBox) {
+    for (const btn of goalBox.querySelectorAll('[data-prep-goal]')) {
+      btn.classList.toggle('on', btn.dataset.prepGoal === state.prep.goal);
+      btn.disabled = state.prep.busy;
+    }
+  }
 
   if ($('prep-summary')) {
     if (!state.handle) {
@@ -3807,6 +3841,7 @@ function renderPrepPlan() {
   box.innerHTML = `
     <div class="prep-plan-head">
       <h3>AI 备赛方案</h3>
+      ${plan.goal && PREP_GOAL_LABELS[plan.goal] ? `<span class="prep-goal-tag">目标 ${PREP_GOAL_LABELS[plan.goal]}</span>` : ''}
       <span class="subtle">${when ? `生成于 ${when}` : ''}${plan.model ? ` · ${escapeHtml(plan.model)}` : ''}</span>
       ${firstWeekly ? `<button type="button" class="btn" id="prep-apply-weekly" data-weekly="${firstWeekly}">按第一阶段设每周 ${firstWeekly} 题</button>` : ''}
     </div>
@@ -3820,7 +3855,7 @@ function renderPrepPlan() {
               <span class="prep-phase-no">${index + 1}</span>
               <b>${escapeHtml(phase.name)}</b>
               <span class="prep-phase-when">${escapeHtml(phase.start)} → ${escapeHtml(phase.end)}</span>
-              <span class="prep-weekly">每周 ${phase.weekly} 题</span>
+              <span class="prep-weekly">${escapeHtml(prepLoadText(phase))}</span>
             </div>
             ${phase.target ? `<div class="prep-target">目标：${escapeHtml(phase.target)}</div>` : ''}
             ${
@@ -3828,6 +3863,13 @@ function renderPrepPlan() {
                 ? `<div class="prep-focus">${phase.focus
                     .map((tag) => `<span class="prep-chip">${escapeHtml(tag)}</span>`)
                     .join('')}</div>`
+                : ''
+            }
+            ${
+              phase.team
+                ? /^单人/.test(phase.team)
+                  ? '<div class="prep-team solo">单人训练（这个阶段没有团队合练）</div>'
+                  : `<div class="prep-team">合练：${escapeHtml(phase.team)}</div>`
                 : ''
             }
             ${phase.note ? `<div class="prep-note">${escapeHtml(phase.note)}</div>` : ''}
@@ -3914,7 +3956,7 @@ $('prep-ai')?.addEventListener('click', async () => {
   state.prep.error = null;
   renderPrep();
   try {
-    const data = await postJson('/api/prep/plan', { handle: state.handle });
+    const data = await postJson('/api/prep/plan', { handle: state.handle, goal: state.prep.goal });
     state.prep.plan = data.plan ?? null;
   } catch (error) {
     state.prep.error = error.message;
@@ -3922,6 +3964,13 @@ $('prep-ai')?.addEventListener('click', async () => {
     state.prep.busy = false;
     renderPrep();
   }
+});
+
+$('prep-goal')?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-prep-goal]');
+  if (!button || state.prep.busy) return;
+  state.prep.goal = button.dataset.prepGoal;
+  renderPrep();
 });
 
 $('prep-plan')?.addEventListener('click', async (event) => {

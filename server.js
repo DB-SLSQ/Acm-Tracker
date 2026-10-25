@@ -31,7 +31,14 @@ import {
 import { fetchLuogu, fetchLuoguText, fetchNowcoder, PlatformError } from './lib/platforms.js';
 import { fetchStatement } from './lib/statement.js';
 import { getVpList } from './lib/vp.js';
-import { AiError, DEFAULT_AI_BASE_URL, DEFAULT_AI_MODEL, generatePrepPlan, generateSolution } from './lib/ai.js';
+import {
+  AiError,
+  DEFAULT_AI_BASE_URL,
+  DEFAULT_AI_MODEL,
+  generatePrepPlan,
+  generateSolution,
+  normalizePrepGoal,
+} from './lib/ai.js';
 import {
   AtcoderError,
   fetchCatalog as fetchAtcoderCatalog,
@@ -388,6 +395,7 @@ function readAiConfig() {
 // 比赛清单和 AI 方案都按账号存（meta 键带 handle 后缀），切账号互不干扰。
 const PREP_CONTESTS_KEY = (handleKey) => `prep_contests:${handleKey}`;
 const PREP_PLAN_KEY = (handleKey) => `prep_plan:${handleKey}`;
+const PREP_GOAL_KEY = (handleKey) => `prep_goal:${handleKey}`;
 const PREP_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** 洗一遍比赛清单：名字必须有、日期必须合法、同名同日去重、按日期排序。 */
@@ -432,6 +440,30 @@ function readPrepPlan(handleKey) {
   }
 }
 
+/** 目标档位：稳铜 / 冲银 / 冲金。没存过就默认冲银。 */
+function readPrepGoal(handleKey) {
+  return normalizePrepGoal(db.metaGet(PREP_GOAL_KEY(handleKey)));
+}
+
+/** 找出这个账号所在的队伍（只看第一支），用来让 AI 知道要不要排团队合练。 */
+function prepTeamOf(handleKey) {
+  for (const team of db.listTeams()) {
+    const members = db.listTeamMembers(team.id);
+    if (!members.some((m) => m.handleKey === handleKey)) continue;
+    return {
+      name: team.name,
+      size: members.length,
+      members: members
+        .filter((m) => m.handleKey !== handleKey)
+        .map((m) => ({
+          handleKey: m.handleKey,
+          rating: m.strength ?? db.getUser(m.handleKey)?.rating ?? null,
+        })),
+    };
+  }
+  return null;
+}
+
 /**
  * 给 AI 的选手画像：分数、刷题量、近 30 天通过数，以及「做过但没 AC」的题里
  * 出现最多的专题（这就是弱项）。只喂这几项，别把提交记录整份塞进提示词。
@@ -464,6 +496,7 @@ function buildPrepProfile(handleKey) {
     solvedCount: solved.size,
     recentSolved,
     weakTags,
+    team: prepTeamOf(handleKey),
   };
 }
 
@@ -2725,6 +2758,7 @@ async function route(req, res, url) {
     return sendJson(res, 200, {
       contests: readPrepContests(handleKey),
       plan: readPrepPlan(handleKey),
+      goal: readPrepGoal(handleKey),
       aiKeySet: Boolean(settings.ai_api_key),
     });
   }
@@ -2753,13 +2787,22 @@ async function route(req, res, url) {
       const today = new Date().toLocaleDateString('sv-SE');
       const upcoming = contests.filter((contest) => contest.date >= today);
       if (!upcoming.length) return sendError(res, 400, '加的比赛都已经过去了，把日期改成未来的再生成');
+      // 目标档位跟着方案一起存：下次打开界面还停在用户选的档上
+      const goal = normalizePrepGoal(body.goal ?? readPrepGoal(handleKey));
       const plan = await generatePrepPlan({
         contests: upcoming,
         profile: buildPrepProfile(handleKey),
         today,
+        goal,
         config: readAiConfig(),
       });
-      const record = { ...plan, generatedAt: Date.now(), contestDates: upcoming.map((c) => c.date) };
+      db.metaSet(PREP_GOAL_KEY(handleKey), goal);
+      const record = {
+        ...plan,
+        goal,
+        generatedAt: Date.now(),
+        contestDates: upcoming.map((c) => c.date),
+      };
       db.metaSet(PREP_PLAN_KEY(handleKey), JSON.stringify(record));
       return sendJson(res, 200, { plan: record });
     } catch (error) {

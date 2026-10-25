@@ -225,9 +225,15 @@
         <div id="prep-contests" class="prep-contests"></div>
 
         <div class="prep-ai-bar">
+          <div class="prep-goal-group" id="prep-goal" role="group" aria-label="备赛目标">
+            <button type="button" class="prep-goal-btn" data-prep-goal="bronze" title="稳拿 4 题：A-D 不丢分，难度 1400-1700">稳铜</button>
+            <button type="button" class="prep-goal-btn on" data-prep-goal="silver" title="拿 5-6 题：A-C 全收，D-F 抢 2-3 道，难度 1500-1900">冲银</button>
+            <button type="button" class="prep-goal-btn" data-prep-goal="gold" title="7 题以上：攻 1900-2200，冲刺思维题">冲金</button>
+          </div>
           <button type="button" class="btn primary" id="prep-ai">AI 定制训练计划</button>
           <span class="hint" id="prep-ai-hint"></span>
         </div>
+        <p class="hint" id="prep-goal-hint">目标档位决定难度带和合练强度，改完重新生成一次才生效。</p>
 
         <div id="prep-plan"></div>
       </section>
