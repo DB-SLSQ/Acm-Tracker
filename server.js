@@ -250,10 +250,9 @@ async function syncAtcoderSubmissions(handleKey, account, { force = false, onPro
  * 拉取提交记录。
  * 有同步游标时只补新记录（往前多取 24 小时容错），首次同步才全量重建。
  */
-// 轻量同步的节流：同一个账号 30 秒内只补一次提交。前端会在启动和切回窗口时调用，
-// 事件很密，不拦一下等于每切一次就敲一次 CF。
-const RECENT_SYNC_GAP_MS = 30_000;
-const recentSyncAt = new Map();
+// 每日同步的节流：同一个账号 24 小时内只补一次提交。
+// 时间存进库（meta.light_sync_at），重启应用不会重置；失败不写，下次启动再试。
+const DAILY_SYNC_GAP_MS = 24 * 3600 * 1000;
 
 async function loadSubmissions(handleKey, handle, { full = false } = {}) {
   const cursor = db.getSyncCursor(handleKey);
@@ -909,18 +908,11 @@ async function handlePlan(url) {
     });
   }
 
-  // ---- 自动打勾 ----
-  // 提交记录里已经通过的题，直接在题单里打上勾；手动取消过的题（progress 里有
-  // done=0 的记录）尊重用户的选择，不再自动勾上。
-  const manual = db.getProgressMap(handleKey, targetRounded);
-  const autoDone = [];
-  for (const stage of plan.stageList ?? []) {
-    for (const problem of stage.problems) {
-      const key = `${problem.contestId}-${problem.index}`;
-      if (solved.has(key) && !manual.has(key)) autoDone.push(key);
-    }
-  }
-  const doneList = [...new Set([...done, ...autoDone])];
+  // ---- 勾选只认用户自己点的 ----
+  // 这里曾经按「本地有 AC 记录」自动打勾。但题单本来就是从没做过的题里挑的，
+  // 生成那一刻必然全是空的；真正会生效的只有「生成之后你又 AC 了某道题」这一种情况，
+  // 而这点便利换来的是分不清「这个勾是谁点的」。所以整段去掉，progress 表是唯一来源。
+  const doneList = done;
 
   // ---- 已经钉住的日程（过去的日子做的是哪几题）----
   // 这些日子不参与重排，界面照库里存的呈现。
@@ -975,8 +967,6 @@ async function handlePlan(url) {
       },
       problemsState,
       done: doneList,
-      doneAuto: autoDone,
-      doneManual: done,
       swapCount: db.listPlanSwaps(handleKey, targetRounded).size,
       extras: extrasByDate,
       // 已经钉死的日子（日期 → 那天的题）。前端排期时把它们当成不可改的前缀，
@@ -3644,13 +3634,13 @@ async function route(req, res, url) {
     const rawHandle = body.handle ?? url.searchParams.get('handle');
     if (!rawHandle) return sendError(res, 400, '请先填写 Codeforces 用户名');
     const handleKey = db.normalizeHandle(rawHandle);
-    const last = recentSyncAt.get(handleKey) ?? 0;
-    if (Date.now() - last < RECENT_SYNC_GAP_MS) {
-      return sendJson(res, 200, { added: 0, skipped: true });
+    const last = Number(db.metaGet(`light_sync_at:${handleKey}`) || 0);
+    if (last && Date.now() - last < DAILY_SYNC_GAP_MS) {
+      return sendJson(res, 200, { added: 0, skipped: true, lastAt: last });
     }
-    recentSyncAt.set(handleKey, Date.now());
     try {
       const added = await loadSubmissions(handleKey, rawHandle, { full: false });
+      db.metaSet(`light_sync_at:${handleKey}`, Date.now());
       return sendJson(res, 200, { added: Number(added) || 0, skipped: false });
     } catch (error) {
       // 同步失败不影响任何主流程：调用方静默吞掉，等下次再试

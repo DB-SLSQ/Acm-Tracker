@@ -2223,7 +2223,8 @@ input[type="number"]:focus {
   vertical-align: middle;
 }
 
-.auto-done {
+/* 日程展开表里给「已经勾过」的题加的小标 */
+.done-mark {
   display: inline-block;
   margin-left: 7px;
   padding: 1px 6px;

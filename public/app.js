@@ -15,8 +15,6 @@ const state = {
   weekly: 10,
   planData: null,
   done: new Set(),
-  // 其中「按提交记录自动打勾」的部分，界面上单独标出来
-  doneAuto: new Set(),
   virtual: null,
   reviewId: 0,
   hasSavedTarget: false,
@@ -623,25 +621,20 @@ async function loadUser(force = false) {
   }
 }
 
-// ---------- 轻量补提交 ----------
-// 只补「上次同步之后」的提交（服务端一个请求搞定），用来把刚 AC 的题自动勾上。
+// ---------- 每日补一次提交 ----------
+// 打开应用时问一次「要不要补提交」，服务端按 24 小时节流，一天最多真去拉一次。
+// 补它只为了两件事：让「没做过的题」这份排除名单是新的、统计数字对得上。
+// 勾选一律不动——题单里的勾只由你自己点。
 // 失败一律静默：这是个锦上添花的动作，不能因为它弹错误、也不能拖慢首屏。
-let lastLightSyncAt = 0;
 
-async function syncRecentSubmissions(handle, { rerender = false } = {}) {
+async function syncRecentSubmissions(handle) {
   const target = handle ?? state.handle;
   if (!target) return 0;
-  if (Date.now() - lastLightSyncAt < 30_000) return 0;
-  lastLightSyncAt = Date.now();
   try {
     const result = await postJson('/api/sync-submissions', { handle: target });
-    const added = Number(result?.added ?? 0);
-    if (added > 0 && rerender) {
-      // 有新的提交记录：把计划和今日卡片重算一遍（静默，不弹状态栏）
-      await generatePlan(false, { scroll: false, quiet: true });
-      renderTodayCard();
-    }
-    return added;
+    if (result?.skipped) return 0;
+    // 有新增就不在这里重算了：启动流程紧接着就会自己拉一份计划，重算两次没意义
+    return Number(result?.added ?? 0);
   } catch {
     return 0;
   }
@@ -674,7 +667,6 @@ async function generatePlan(force = false, { scroll = true, quiet = false } = {}
     );
     state.planData = data.plan;
     state.done = new Set(data.done ?? []);
-    state.doneAuto = new Set(data.doneAuto ?? []);
     // 手感反馈、热身包、复盘卡、临时加题：都跟着计划一起回来
     state.feedback = new Map((data.feedback ?? []).map((row) => [`${row.contestId}-${row.index}`, row.feel]));
     state.warmup = data.warmup ?? null;
@@ -731,14 +723,8 @@ function renderPlan(plan) {
       sum + stage.problems.filter((problem) => state.done.has(`${problem.contestId}-${problem.index}`)).length,
     0,
   );
-  const autoCount = plan.stageList.reduce(
-    (sum, stage) =>
-      sum +
-      stage.problems.filter((problem) => state.doneAuto.has(`${problem.contestId}-${problem.index}`)).length,
-    0,
-  );
   const progressLine = doneCount
-    ? `已完成 ${doneCount}/${totalPlanned} 题${autoCount ? `（其中 ${autoCount} 题是提交记录里已经通过的，自动打勾）` : ''}。`
+    ? `已完成 ${doneCount}/${totalPlanned} 题。`
     : '';
   // 计划是按「生成那天的分数」钉住题量的：上分/掉分不会自动重排（否则日程会整体往前挤）。
   // 所以这里的分数有两套：plan.current 是计划自己的基准，plan.userCurrent 是你此刻的真实分。
@@ -828,17 +814,12 @@ function renderPlan(plan) {
 function problemRow(problem, target, extraNote = '') {
   const key = `${problem.contestId}-${problem.index}`;
   const isDone = state.done.has(key);
-  const isAuto = state.doneAuto.has(key);
   // 隐藏标签模式：题单里不显示这道题属于哪些方向，自己判断怎么做
   const tags = state.hideTags ? '' : tagSpans(problem.tags, 3);
   const elsewhere = state.luoguKeys.has(key)
     ? '<span class="solved-elsewhere">洛谷做过</span>'
     : '';
   const source = platformBadge(problem);
-  // 自动打勾的题单独标一下，免得看着像自己什么时候点过
-  const autoBadge = isAuto
-    ? '<span class="auto-done" title="提交记录里已经通过了这道题，自动打勾">已通过</span>'
-    : '';
   const swapButton = problem.swappedFrom
     ? `<button type="button" class="swap-btn" data-swap-undo="${problem.swappedFrom}" title="换回系统推荐的那道题">还原</button>`
     : `<button type="button" class="swap-btn" data-swap-key="${key}" title="换一道同方向、难度差不多的题">换一道</button>`;
@@ -855,7 +836,7 @@ function problemRow(problem, target, extraNote = '') {
       </td>
       <td class="problem-code">${problemCodeText(problem)}</td>
       <td>
-        <a class="problem-name" href="${problemHref(problem)}" target="_blank" rel="noreferrer">${problem.name}</a>${source}${elsewhere}${autoBadge}${deferredTag}
+        <a class="problem-name" href="${problemHref(problem)}" target="_blank" rel="noreferrer">${problem.name}</a>${source}${elsewhere}${deferredTag}
         ${
           tags || extraNote
             ? `<div class="problem-tags">${tags}${tags && extraNote ? ' · ' : ''}${extraNote}</div>`
@@ -942,8 +923,6 @@ async function markProblemDone(contestId, index, done) {
   const key = `${contestId}-${index}`;
   if (done) state.done.add(key);
   else state.done.delete(key);
-  // 手动动过之后就不再算「提交记录里自动通过的」，把那个徽章去掉
-  state.doneAuto.delete(key);
   if (state.planData) renderPlan(state.planData);
   renderTodayCard();
 
@@ -4737,7 +4716,6 @@ function openSolutionDialog(problem) {
 function todayRow(problem) {
   const key = `${problem.contestId}-${problem.index}`;
   const isDone = state.done.has(key);
-  const isAuto = state.doneAuto.has(key);
   const tags = state.hideTags ? '' : tagSpans(problem.tags, 3);
   return `<div class="today-row ${isDone ? 'done' : ''}">
     <input type="checkbox" ${isDone ? 'checked' : ''}
@@ -4746,7 +4724,6 @@ function todayRow(problem) {
     <span class="today-name">
       <a class="problem-name" href="${problemHref(problem)}" target="_blank" rel="noreferrer">${problem.name}</a>
       ${platformBadge(problem)}
-      ${isAuto ? '<span class="auto-done" title="提交记录里已经通过了这道题，自动打勾">已通过</span>' : ''}
       ${state.luoguKeys.has(key) ? '<span class="solved-elsewhere">洛谷做过</span>' : ''}
       ${tags ? `<span class="today-tags">${tags}</span>` : ''}
     </span>
@@ -5195,7 +5172,7 @@ function renderDayDetail() {
       <tr class="${isDone ? 'done' : ''}">
         <td class="problem-code">${problemCodeText(problem)}</td>
         <td><a class="problem-name" href="${problemHref(problem)}" target="_blank" rel="noreferrer">${problem.name}</a>${platformBadge(problem)}
-            ${isDone ? '<span class="auto-done">已通过</span>' : ''}
+            ${isDone ? '<span class="done-mark">已通过</span>' : ''}
             ${state.luoguKeys.has(key) ? '<span class="solved-elsewhere">洛谷做过</span>' : ''}
             ${state.hideTags ? '' : `<div class="problem-tags">${tagSpans(problem.tags, 3)}</div>`}</td>
         <td style="width:70px">${ratingBadge(problem.rating)}</td>
@@ -6487,8 +6464,8 @@ async function restoreSession() {
     state.weekly = settings.weekly;
   }
 
-  // 先把「上次同步之后」的提交补回来：昨天/今早刚 AC 的题，一打开就该是勾着的，
-  // 不用等用户自己去点「重新加载」。失败静默，不耽误后面的账号加载。
+  // 每天打开应用时补一次提交（服务端 24 小时节流，一天只会真跑一次）。
+  // 失败静默，不耽误后面的账号加载。
   state.handle = settings.handle;
   await syncRecentSubmissions(settings.handle);
 
@@ -7055,11 +7032,4 @@ $('plan-day-toggle').addEventListener('click', () => {
   $('plan-day-toggle').textContent = planByDay ? '按阶段看' : '按天看';
   $('plan-day-toggle').classList.toggle('primary', planByDay);
   if (state.planData) renderPlan(state.planData);
-});
-
-// 从别的窗口切回来时补一次提交：在 CF 上 AC 完切回来，题单里就自动勾上了。
-// 前后端各有 30 秒节流，来回切窗口不会真的每次去敲 CF。
-window.addEventListener('focus', () => {
-  if (!state.handle) return;
-  syncRecentSubmissions(state.handle, { rerender: true });
 });
