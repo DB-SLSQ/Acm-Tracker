@@ -250,6 +250,11 @@ async function syncAtcoderSubmissions(handleKey, account, { force = false, onPro
  * 拉取提交记录。
  * 有同步游标时只补新记录（往前多取 24 小时容错），首次同步才全量重建。
  */
+// 轻量同步的节流：同一个账号 30 秒内只补一次提交。前端会在启动和切回窗口时调用，
+// 事件很密，不拦一下等于每切一次就敲一次 CF。
+const RECENT_SYNC_GAP_MS = 30_000;
+const recentSyncAt = new Map();
+
 async function loadSubmissions(handleKey, handle, { full = false } = {}) {
   const cursor = db.getSyncCursor(handleKey);
   const incremental = !full && cursor > 0;
@@ -3627,6 +3632,29 @@ async function route(req, res, url) {
       return sendJson(res, 200, { user: summary });
     } catch (error) {
       const message = error instanceof cf.CfError ? error.message : `抓取失败：${error.message}`;
+      return sendError(res, 502, message);
+    }
+  }
+
+  // 轻量同步：只补「游标之后」的提交（CF 那边就是一个请求），用来把刚 AC 的题自动勾上。
+  // 和 /api/user?refresh=1 的区别是不再重复抓用户信息、rating 历史和整份题库，
+  // 所以可以放心地在启动、切回窗口时静默调用。
+  if (pathname === '/api/sync-submissions' && req.method === 'POST') {
+    const body = await readJsonBody(req).catch(() => ({}));
+    const rawHandle = body.handle ?? url.searchParams.get('handle');
+    if (!rawHandle) return sendError(res, 400, '请先填写 Codeforces 用户名');
+    const handleKey = db.normalizeHandle(rawHandle);
+    const last = recentSyncAt.get(handleKey) ?? 0;
+    if (Date.now() - last < RECENT_SYNC_GAP_MS) {
+      return sendJson(res, 200, { added: 0, skipped: true });
+    }
+    recentSyncAt.set(handleKey, Date.now());
+    try {
+      const added = await loadSubmissions(handleKey, rawHandle, { full: false });
+      return sendJson(res, 200, { added: Number(added) || 0, skipped: false });
+    } catch (error) {
+      // 同步失败不影响任何主流程：调用方静默吞掉，等下次再试
+      const message = error instanceof cf.CfError ? error.message : `同步失败：${error.message}`;
       return sendError(res, 502, message);
     }
   }

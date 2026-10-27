@@ -623,7 +623,31 @@ async function loadUser(force = false) {
   }
 }
 
-async function generatePlan(force = false, { scroll = true } = {}) {
+// ---------- 轻量补提交 ----------
+// 只补「上次同步之后」的提交（服务端一个请求搞定），用来把刚 AC 的题自动勾上。
+// 失败一律静默：这是个锦上添花的动作，不能因为它弹错误、也不能拖慢首屏。
+let lastLightSyncAt = 0;
+
+async function syncRecentSubmissions(handle, { rerender = false } = {}) {
+  const target = handle ?? state.handle;
+  if (!target) return 0;
+  if (Date.now() - lastLightSyncAt < 30_000) return 0;
+  lastLightSyncAt = Date.now();
+  try {
+    const result = await postJson('/api/sync-submissions', { handle: target });
+    const added = Number(result?.added ?? 0);
+    if (added > 0 && rerender) {
+      // 有新的提交记录：把计划和今日卡片重算一遍（静默，不弹状态栏）
+      await generatePlan(false, { scroll: false, quiet: true });
+      renderTodayCard();
+    }
+    return added;
+  } catch {
+    return 0;
+  }
+}
+
+async function generatePlan(force = false, { scroll = true, quiet = false } = {}) {
   if (!state.handle) return;
 
   const target = Number($('target-input').value);
@@ -642,7 +666,7 @@ async function generatePlan(force = false, { scroll = true } = {}) {
   const button = $('plan-btn');
   button.disabled = true;
   button.textContent = '生成中…';
-  setStatus('正在生成训练计划', { busy: true });
+  if (!quiet) setStatus('正在生成训练计划', { busy: true });
 
   try {
     const data = await getJson(
@@ -676,7 +700,7 @@ async function generatePlan(force = false, { scroll = true } = {}) {
     renderTags(data.plan.weakTags);
     markViewReady('panel-plan');
     markViewReady('panel-tags');
-    setStatus('计划已生成');
+    if (!quiet) setStatus('计划已生成');
     if (scroll) $('panel-plan').scrollIntoView({ behavior: 'smooth', block: 'start' });
     rebuildSchedule();
     loadVirtual();
@@ -684,6 +708,7 @@ async function generatePlan(force = false, { scroll = true } = {}) {
     loadReview();
     loadGrowth();
   } catch (error) {
+    if (quiet) return;
     setStatus(`生成失败：${error.message}`);
     // 失败给一个「重试」按钮，网络抖一下不用自己再找按钮
     showHint(`生成训练计划失败：${error.message}`, true, {
@@ -6462,6 +6487,11 @@ async function restoreSession() {
     state.weekly = settings.weekly;
   }
 
+  // 先把「上次同步之后」的提交补回来：昨天/今早刚 AC 的题，一打开就该是勾着的，
+  // 不用等用户自己去点「重新加载」。失败静默，不耽误后面的账号加载。
+  state.handle = settings.handle;
+  await syncRecentSubmissions(settings.handle);
+
   // 用户名加载失败时不要再往下生成计划——那样只会连着失败两次
   const loaded = await loadUser(false);
   if (loaded && settings.target) {
@@ -7025,4 +7055,11 @@ $('plan-day-toggle').addEventListener('click', () => {
   $('plan-day-toggle').textContent = planByDay ? '按阶段看' : '按天看';
   $('plan-day-toggle').classList.toggle('primary', planByDay);
   if (state.planData) renderPlan(state.planData);
+});
+
+// 从别的窗口切回来时补一次提交：在 CF 上 AC 完切回来，题单里就自动勾上了。
+// 前后端各有 30 秒节流，来回切窗口不会真的每次去敲 CF。
+window.addEventListener('focus', () => {
+  if (!state.handle) return;
+  syncRecentSubmissions(state.handle, { rerender: true });
 });
