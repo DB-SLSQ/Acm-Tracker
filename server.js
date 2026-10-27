@@ -94,6 +94,19 @@ const PUBLIC_DIR = join(HERE, 'public');
 const DEFAULT_PORT = Number(process.env.PORT || 5173);
 const DEFAULT_HOST = process.env.HOST || '127.0.0.1';
 
+// 打包后 HERE 是 resources/app.asar（虚拟路径）：asar 不能当子进程的 cwd
+// （chdir 过去直接 ENOENT），脚本本身则要留在 asar 里 —— 一旦 asarUnpack 解包出去，
+// 脚本里的相对 import（../lib/*.js）就找不到目标了，所以只处理 cwd。
+function trainingWorkDir() {
+  // 注意 HERE 结尾没有分隔符（就是 ...\resources\app.asar 本身），别拿 "app.asar\" 去比
+  if (HERE.includes('app.asar')) {
+    const resources = dirname(HERE);
+    if (existsSync(resources)) return resources;
+    return process.cwd();
+  }
+  return HERE;
+}
+
 // 版本号取自 package.json，界面底部会显示，方便确认装的是哪个版本
 const VERSION = (() => {
   try {
@@ -3053,10 +3066,25 @@ async function route(req, res, url) {
     const body = await readJsonBody(req).catch(() => ({}));
     const contests = Math.max(1, Math.min(2000, Number(body.contests) || 300));
     const extra = body.reset ? ['--reset'] : [];
+
+    // 打包后 process.execPath 是 ACM Trainer.exe（不是 node），必须显式开 node 模式，
+    // 否则它会把脚本当成「要打开的文件」再起一个窗口。
+    if (!existsSync(process.execPath)) {
+      return sendError(
+        res,
+        500,
+        `找不到程序本体（${process.execPath}），应用可能被移动过，请重启应用后再试`,
+      );
+    }
+    const scriptPath = join(HERE, 'scripts', 'train-model.js');
+    if (!existsSync(scriptPath)) {
+      return sendError(res, 500, `找不到训练脚本（${scriptPath}），这份安装包不完整`);
+    }
+
     const child = spawn(
       process.execPath,
-      ['--no-warnings', join(HERE, 'scripts', 'train-model.js'), '--contests', String(contests), ...extra],
-      { cwd: HERE, env: process.env },
+      ['--no-warnings', scriptPath, '--contests', String(contests), ...extra],
+      { cwd: trainingWorkDir(), env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
     );
     training.running = true;
     training.lines = [`开始采集 ${contests} 场比赛的数据…`];
@@ -3066,7 +3094,11 @@ async function route(req, res, url) {
     child.stdout.on('data', (chunk) => pushTrainingLine(chunk));
     child.stderr.on('data', (chunk) => pushTrainingLine(chunk));
     child.on('error', (error) => {
+      // 进程没起来时 close 不保证会触发，这里把状态一起复位，别让「训练中」卡死
+      training.running = false;
+      training.finishedAt = Date.now();
       training.error = error.message;
+      pushTrainingLine(`训练没能启动：${error.message}`);
     });
     child.on('close', (code) => {
       training.running = false;
