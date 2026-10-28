@@ -2499,8 +2499,18 @@ function isMissingCfUser(message) {
   return /not found|找不到用户|Invalid handle/i.test(String(message ?? ''));
 }
 
+/** AtCoder 用户名：字母/数字/下划线，3 位以上。中文名、带空格的名字直接不去问接口。 */
+function looksLikeAtcoderAccount(name) {
+  return /^[A-Za-z0-9_]{3,20}$/.test(String(name ?? ''));
+}
+
+/** 洛谷用户 ID 就是主页地址里那串数字，填别的（中文名、网址）就没法抓。 */
+function looksLikeLuoguUid(uid) {
+  return /^\d{1,12}$/.test(String(uid ?? ''));
+}
+
 async function syncMemberPlatforms(handleKey, { atcoderAccount = null, luoguAccount = null } = {}) {
-  const result = { codeforces: null, atcoder: null, luogu: null, errors: {}, cfMissing: false };
+  const result = { codeforces: null, atcoder: null, luogu: null, errors: {}, missed: {}, cfMissing: false };
 
   // 队友名字不强制是 CF 号：像 CF 用户名的才去查，查不到也只当「没绑 CF」，不算失败。
   if (looksLikeCfHandle(handleKey)) {
@@ -2515,26 +2525,51 @@ async function syncMemberPlatforms(handleKey, { atcoderAccount = null, luoguAcco
     result.cfMissing = true;
   }
 
+  // AtCoder 和洛谷跟 CF 一个口径：填了才抓，抓不到就跳过。
+  // 进 missed 而不是 errors —— 导师随便写个名字加人，不该被「失败」两个字顶回来。
   if (atcoderAccount) {
-    try {
-      await ensureAtcoderCatalog({});
-      const sync = await syncAtcoderSubmissions(handleKey, normalizeAtcoderUser(atcoderAccount), { force: true });
-      result.atcoder = sync.total ?? memberPlatformCounts(handleKey).atcoder;
-    } catch (error) {
-      result.errors.atcoder = error.message;
+    // 先看形状再去 normalize：normalizeAtcoderUser 对中文名是直接抛异常的，
+    // 放在 try 外面会顺着接口冒成 400，人反而加不进去。
+    if (!looksLikeAtcoderAccount(atcoderAccount)) {
+      result.missed.atcoder = '名字不像 AtCoder 账号，没去抓';
+    } else {
+      const account = normalizeAtcoderUser(atcoderAccount);
+      try {
+        await ensureAtcoderCatalog({});
+        // Kenkoooo 对不存在的号也会返回一份「全是 0」的统计，不会报错，
+        // 所以拿 accepted_count 当存在性判断：0 提交 + 本地 0 题，基本就是名字写错了。
+        const info = await fetchAtcoderUserInfo(account);
+        const sync = await syncAtcoderSubmissions(handleKey, account, { force: true });
+        const total = sync.total ?? memberPlatformCounts(handleKey).atcoder;
+        if (!total && !Number(info.acceptedCount ?? 0)) {
+          result.missed.atcoder = `AtCoder 上 ${account} 没有任何提交，可能名字写错了`;
+        } else {
+          result.atcoder = total;
+        }
+      } catch (error) {
+        result.missed.atcoder = `没读到 ${account} 的数据（${error.message}）`;
+      }
     }
   }
 
   if (luoguAccount) {
-    try {
-      const stats = await fetchLuogu(luoguAccount);
-      const passed = stats.extra?.solved ?? [];
-      if (passed.length) db.appendLuoguSolved(handleKey, passed);
-      if (stats.extra) delete stats.extra.solved;
-      db.savePlatformStats({ ...stats, handleKey });
-      result.luogu = passed.length;
-    } catch (error) {
-      result.errors.luogu = error.message;
+    if (!looksLikeLuoguUid(luoguAccount)) {
+      result.missed.luogu = 'UID 不是纯数字，没去抓';
+    } else {
+      try {
+        const stats = await fetchLuogu(luoguAccount);
+        const passed = stats.extra?.solved ?? [];
+        if (passed.length) db.appendLuoguSolved(handleKey, passed);
+        if (stats.extra) delete stats.extra.solved;
+        db.savePlatformStats({ ...stats, handleKey });
+        result.luogu = passed.length;
+      } catch (error) {
+        const raw = String(error.message ?? '');
+        // 404 是「UID 填错了」的典型信号，直接说人话，别把 HTTP 状态码端给用户
+        result.missed.luogu = /404/.test(raw)
+          ? `洛谷上没有 ${String(luoguAccount).trim()} 这个 UID`
+          : `没读到 ${String(luoguAccount).trim()} 的数据，${raw}`;
+      }
     }
   }
 
@@ -2551,12 +2586,14 @@ function describeSyncResult(handle, sync, verb = '已加入', { hasStrength = fa
   if (sync.luogu != null) ok.push(`洛谷 ${sync.luogu} 题`);
   const labels = { codeforces: 'CF', atcoder: 'AtCoder', luogu: '洛谷' };
   const failed = Object.entries(sync.errors ?? {}).map(([platform, message]) => `${labels[platform]} 失败（${message}）`);
+  // 抓不到不等于失败：只说一句「跳过了」，人照样在队里，之后还能在卡片上补
+  const missed = Object.entries(sync.missed ?? {}).map(([platform, message]) => `${labels[platform]} 跳过：${message}`);
   // 没绑 CF 是允许的（教练直接写名字加人）；已经标过手动实力的就不用再提醒
   const note = sync.cfMissing && !hasStrength
     ? ['没关联 Codeforces，想让 TA 参与排题就点「设实力」标一个分数']
     : [];
   const head = ok.length ? `${handle} ${verb}：${ok.join(' / ')}` : `${handle} ${verb}`;
-  const tail = [...note, ...failed];
+  const tail = [...note, ...missed, ...failed];
   return tail.length ? `${head}；${tail.join('；')}` : head;
 }
 
@@ -3751,11 +3788,13 @@ async function route(req, res, url) {
         const sync = await syncMemberPlatforms(handleKey, { atcoderAccount, luoguAccount });
         const member = db.listTeamMembers(teamId).find((item) => item.handleKey === handleKey) ?? null;
         const failures = Object.keys(sync.errors ?? {});
+        const missed = Object.keys(sync.missed ?? {});
         return sendJson(res, 201, {
           member,
           platformCounts: sync.counts,
-          // 有平台没抓成功就把原因带上，免得用户以为三平台都齐了
-          warning: failures.length ? describeSyncResult(handleKey, sync) : null,
+          // 有平台没抓成（失败或跳过）就把原因带上，免得用户以为三平台都齐了
+          warning: failures.length + missed.length ? describeSyncResult(handleKey, sync) : null,
+          missed: sync.missed,
           message: describeSyncResult(handleKey, sync, '已加入', { hasStrength: member?.strength != null }),
         });
       } catch (error) {
@@ -3788,10 +3827,12 @@ async function route(req, res, url) {
 
         const sync = await syncMemberPlatforms(handleKey, { atcoderAccount, luoguAccount });
         const updated = db.listTeamMembers(teamId).find((item) => item.handleKey === handleKey) ?? null;
+        const issues = Object.keys(sync.errors ?? {}).length + Object.keys(sync.missed ?? {}).length;
         return sendJson(res, 200, {
           member: updated,
           platformCounts: sync.counts,
-          warning: Object.keys(sync.errors ?? {}).length ? describeSyncResult(handleKey, sync, '已更新') : null,
+          warning: issues ? describeSyncResult(handleKey, sync, '已更新') : null,
+          missed: sync.missed,
           message: describeSyncResult(handleKey, sync, '已更新', { hasStrength: updated?.strength != null }),
         });
       } catch (error) {

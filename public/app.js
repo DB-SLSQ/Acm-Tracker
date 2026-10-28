@@ -2340,6 +2340,8 @@ function teamMemberDialog(preset = '') {
         <span>队友名字 <b class="req">必填</b></span>
         <input id="tm-name" type="text" placeholder="例如 tourist，或者 阿杰 / 小李" autocomplete="off" />
       </label>
+      <p class="hint">下面几项全是选填：填对了会顺手把数据抓回来，填错或者查不到就直接<b>跳过</b>，人照样加进队伍，
+        之后在成员卡片上点「补抓平台数据」还能再补。</p>
       <label class="team-field">
         <span>AtCoder 用户名 <em>选填</em></span>
         <input id="tm-atcoder" type="text" placeholder="例如 chokudai" autocomplete="off" />
