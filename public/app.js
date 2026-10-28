@@ -2088,7 +2088,9 @@ async function deleteTeam() {
 /** 「加入」按钮改成开弹框：三个平台分开填，不然只能抓到 CF。 */
 function addTeamMember() {
   if (!state.team.current) return;
-  teamMemberDialog();
+  // 页面上那个输入框已经打了字，就别让它白打：直接预填进弹框
+  const preset = $('team-member-input')?.value.trim() ?? '';
+  teamMemberDialog(preset);
 }
 
 async function removeTeamMember(handle) {
@@ -2319,8 +2321,8 @@ function askDialog({
   });
 }
 
-/** 加队员的小弹框：CF 必填，AtCoder / 洛谷选填。 */
-function teamMemberDialog() {
+/** 加队员的小弹框：名字必填（随便填），各平台账号都选填。 */
+function teamMemberDialog(preset = '') {
   // 不用 <dialog>：项目里其他地方都是自己拼的浮层，跟着现有做法省得样式不一致
   const existing = $('team-member-dialog');
   if (existing) existing.remove();
@@ -2331,11 +2333,12 @@ function teamMemberDialog() {
   wrap.innerHTML = `
     <div class="team-dialog" role="dialog" aria-modal="true" aria-labelledby="team-dialog-title">
       <h3 id="team-dialog-title">加入队员</h3>
-      <p class="hint">三个平台分开填。只填 CF 也能加，但队内分工是按各方向的做题情况算的，
-        平台少了画像会偏，建议能填的都填。</p>
+      <p class="hint">名字随便填，一个人一个名字就行。如果这个名字正好是他的
+        <b>Codeforces 用户名</b>，会自动抓分数和做题记录；不打 CF 的人（或者想用中文名）直接写名字，
+        加完在成员卡片上标一个「手动实力」即可参与排题。</p>
       <label class="team-field">
-        <span>Codeforces 用户名 <b class="req">必填</b></span>
-        <input id="tm-cf" type="text" placeholder="例如 tourist" autocomplete="off" />
+        <span>队友名字 <b class="req">必填</b></span>
+        <input id="tm-name" type="text" placeholder="例如 tourist，或者 阿杰 / 小李" autocomplete="off" />
       </label>
       <label class="team-field">
         <span>AtCoder 用户名 <em>选填</em></span>
@@ -2363,7 +2366,7 @@ function teamMemberDialog() {
       </label>
       <div class="team-dialog-actions">
         <button type="button" class="btn" id="tm-cancel">取消</button>
-        <button type="button" class="btn primary" id="tm-confirm">加入并抓取数据</button>
+        <button type="button" class="btn primary" id="tm-confirm">加入</button>
       </div>
       <p class="hint team-dialog-note" id="tm-note"></p>
     </div>`;
@@ -2375,20 +2378,21 @@ function teamMemberDialog() {
   });
   $('tm-cancel').addEventListener('click', close);
   $('tm-confirm').addEventListener('click', () => submitTeamMember(close));
-  $('tm-cf').addEventListener('keydown', (event) => {
+  $('tm-name').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') submitTeamMember(close);
   });
-  $('tm-cf').focus();
+  if (preset) $('tm-name').value = preset;
+  $('tm-name').focus();
 }
 
 /** 提交加人表单。抓取可能要十几秒，所以按钮要禁用并说明在等什么。 */
 async function submitTeamMember(close) {
   const teamId = state.team.current;
   if (!teamId) return;
-  const handle = $('tm-cf').value.trim();
+  const handle = $('tm-name').value.trim();
   if (!handle) {
-    $('tm-note').textContent = 'Codeforces 用户名是必填的。';
-    $('tm-cf').focus();
+    $('tm-note').textContent = '至少填一个名字，随便写就行。';
+    $('tm-name').focus();
     return;
   }
   const atcoder = $('tm-atcoder').value.trim();
@@ -2406,11 +2410,15 @@ async function submitTeamMember(close) {
   const confirm = $('tm-confirm');
   const note = $('tm-note');
   confirm.disabled = true;
-  confirm.textContent = '抓取中…';
-  const waiting = ['CF'];
+  confirm.textContent = '读取中…';
+  // 名字像 CF 用户名才值得去抓；中文名 / 带空格的名字 CF 上不可能有，直接跳过省一次请求
+  const cfLike = /^[!-~]+$/.test(handle);
+  const waiting = cfLike ? ['CF'] : [];
   if (atcoder) waiting.push('AtCoder');
   if (luogu) waiting.push('洛谷');
-  note.textContent = `正在读取 ${waiting.join(' / ')} 的数据，洛谷和 AtCoder 可能要十几秒…`;
+  note.textContent = waiting.length
+    ? `正在读取 ${waiting.join(' / ')} 的数据，可能要十几秒…`
+    : '正在加入…';
 
   try {
     const result = await postJson(`/api/team/${teamId}/members`, {
@@ -2422,12 +2430,14 @@ async function submitTeamMember(close) {
       strength,
     });
     close();
+    const presetBox = $('team-member-input');
+    if (presetBox) presetBox.value = '';
     setStatus(result.message ?? `${handle} 已加入队伍`);
     await loadTeamDetail(teamId, { keepPlan: true });
   } catch (error) {
     note.textContent = `加入失败：${error.message}`;
     confirm.disabled = false;
-    confirm.textContent = '加入并抓取数据';
+    confirm.textContent = '加入';
   }
 }
 
@@ -2524,7 +2534,7 @@ function renderTeam() {
             const missing = p.count === 0;
             const title = missing
               ? p.key === 'codeforces'
-                ? '没有 CF 提交记录'
+                ? '没有 CF 数据：加人时名字填成 CF 用户名才会抓'
                 : `没有${p.label}数据：${p.key === 'atcoder' ? '加人时填 AtCoder 用户名' : '加人时填洛谷 UID'}后可抓`
               : `${p.label} 通过 ${p.count} 题`;
             return `<span class="platform-chip${missing ? ' missing' : ''}" title="${escapeHtml(title)}">${p.label} ${p.count}</span>`;
@@ -2566,7 +2576,7 @@ function renderTeam() {
             : ''}
         </div>`;
       }).join('')
-    : '<p class="subtle">还没有队员。在上面输入账号，点「加入」。</p>';
+    : '<p class="subtle">还没有队员。在上面填个名字（随便写），点「加入」。</p>';
 
   // ---- 分工矩阵：八个方向 × 谁主攻 ----
   // 用矩阵而不是每人一张卡：分工的意义就是「不重叠」，一眼扫一列就知道

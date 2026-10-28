@@ -3287,6 +3287,20 @@ body.compact .panel-head h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* 名字是用户可以随便填的（可能是很长的一串），让它自己收缩，
+     不许把右边那几个按钮挤成两行 */
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.team-member-top .btn,
+.team-member-top .team-role {
+  flex: none;
+  white-space: nowrap;
+}
+
+.team-member-top .btn.tiny {
+  margin-top: 0;
 }
 
 .team-role {

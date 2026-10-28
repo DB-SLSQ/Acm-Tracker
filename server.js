@@ -2489,14 +2489,30 @@ function memberPlatformCounts(handleKey) {
  * CF 是必有的（handle_key 就是 CF 号）；AtCoder / 洛谷只有填了账号才抓。
  * 每个平台单独 try：一个平台挂了不该影响另外两个，缺哪个就记在 missing 里回给前端。
  */
-async function syncMemberPlatforms(handleKey, { atcoderAccount = null, luoguAccount = null } = {}) {
-  const result = { codeforces: null, atcoder: null, luogu: null, errors: {} };
+/** 名字要不要拿去问 CF：中文、带空格的名字在 CF 上不可能存在，问也是白问。 */
+function looksLikeCfHandle(name) {
+  return /^[!-~]+$/.test(String(name ?? ''));
+}
 
-  try {
-    await loadUser(handleKey);
-    result.codeforces = memberPlatformCounts(handleKey).codeforces;
-  } catch (error) {
-    result.errors.codeforces = error.message;
+/** CF 的「查无此人」：这不是错误，只说明这位队友没绑 CF。 */
+function isMissingCfUser(message) {
+  return /not found|找不到用户|Invalid handle/i.test(String(message ?? ''));
+}
+
+async function syncMemberPlatforms(handleKey, { atcoderAccount = null, luoguAccount = null } = {}) {
+  const result = { codeforces: null, atcoder: null, luogu: null, errors: {}, cfMissing: false };
+
+  // 队友名字不强制是 CF 号：像 CF 用户名的才去查，查不到也只当「没绑 CF」，不算失败。
+  if (looksLikeCfHandle(handleKey)) {
+    try {
+      await loadUser(handleKey);
+      result.codeforces = memberPlatformCounts(handleKey).codeforces;
+    } catch (error) {
+      if (isMissingCfUser(error.message)) result.cfMissing = true;
+      else result.errors.codeforces = error.message;
+    }
+  } else {
+    result.cfMissing = true;
   }
 
   if (atcoderAccount) {
@@ -2527,16 +2543,21 @@ async function syncMemberPlatforms(handleKey, { atcoderAccount = null, luoguAcco
 }
 
 /** 把抓取结果翻译成一句人话，回给前端做状态栏提示。 */
-function describeSyncResult(handle, sync, verb = '已加入') {
-  const labels = { codeforces: 'CF', atcoder: 'AtCoder', luogu: '洛谷' };
+function describeSyncResult(handle, sync, verb = '已加入', { hasStrength = false } = {}) {
+  // 只列「真的去抓了」的平台：没填 AtCoder / 洛谷账号却显示「0 题」，看着像抓失败了
   const ok = [];
-  for (const platform of ['codeforces', 'atcoder', 'luogu']) {
-    const n = sync.counts?.[platform];
-    if (typeof n === 'number') ok.push(`${labels[platform]} ${n} 题`);
-  }
+  if (sync.codeforces != null) ok.push(`CF ${sync.codeforces} 题`);
+  if (sync.atcoder != null) ok.push(`AtCoder ${sync.atcoder} 题`);
+  if (sync.luogu != null) ok.push(`洛谷 ${sync.luogu} 题`);
+  const labels = { codeforces: 'CF', atcoder: 'AtCoder', luogu: '洛谷' };
   const failed = Object.entries(sync.errors ?? {}).map(([platform, message]) => `${labels[platform]} 失败（${message}）`);
-  const head = `${handle} ${verb}：${ok.join(' / ')}`;
-  return failed.length ? `${head}；${failed.join('；')}` : head;
+  // 没绑 CF 是允许的（教练直接写名字加人）；已经标过手动实力的就不用再提醒
+  const note = sync.cfMissing && !hasStrength
+    ? ['没关联 Codeforces，想让 TA 参与排题就点「设实力」标一个分数']
+    : [];
+  const head = ok.length ? `${handle} ${verb}：${ok.join(' / ')}` : `${handle} ${verb}`;
+  const tail = [...note, ...failed];
+  return tail.length ? `${head}；${tail.join('；')}` : head;
 }
 
 async function handleTeamOverview(teamId, settings) {
@@ -3709,7 +3730,7 @@ async function route(req, res, url) {
         const body = await readJsonBody(req);
         if (!db.getTeam(teamId)) return sendError(res, 404, '队伍不存在');
         const handleKey = db.normalizeHandle(body?.handle);
-        if (!handleKey) return sendError(res, 400, '请填写成员账号');
+        if (!handleKey) return sendError(res, 400, '请填一个名字，随便写就行');
         const atcoderAccount = String(body?.atcoder ?? '').trim() || null;
         const luoguAccount = String(body?.luogu ?? '').trim() || null;
         const qojAccount = String(body?.qoj ?? '').trim() || null;
@@ -3735,7 +3756,7 @@ async function route(req, res, url) {
           platformCounts: sync.counts,
           // 有平台没抓成功就把原因带上，免得用户以为三平台都齐了
           warning: failures.length ? describeSyncResult(handleKey, sync) : null,
-          message: describeSyncResult(handleKey, sync),
+          message: describeSyncResult(handleKey, sync, '已加入', { hasStrength: member?.strength != null }),
         });
       } catch (error) {
         return sendError(res, 400, error.message);
@@ -3771,7 +3792,7 @@ async function route(req, res, url) {
           member: updated,
           platformCounts: sync.counts,
           warning: Object.keys(sync.errors ?? {}).length ? describeSyncResult(handleKey, sync, '已更新') : null,
-          message: describeSyncResult(handleKey, sync, '已更新'),
+          message: describeSyncResult(handleKey, sync, '已更新', { hasStrength: updated?.strength != null }),
         });
       } catch (error) {
         return sendError(res, 400, error.message);
