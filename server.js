@@ -578,7 +578,8 @@ function signatureMatches(stored, fresh) {
 }
 
 /** 每完成这么多题，就重新看一次最近的表现。 */
-const ADJUST_ROUND = 20;/** 一轮一轮挪，最多上下各挪 150 分，免得越跑越偏。 */
+const ADJUST_ROUND = 20;
+/** 一轮一轮挪，最多上下各挪 150 分，免得越跑越偏。 */
 const ADJUST_LIMIT = 150;
 
 /**
@@ -808,10 +809,9 @@ async function handlePlan(url) {
       // 连同「生成时的分数」一起存：以后沿用这份计划时题量就按它算
       user?.rating && user.rating > 0 ? user.rating : null,
     );
-    // 换了一份新计划：之前那份留下的日期钉子全部作废（新计划从今天开始）。
-    // 不清的话它们会被当成「这份计划的过去」，欠题、落后天数、待补题一起虚高，
-    // 题池也会被这些早已不属于任何计划的题占掉。
-    db.pruneScheduleDaysBefore(handleKey, new Date().toLocaleDateString('sv-SE'));
+    // 旧计划的日期钉子**不删**：新计划从今天起算，比它早的钉子前端根本不会用
+    // （见 layoutWithPins 的 planStart）。留着反而有用——万一改回原来的目标分，
+    // 那份快照连同它自己的历史还能原样接着走。删了就再也回不去了。
   } else {
     plan.generatedAt = reusable.createdAt;
   }
@@ -4337,23 +4337,6 @@ async function route(req, res, url) {
   // 前端算完日程后把这类日子报上来。之所以由后端把关截止到「今天」：
   // 今天以后的安排得跟着每周题量、休息日走，钉住就改不动了；
   // 而过去的日子一旦钉住就是历史，之后任何重排都不会再碰它。
-  // 从今天重排：把这份计划的日期钉子全拔掉，再清掉旧日程自动收进来的待补题。
-  // 用户反馈「计划一出问题就被锁死，怎么都回不到最初」——这里给一个明确的重来入口。
-  // 勾选（progress）不动：那是他自己点过的，不属于排期。
-  if (pathname === '/api/schedule/reset' && req.method === 'POST') {
-    try {
-      const body = await readJsonBody(req);
-      const handleKey = db.normalizeHandle(body.handle);
-      if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
-      const pins = db.clearScheduleDays(handleKey);
-      const todayKeyReset = new Date().toLocaleDateString('sv-SE');
-      const makeup = db.clearMakeupAutoTodo(handleKey, todayKeyReset);
-      return sendJson(res, 200, { ok: true, pins, makeup });
-    } catch (error) {
-      return sendError(res, 400, error.message);
-    }
-  }
-
   if (pathname === '/api/schedule/pin' && req.method === 'POST') {
     try {
       const body = await readJsonBody(req);
@@ -4373,6 +4356,25 @@ async function route(req, res, url) {
       }
       db.pinScheduleDays(handleKey, days);
       return sendJson(res, 200, { ok: true, schedule: pinnedDaysPayload(handleKey) });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
+  // 从今天重排：把这份计划的日期钉子全拔掉，再清掉旧日程自动收进来的待补题。
+  // 用户反馈「计划一出问题就被锁死，怎么都回不到最初」——这里给一个明确的重来入口。
+  // 勾选（progress）和做题记录不动：那是他自己点过的，不属于排期。
+  if (pathname === '/api/schedule/reset' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
+      const pins = db.clearScheduleDays(handleKey);
+      // 只清原定日期已经过去的那些：未来的排期本来就要跟着重排走，
+      // 没记日期的（手动加的）一律不碰。
+      const todayKeyReset = new Date().toLocaleDateString('sv-SE');
+      const makeup = db.clearMakeupAutoTodo(handleKey, todayKeyReset);
+      return sendJson(res, 200, { ok: true, pins, makeup });
     } catch (error) {
       return sendError(res, 400, error.message);
     }

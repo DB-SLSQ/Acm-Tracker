@@ -5289,6 +5289,12 @@ $('schedule-restart')?.addEventListener('click', async () => {
     showHint('先在设置里填 Codeforces 用户名，才能重排日程。', true);
     return;
   }
+  // 先把目标分验了：不然钉子已经拔了、计划却没生成出来，日程就成了空白
+  const target = Number($('target-input').value);
+  if (!Number.isFinite(target) || target < 800 || target > 4000) {
+    showHint('目标 rating 请填 800 到 4000 之间的数字，再重排。', true);
+    return;
+  }
   const ok = window.confirm(
     '从今天重新排一遍？\n\n' +
       '· 过去的日期钉子全部拔掉，日历从今天重新开始铺\n' +
@@ -5301,20 +5307,27 @@ $('schedule-restart')?.addEventListener('click', async () => {
   const label = button.textContent;
   button.disabled = true;
   button.textContent = '重排中…';
+  let reset = null;
   try {
-    const res = await postJson('/api/schedule/reset', { handle: state.handle });
+    reset = await postJson('/api/schedule/reset', { handle: state.handle });
     state.pinnedDays = {};
     state.pinSignature = '';
     state.makeup.loaded = false;
     await generatePlan(true, { scroll: false, quiet: true });
     await loadMakeup();
     showHint(
-      res.pins || res.makeup
-        ? `已从今天重排：清掉 ${res.pins} 条日期记录、${res.makeup} 道自动收的待补题。`
+      reset.pins || reset.makeup
+        ? `已从今天重排：清掉 ${reset.pins} 天的排期记录、${reset.makeup} 道自动收的待补题。`
         : '已从今天重排。',
     );
   } catch (error) {
-    showHint(`重排失败：${error.message}`, true);
+    // 钉子已经拔了的话要说清楚，别让人以为一切照旧
+    showHint(
+      reset
+        ? `日期钉子已清掉，但新计划没生成出来：${error.message}。修好后再点一次「重新生成计划」。`
+        : `重排失败：${error.message}`,
+      true,
+    );
   } finally {
     button.disabled = false;
     button.textContent = label;
