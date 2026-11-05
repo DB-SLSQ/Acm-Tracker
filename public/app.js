@@ -2633,7 +2633,8 @@ function renderTeam() {
           <button type="button" class="btn" id="team-assign-cancel">放弃修改</button>
         </div>`
       : ''}
-    <p class="hint">分工直接在表里改：下拉换主攻，点名字切副攻。改完点「保存分工」，
+    <p class="hint">分工直接在表里改：下拉换主攻，点名字切副攻。一个人可以同时主攻几个方向，
+      加新方向不会动之前排好的。改完点「保存分工」，
       保存后就不会因为加人或重算被自动覆盖；想全盘按数据重算，点右上角「重新分配方向」。</p>`;
   }
 
@@ -2863,10 +2864,9 @@ $('team-assignment')?.addEventListener('change', (event) => {
   const axis = select.dataset.axis;
   const handle = select.value || null;
   const draft = state.team.assignDraft;
-  // 一个人同时主攻两个方向多半是手滑：把他别处的主攻撤掉
-  for (const entry of Object.values(draft)) {
-    if (entry.main && entry.main === handle && entry !== draft[axis]) entry.main = null;
-  }
+  // 一个人可以同时主攻好几个方向。以前这里会自动把他在别处的主攻撤掉
+  // （怕手滑），结果变成「给同一人加一个方向，之前的全被清空」——谁来负责
+  // 几个方向是队伍自己说了算，页面上的「建议 1～2 个」只是参考，不是规则。
   draft[axis].main = handle;
   // 主攻就不再当同一方向的副攻
   draft[axis].sub = draft[axis].sub.filter((h) => h !== handle);
@@ -5280,6 +5280,45 @@ $('schedule-reset').addEventListener('click', () => {
   state.dayOff = {};
   saveSettings({ dayOff: {} });
   rebuildSchedule();
+});
+
+// 「从今天重排」：计划一旦被调花（历史任务被改写、欠题对不上），给一条明确的回到起点的路。
+// 只清排期相关的东西（日期钉子 + 旧日程自动收的待补题），勾选和做题记录一条不动。
+$('schedule-restart')?.addEventListener('click', async () => {
+  if (!state.handle) {
+    showHint('先在设置里填 Codeforces 用户名，才能重排日程。', true);
+    return;
+  }
+  const ok = window.confirm(
+    '从今天重新排一遍？\n\n' +
+      '· 过去的日期钉子全部拔掉，日历从今天重新开始铺\n' +
+      '· 旧日程自动收进「待补题」的那些会清掉（你自己手动加的、已经补掉的都留着）\n' +
+      '· 你点过的勾不动，做题记录也不动\n\n' +
+      '按当前目标分和每周题量重新生成一份计划。',
+  );
+  if (!ok) return;
+  const button = $('schedule-restart');
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = '重排中…';
+  try {
+    const res = await postJson('/api/schedule/reset', { handle: state.handle });
+    state.pinnedDays = {};
+    state.pinSignature = '';
+    state.makeup.loaded = false;
+    await generatePlan(true, { scroll: false, quiet: true });
+    await loadMakeup();
+    showHint(
+      res.pins || res.makeup
+        ? `已从今天重排：清掉 ${res.pins} 条日期记录、${res.makeup} 道自动收的待补题。`
+        : '已从今天重排。',
+    );
+  } catch (error) {
+    showHint(`重排失败：${error.message}`, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
 });
 
 /** 两个每周题量输入框绑同一个值，改哪个都同步。 */

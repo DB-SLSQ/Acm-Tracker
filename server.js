@@ -555,9 +555,30 @@ function planSignature({ weekly, settings, model, bandShift = 0 }) {
   });
 }
 
+/**
+ * 两份计划指纹算不算「同一份计划」。
+ *
+ * 除了一处例外就要求完全相等：**每周题量不算**。它只决定这道题的清单怎么摊到
+ * 日历上（题数由和目标分的差距定死），换周题量不该换题。以前它进指纹，于是
+ * 改一下每周题量、关掉应用再打开，就会静默重挑一份题、计划从今天重新立起来，
+ * 过去那些天又变成「新计划的过去」——用户看到的就是历史待做数和欠题数莫名其妙地涨。
+ */
+function signatureMatches(stored, fresh) {
+  if (stored === fresh) return true;
+  try {
+    const a = JSON.parse(stored);
+    const b = JSON.parse(fresh);
+    if (!a || !b || a.v !== b.v) return false;
+    delete a.weekly;
+    delete b.weekly;
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
 /** 每完成这么多题，就重新看一次最近的表现。 */
-const ADJUST_ROUND = 20;
-/** 一轮一轮挪，最多上下各挪 150 分，免得越跑越偏。 */
+const ADJUST_ROUND = 20;/** 一轮一轮挪，最多上下各挪 150 分，免得越跑越偏。 */
 const ADJUST_LIMIT = 150;
 
 /**
@@ -715,7 +736,8 @@ async function handlePlan(url) {
   // 旧快照不管强不强制都要读出来：一个是看能不能沿用，另一个是评估「你上一份做到哪了」。
   // （点「重新生成计划」时 force=true，但那时候恰恰最需要这份旧快照。）
   const previous = db.getPlanSnapshot(handleKey, targetRounded);
-  const reusable = !force && previous && previous.signature === signature ? previous : null;
+  const reusable =
+    !force && previous && signatureMatches(previous.signature, signature) ? previous : null;
 
   // 钉住题量：题量（多少题 / 几周 / 每档目标分）按「生成这份计划时的分数」算，
   // 不再看实时分数。否则一上分 gap 就变小、题量跟着缩水，周数一变整条日程往前挤，
@@ -786,6 +808,10 @@ async function handlePlan(url) {
       // 连同「生成时的分数」一起存：以后沿用这份计划时题量就按它算
       user?.rating && user.rating > 0 ? user.rating : null,
     );
+    // 换了一份新计划：之前那份留下的日期钉子全部作废（新计划从今天开始）。
+    // 不清的话它们会被当成「这份计划的过去」，欠题、落后天数、待补题一起虚高，
+    // 题池也会被这些早已不属于任何计划的题占掉。
+    db.pruneScheduleDaysBefore(handleKey, new Date().toLocaleDateString('sv-SE'));
   } else {
     plan.generatedAt = reusable.createdAt;
   }
@@ -4311,6 +4337,23 @@ async function route(req, res, url) {
   // 前端算完日程后把这类日子报上来。之所以由后端把关截止到「今天」：
   // 今天以后的安排得跟着每周题量、休息日走，钉住就改不动了；
   // 而过去的日子一旦钉住就是历史，之后任何重排都不会再碰它。
+  // 从今天重排：把这份计划的日期钉子全拔掉，再清掉旧日程自动收进来的待补题。
+  // 用户反馈「计划一出问题就被锁死，怎么都回不到最初」——这里给一个明确的重来入口。
+  // 勾选（progress）不动：那是他自己点过的，不属于排期。
+  if (pathname === '/api/schedule/reset' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const handleKey = db.normalizeHandle(body.handle);
+      if (!handleKey) return sendError(res, 400, '请先填写 Codeforces 用户名');
+      const pins = db.clearScheduleDays(handleKey);
+      const todayKeyReset = new Date().toLocaleDateString('sv-SE');
+      const makeup = db.clearMakeupAutoTodo(handleKey, todayKeyReset);
+      return sendJson(res, 200, { ok: true, pins, makeup });
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+  }
+
   if (pathname === '/api/schedule/pin' && req.method === 'POST') {
     try {
       const body = await readJsonBody(req);

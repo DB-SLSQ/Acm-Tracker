@@ -240,12 +240,19 @@ export function layoutWithPins({
   };
 
   const inPlan = new Map(problems.map((problem) => [problemKey(problem), problem]));
+  // 计划自己是哪天立下来的：比它还早的钉子属于**上一份计划**，不是这一份的历史。
+  // 以前不区分，旧计划的日程会被当成新计划的过去照常摆出来，「今天之前该做完」
+  // 于是把十几二十天的旧任务全算进来（109 题的日历报出 160 多题、落后二十多天），
+  // 补题数量也就永远对不上。计划换了就从它建立起算，旧的那份不再掺和。
+  const planStart = startOfDay(startDate);
+  const planStartKey = dateKey(planStart);
   const frozenDates = [];
   const frozenProblems = new Map();
   const frozenKeys = new Set();
 
   for (const [date, list] of Object.entries(pinnedDays ?? {})) {
     if (!Array.isArray(list) || !list.length) continue;
+    if (date < planStartKey) continue;
     // 事后把某天设成休息，那天的钉子就摘掉、题退回池子往后顺延——和「这天没空」
     // 原本的语义（题目自动顺延、总量不变）一致。但只对今天及以后生效：
     // 过去的日子已经发生了，不能因为现在多勾一个休息日就把历史掏空。
@@ -266,12 +273,17 @@ export function layoutWithPins({
 
   const remaining = problems.filter((problem) => !frozenKeys.has(problemKey(problem)));
   const lastFrozen = frozenDates.length ? frozenDates[frozenDates.length - 1] : null;
+  // 尾巴最早也只能从计划建立那天开始。少了这一条，最后一个钉子之后、计划起始
+  // 之前的那几天会被现算出题、又被当成「过去」钉进库——日历上就凭空多出几天
+  // 历史任务（用户反馈的「调完题量前几天的待做题变多了」）。
+  let tailStart = lastFrozen ? addDays(parseDateKey(lastFrozen), 1) : planStart;
+  if (tailStart < planStart) tailStart = planStart;
   const tail = buildSchedule({
     problems: remaining,
     weekly,
     restDays,
     dayOff,
-    startDate: lastFrozen ? addDays(parseDateKey(lastFrozen), 1) : startOfDay(startDate),
+    startDate: tailStart,
     maxWeeks,
     platformCaps,
   });
