@@ -2792,6 +2792,104 @@ function handleTeamPlan(teamId, url, settings) {
   };
 }
 
+// ---------- 检查更新 ----------
+//
+// 问一次 GitHub 的 latest Release 就行，不需要 electron-updater 那一套（也不用签名）。
+// 两件事要留意：
+//   1. 未登录的 GitHub API 每小时只给 60 次，每次开应用都问一遍没必要 → 结果存 6 小时；
+//      手动点「检查更新」时 force=1 跳过缓存。带 ETag 再问时，没变化会回 304，
+//      GitHub 的 304 **不计入限额**，所以刷得再多也不会把额度耗光。
+//   2. 断网（或额度真的用光）时别把「检查失败」糊到用户脸上 → 有旧结果就先给旧的，标 stale。
+const UPDATE_CACHE_KEY = 'update_check_cache';
+const UPDATE_CACHE_MS = 6 * 60 * 60 * 1000;
+const RELEASE_API = 'https://api.github.com/repos/DB-SLSQ/Acm-Tracker/releases/latest';
+const RELEASE_PAGE = 'https://github.com/DB-SLSQ/Acm-Tracker/releases';
+
+/** 从 Release 附件里挑这个系统该下的那个（Windows 装 exe，Linux 优先 AppImage）。 */
+function pickUpdateAsset(assets) {
+  const list = (Array.isArray(assets) ? assets : [])
+    .map((item) => ({ name: String(item?.name ?? ''), url: item?.browser_download_url ?? null }))
+    .filter((item) => item.name && item.url);
+  const find = (...exts) =>
+    list.find((item) => exts.some((ext) => item.name.toLowerCase().endsWith(ext))) ?? null;
+  if (process.platform === 'win32') return find('.exe', '.msi');
+  if (process.platform === 'darwin') return find('.dmg', '.zip');
+  return find('.appimage', '.deb');
+}
+
+/** etag 有就带上：没变化时 GitHub 回 304，省额度。 */
+async function fetchLatestRelease(etag = null) {
+  const headers = { 'User-Agent': 'acm-trainer', Accept: 'application/vnd.github+json' };
+  if (etag) headers['If-None-Match'] = etag;
+  const response = await fetch(RELEASE_API, { headers, signal: AbortSignal.timeout(8000) });
+  if (response.status === 304) return { notModified: true };
+  if (!response.ok) throw new Error(`GitHub 返回 ${response.status}`);
+  const release = await response.json();
+  const latest = String(release.tag_name ?? '').replace(/^v/, '');
+  const asset = pickUpdateAsset(release.assets);
+  return {
+    latest,
+    newer: compareVersions(latest, VERSION) > 0,
+    assetName: asset?.name ?? null,
+    downloadUrl: asset?.url ?? null,
+    pageUrl: release.html_url ?? RELEASE_PAGE,
+    notes: String(release.body ?? '').slice(0, 6000),
+    publishedAt: release.published_at ?? null,
+    platform: process.platform,
+    etag: response.headers.get('etag') ?? null,
+  };
+}
+
+/** 拼上「当前版本」，并且**每次读都重算 newer**：缓存可能是升级前存的。 */
+function withCurrent(info) {
+  const { etag, ...rest } = info ?? {};
+  return {
+    current: VERSION,
+    ...rest,
+    newer: compareVersions(rest.latest, VERSION) > 0,
+    pageUrl: rest.pageUrl ?? RELEASE_PAGE,
+    // 没有匹配到附件（比如新平台还没打包）就退到 Release 页面
+    downloadUrl: rest.downloadUrl ?? null,
+  };
+}
+
+async function readUpdateInfo({ force = false } = {}) {
+  let cached = null;
+  try {
+    cached = JSON.parse(db.metaGet(UPDATE_CACHE_KEY) ?? 'null');
+  } catch {
+    cached = null;
+  }
+  const fresh = cached?.info && Date.now() - Number(cached.at ?? 0) < UPDATE_CACHE_MS;
+  if (fresh && !force) {
+    return { ...withCurrent(cached.info), cached: true, checkedAt: cached.at };
+  }
+  try {
+    const latestInfo = await fetchLatestRelease(cached?.etag ?? null);
+    const at = Date.now();
+    if (latestInfo.notModified) {
+      // 304：远端还是那份，把时间戳往后推，省一次真实额度
+      if (!cached?.info) throw new Error('GitHub 返回 304 但本地没有旧结果');
+      db.metaSet(UPDATE_CACHE_KEY, JSON.stringify({ at, etag: cached.etag, info: cached.info }));
+      return { ...withCurrent(cached.info), cached: true, revalidated: true, checkedAt: at };
+    }
+    const { etag, ...info } = latestInfo;
+    db.metaSet(UPDATE_CACHE_KEY, JSON.stringify({ at, etag, info }));
+    return { ...withCurrent(info), cached: false, checkedAt: at };
+  } catch (error) {
+    if (cached?.info) {
+      return {
+        ...withCurrent(cached.info),
+        cached: true,
+        stale: true,
+        checkedAt: cached.at,
+        warning: error.message,
+      };
+    }
+    throw error;
+  }
+}
+
 async function route(req, res, url) {
   const { pathname } = url;
 
@@ -3090,24 +3188,9 @@ async function route(req, res, url) {
   // 检查更新：直接问 GitHub 最新 Release 是什么，比自己记版本号省事（零依赖）
   if (pathname === '/api/update-check' && req.method === 'GET') {
     try {
-      const response = await fetch(
-        'https://api.github.com/repos/DB-SLSQ/Acm-Tracker/releases/latest',
-        { headers: { 'User-Agent': 'acm-trainer', Accept: 'application/vnd.github+json' } },
-      );
-      if (!response.ok) return sendError(res, 502, `GitHub 返回 ${response.status}`);
-      const release = await response.json();
-      const latest = String(release.tag_name ?? '').replace(/^v/, '');
-      const asset = (release.assets ?? []).find((item) =>
-        String(item.name ?? '').toLowerCase().endsWith('.exe'),
-      );
-      return sendJson(res, 200, {
-        current: VERSION,
-        latest,
-        newer: compareVersions(latest, VERSION) > 0,
-        url: asset?.browser_download_url ?? release.html_url,
-        notes: String(release.body ?? '').slice(0, 4000),
-        publishedAt: release.published_at ?? null,
-      });
+      const force = url.searchParams.get('force') === '1';
+      const info = await readUpdateInfo({ force });
+      return sendJson(res, 200, info);
     } catch (error) {
       return sendError(res, 502, `检查更新失败：${error.message}`);
     }

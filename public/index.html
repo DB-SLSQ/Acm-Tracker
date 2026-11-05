@@ -692,7 +692,8 @@
         <details class="qa">
           <summary>怎么知道有没有新版本？</summary>
           <p>
-            设置 → 数据安全 → 「检查更新」，它会去问 GitHub 上的最新版本号；页脚也一直写着当前版本。
+            打开应用时会自动问一次 GitHub（结果缓存 6 小时），有新版本会在右下角提示，页脚也会点亮一个小标签，
+            点进去就能下载。想马上确认：设置 → 数据安全 → 「检查更新」。
             下载链接永远指向最新版：github.com/DB-SLSQ/Acm-Tracker/releases/latest
           </p>
         </details>
@@ -836,6 +837,7 @@
                   <button class="btn" id="update-btn">检查更新</button>
                   <a class="btn" href="/selftest.html">计划自检</a>
                 </div>
+                <div id="update-result" class="update-result hidden"></div>
                 <p class="hint" id="data-hint">备份会存到数据目录的 backups 里，随时可以翻出来。</p>
         
         <h3 class="settings-title">列表密度</h3>
@@ -1064,6 +1066,7 @@
         <span>数据来源：Codeforces 官方公开 API · AtCoder 取自 Kenkoooo · 洛谷取自公开练习页与题目列表 · 牛客 / 力扣的赛程取自各自公开的比赛列表</span>
       <span>
         所有数据都保存在你自己的电脑上 · <span id="app-version">读取中…</span>
+        <button type="button" class="update-pill hidden" id="update-pill">有新版本</button>
       </span>
       </footer>
     </main>

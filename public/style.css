@@ -5216,3 +5216,86 @@ a.platform-chip.qoj:hover {
   color: var(--text-dim);
   font-size: 12px;
 }
+
+/* ============ 更新检查 ============
+   页脚的小标签 + 设置页里那张「有新版本」的卡片。
+   只做提示和下载入口，不自动安装。 */
+.update-pill {
+  margin-left: 8px;
+  padding: 2px 9px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.update-pill:hover {
+  background: var(--accent);
+  color: var(--badge-text);
+}
+
+.update-result {
+  margin-top: 12px;
+  padding: 13px 14px;
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  background: var(--card-gradient);
+}
+
+.update-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.update-head b {
+  font-size: 14.5px;
+  color: var(--accent-text);
+}
+
+.update-result .platform-row {
+  margin-top: 0;
+}
+
+.update-latest {
+  margin: 0;
+}
+
+.btn.ghost {
+  border-color: transparent;
+  background: none;
+  color: var(--text-dim);
+}
+
+.btn.ghost:hover {
+  color: var(--text);
+}
+
+.update-notes {
+  margin: 11px 0 0;
+  padding: 11px 12px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-track);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12.8px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 「已经是最新」只有一行字，不套卡片框，免得看着像没加载完 */
+.update-result.update-plain {
+  padding: 2px 0 0;
+  border-color: transparent;
+  background: none;
+}

@@ -53,6 +53,8 @@ const state = {
   // 当前打开的页面（左边菜单点了就切）和已经拿到数据的页面
   view: 'panel-overview',
   readyView: new Set(),
+  // 最近一次「检查更新」的结果（启动时静默问一次，也可手动问）
+  update: null,
   // 列表密度：紧凑模式
   compact: false,
   // 做题手感反馈：key -> feel；以及最近一次拉回来的复盘/热身数据
@@ -5361,6 +5363,158 @@ async function loadVersion() {
 
 loadVersion();
 
+// ---------- 更新检查 ----------
+//
+// 只做「发现新版本 → 一键打开下载页」：安装包是 NSIS，自动装要签名 + electron-updater，
+// 还要管理员权限。相比之下「提示 + 打开下载页」零依赖、也不会在别人机器上乱装东西。
+// 服务端把结果缓存 6 小时（GitHub 未登录限额每小时 60 次），启动时问一次几乎不花时间。
+const UPDATE_DISMISS_KEY = 'acm-update-dismissed';
+// 上次尝试的时间（本地记一份：断网时服务端不会给 checkedAt，靠它别每次切窗口都去撞墙）
+let lastUpdateAttempt = 0;
+
+function updateDismissedVersion() {
+  try {
+    return localStorage.getItem(UPDATE_DISMISS_KEY) ?? '';
+  } catch {
+    return ''; // 隐私模式存不了，下次还会提示，不影响使用
+  }
+}
+
+function dismissUpdate(version) {
+  try {
+    localStorage.setItem(UPDATE_DISMISS_KEY, String(version ?? ''));
+  } catch {
+    /* 同上 */
+  }
+}
+
+/** 外链交给系统浏览器：Electron 主进程的 setWindowOpenHandler 会接住。 */
+function openExternal(url) {
+  if (url) window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+/** Release 正文是 Markdown，这里只做去标记的轻量处理，不引第三方渲染库。 */
+function releaseNotesText(markdown) {
+  return String(markdown ?? '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^\s*[-*]\s+/gm, '· ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function formatPublishedAt(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : `${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+/** 页脚的小标签：有新版本时点亮，点它直接跳到设置里的更新卡片。 */
+function paintUpdatePill(info) {
+  const pill = $('update-pill');
+  if (!pill) return;
+  const newer = Boolean(info?.newer);
+  pill.classList.toggle('hidden', !newer);
+  if (newer) pill.textContent = `有新版本 v${info.latest}`;
+}
+
+/** 设置页里的更新卡片：新版给下载按钮 + 更新说明，最新版就一行字。 */
+function renderUpdateResult(info, { manual = false } = {}) {
+  const box = $('update-result');
+  if (!box) return;
+  box.classList.remove('hidden');
+  if (!info?.newer) {
+    // 一行字就别套个框了，看着像还没加载完
+    box.classList.add('update-plain');
+    const stale = info?.stale ? '（这是上次的结果，刚才没连上 GitHub）' : '';
+    const when = info?.checkedAt ? ` · ${new Date(Number(info.checkedAt)).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : '';
+    box.innerHTML = `<p class="subtle update-latest">已经是最新的 v${escapeHtml(String(info?.current ?? ''))}${escapeHtml(when)}${escapeHtml(stale)}</p>`;
+    return;
+  }
+  box.classList.remove('update-plain');
+  const notes = releaseNotesText(info.notes);
+  const published = formatPublishedAt(info.publishedAt);
+  box.innerHTML = `
+    <div class="update-head">
+      <b>有新版本 v${escapeHtml(String(info.latest))}</b>
+      <span class="subtle">当前 v${escapeHtml(String(info.current ?? ''))}${published ? ` · ${published} 发布` : ''}</span>
+    </div>
+    <div class="platform-row">
+      ${info.downloadUrl ? `<button type="button" class="btn primary" id="update-download">下载 ${escapeHtml(info.assetName ?? '安装包')}</button>` : ''}
+      <button type="button" class="btn" id="update-page">打开下载页面</button>
+      ${notes ? '<button type="button" class="btn" id="update-notes-toggle">这版改了什么</button>' : ''}
+      <button type="button" class="btn ghost" id="update-skip">这个版本先不提醒</button>
+    </div>
+    ${notes ? '<pre class="update-notes hidden" id="update-notes"></pre>' : ''}`;
+  // 正文用 textContent 塞：Release 里真有尖括号也不会被当成标签
+  const notesEl = $('update-notes');
+  if (notesEl) notesEl.textContent = notes;
+  $('update-download')?.addEventListener('click', () => openExternal(info.downloadUrl ?? info.pageUrl));
+  $('update-page')?.addEventListener('click', () => openExternal(info.pageUrl));
+  $('update-notes-toggle')?.addEventListener('click', () => {
+    const hidden = notesEl?.classList.toggle('hidden');
+    $('update-notes-toggle').textContent = hidden ? '这版改了什么' : '收起更新说明';
+    // 说明是往下展开的，不拽一下的话它正好落在屏幕外面，点了像没反应
+    if (!hidden) notesEl?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
+  $('update-skip')?.addEventListener('click', () => {
+    dismissUpdate(info.latest);
+    // 只是不再弹 toast；页脚的小标签留着，想装的时候还找得到
+    showHint(`v${info.latest} 不再弹提示。页脚那个小标签还在，点它随时能回来下载。`);
+  });
+  if (manual) box.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+/**
+ * 问一次更新。
+ * @param {{force?: boolean, silent?: boolean}} options
+ *   force  —— 跳过服务端 6 小时缓存（手动点按钮时用）
+ *   silent —— 启动时的自动检查：失败不弹提示、忽略过的版本不再弹 toast
+ */
+async function checkForUpdates({ force = false, silent = false } = {}) {
+  lastUpdateAttempt = Date.now();
+  try {
+    const info = await getJson(`/api/update-check${force ? '?force=1' : ''}`);
+    state.update = info;
+    paintUpdatePill(info);
+    renderUpdateResult(info, { manual: force });
+    if (!info.newer) return info;
+    if (silent && updateDismissedVersion() === String(info.latest)) return info;
+    toast(`发现新版本 v${info.latest}（现在是 v${info.current}）`, {
+      timeout: 15000,
+      action: {
+        label: '去下载',
+        run: () => openExternal(info.downloadUrl ?? info.pageUrl),
+      },
+    });
+    return info;
+  } catch (error) {
+    // 启动时断网是常态（比如刚开机没连上），不打扰
+    if (!silent) showHint(`检查更新失败：${error.message}`, true);
+    return null;
+  }
+}
+
+// 启动 6 秒后再问：别和计划生成抢带宽，那时候窗口早就能用了
+setTimeout(() => checkForUpdates({ silent: true }), 6000);
+
+// 应用常开好几天的话，缓存早过期了。回到窗口时补问一次（6 小时内不重复）
+const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1000;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  const last = Math.max(lastUpdateAttempt, Number(state.update?.checkedAt ?? 0));
+  if (Date.now() - last < UPDATE_RECHECK_MS) return;
+  checkForUpdates({ silent: true });
+});
+
+$('update-pill')?.addEventListener('click', () => {
+  showView('panel-settings');
+  if (state.update?.newer) renderUpdateResult(state.update, { manual: true });
+  else checkForUpdates({ force: true });
+});
+
 /** 页脚的交流群入口：点开显示二维码，点别处收起。 */
 $('qq-toggle').addEventListener('click', () => $('qq-pop').classList.toggle('hidden'));
 document.addEventListener('click', (event) => {
@@ -6828,6 +6982,7 @@ refreshTraining();
 
 function bindDataTools() {
   const hint = $('data-hint');
+  const defaultHint = hint.textContent;
   const say = (text, error = false) => {
     hint.textContent = text;
     hint.classList.toggle('error', error);
@@ -6886,16 +7041,16 @@ function bindDataTools() {
 
   $('update-btn')?.addEventListener('click', async () => {
     say('正在问 GitHub…');
-    try {
-      const info = await getJson('/api/update-check');
-      if (info.newer) {
-        say(`有新版本 ${info.latest}（当前 ${info.current}）：${info.url}`);
-      } else {
-        say(`已经是最新的（${info.current}）。`);
-      }
-    } catch (error) {
-      say(`检查更新失败：${error.message}`, true);
+    const info = await checkForUpdates({ force: true });
+    if (!info) {
+      say('没问出结果——多半是没网，或者 GitHub 这会儿不通。', true);
+      return;
     }
+    say(
+      info.newer
+        ? `有新版本 v${info.latest}，下面可以直接下载。`
+        : defaultHint, // 卡片上已经写了「已经是最新」，这行不重复
+    );
   });
 
   const compact = $('compact-mode');
